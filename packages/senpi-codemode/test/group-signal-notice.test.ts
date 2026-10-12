@@ -73,6 +73,13 @@ describe("process-group signal detection (senpi#2995)", () => {
 		['bash -c "kill -- -5"'],
 		[`sh -c 'git commit -m "x"; kill -- -5'`],
 		["cat <<EOF\ntext\nEOF\nkill -- -5"],
+		// senpi#3019: these still run: substitutions in double quotes or an unquoted heredoc, and commands after a comment or a heredoc.
+		['echo "$(kill -- -$PG)"'],
+		['echo "`kill -- -5`"'],
+		["cat <<EOF\n$(kill -- -$PG)\nEOF"],
+		["# don't run yet\nkill -- -$PG"],
+		["cat <<END-OF\ntext\nEND-OF\nkill -- -$PG"],
+		["echo $((x << y))\nkill -- -5"],
 	])("Given %s when scanned then it is a group signal", (command) => {
 		// when / then
 		expect(signalsProcessGroup(command)).toBe(true);
@@ -97,6 +104,8 @@ describe("process-group signal detection (senpi#2995)", () => {
 		["echo 'then kill -- -5'"],
 		["cat <<EOF\nkill -- -5\nEOF"],
 		["cat <<'EOF'\n  kill -9 -1\nEOF\necho done"],
+		// senpi#3019: a quoted delimiter keeps the whole body inert, substitutions included.
+		["cat <<'EOF'\n$(kill -- -5)\nEOF"],
 	])("Given %s when scanned then it is not a group signal", (command) => {
 		// when / then
 		expect(signalsProcessGroup(command)).toBe(false);

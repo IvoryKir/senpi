@@ -1631,9 +1631,16 @@
 				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo 'kill -- -5' when scanned then it is not a group signal",
 				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo 'then kill -- -5' when scanned then it is not a group signal",
 				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<EOF\nkill -- -5\nEOF when scanned then it is not a group signal",
-				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<'EOF'\n  kill -9 -1\nEOF\necho done when scanned then it is not a group signal"
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<'EOF'\n  kill -9 -1\nEOF\necho done when scanned then it is not a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo \"$(kill -- -$PG)\" when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo \"`kill -- -5`\" when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<EOF\n$(kill -- -$PG)\nEOF when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given # don't run yet\nkill -- -$PG when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<END-OF\ntext\nEND-OF\nkill -- -$PG when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo $((x << y))\nkill -- -5 when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<'EOF'\n$(kill -- -5)\nEOF when scanned then it is not a group signal"
 			],
-			"reason": "senpi#3019: quoted strings and heredoc bodies no longer count as a command for the group-signal notice. The listed contracts are the new cases: quoted and heredoc text is not flagged, while a double-quoted or nested -c script and a command after a heredoc still are."
+			"reason": "senpi#3019: quoted strings, comments and heredoc bodies no longer count as a command for the group-signal notice. The listed contracts are the new cases: quoted and heredoc text is not flagged, nor is a substitution in a heredoc whose delimiter is quoted, while a double-quoted or nested -c script, a command substitution inside double quotes or an unquoted heredoc, and a command after a heredoc, a comment or an arithmetic << still are."
 		}
 	}
 }
