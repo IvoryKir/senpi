@@ -1621,6 +1621,19 @@
 				"legacyContracts/test/bench/head-budget.test.ts/crash-queue-100 absolute head budget (rb, jl) tests the wall ceiling through --inject-slow, keeping the recorded observations"
 			],
 			"reason": "senpi#3025: the bench judges crash-queue-100 on rb and jl by an absolute head budget (all 100 queued cells run once after one replacement, within a median-wall ceiling), because their base never recovered from the crash and the head/base ratio compares a failure path with the real work. The listed contracts are the new comparator tests."
+		},
+		"senpi#3019": {
+			"additions": [
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given bash -c \"kill -- -5\" when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given sh -c 'git commit -m \"x\"; kill -- -5' when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<EOF\ntext\nEOF\nkill -- -5 when scanned then it is a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given git commit -m \"do kill -9 -5\" when scanned then it is not a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo 'kill -- -5' when scanned then it is not a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given echo 'then kill -- -5' when scanned then it is not a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<EOF\nkill -- -5\nEOF when scanned then it is not a group signal",
+				"legacyContracts/test/group-signal-notice.test.ts/process-group signal detection (senpi#2995) Given cat <<'EOF'\n  kill -9 -1\nEOF\necho done when scanned then it is not a group signal"
+			],
+			"reason": "senpi#3019: quoted strings and heredoc bodies no longer count as a command for the group-signal notice. The listed contracts are the new cases: quoted and heredoc text is not flagged, while a double-quoted or nested -c script and a command after a heredoc still are."
 		}
 	}
 }

@@ -1,5 +1,25 @@
 # senpi-codemode fork changes
 
+## 2026-10-12 - Quoted text no longer counts as a command for the group-signal notice (senpi#3019)
+
+### What changed
+
+- `packages/senpi-codemode/src/kernels/js/group-signal-notice.js`: `signalsProcessGroup` scans a copy of the command whose quoted strings and heredoc bodies are blanked. A `-c` script keeps its text, since it is a command line itself, with its own quotes blanked in turn. The detection patterns are unchanged.
+- `packages/senpi-codemode/test/group-signal-notice.test.ts`: double-quoted, single-quoted and heredoc text is not flagged; double-quoted and nested `-c` scripts and a command after a heredoc still are.
+- `packages/senpi-codemode/test/gate/allowlist.json`: the eight new legacy contracts are approved under `senpi#3019`, as `senpi#2995` approved the first ones.
+
+### Why
+
+- Command position was decided by regex alone, so a shell keyword inside quoted text started a "command": `git commit -m "do kill -9 -5"` and a heredoc line `kill -- -5` printed the notice although nothing is signalled.
+
+### Why an extension could not handle it
+
+- The notice is emitted inside the eval kernel's spawner wrappers before the command runs; no extension sees the command text.
+
+### Expected merge conflict zones
+
+- `packages/senpi-codemode/src/kernels/js/group-signal-notice.js`: `signalsProcessGroup` and the quote-blanking helpers above it.
+
 ## 2026-10-12 - Restore the installer module and approve cleanup contracts (Refs senpi#3064)
 
 ### What changed

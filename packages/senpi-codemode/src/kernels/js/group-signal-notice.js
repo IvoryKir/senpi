@@ -26,10 +26,83 @@ const PKILL_GROUP = new RegExp(String.raw`${COMMAND_POSITION}pkill\b[^\n;|&]*\s(
 // can include the agent's own (bun, node, senpi). Inside an `echo` string it is only text.
 const KILLALL = new RegExp(String.raw`${COMMAND_POSITION}killall\s`, "mu");
 
+// senpi#3019: a keyword inside quoted text is not a command position, so the scan runs on a copy whose quoted strings
+// and heredoc bodies are blanked. A `-c` script keeps its text, because it is a command line itself, with its own
+// quotes blanked in turn.
+const SCRIPT_FLAG_BEFORE_QUOTE = /(?:^|\s)-[A-Za-z]*c\s+$/u;
+const HEREDOC_START = /^<<(-?)\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/u;
+
+function blank(text) {
+	return text.replace(/[^\n]/gu, "x");
+}
+
+function closingQuote(text, open) {
+	const quote = text[open];
+	for (let index = open + 1; index < text.length; index++) {
+		if (quote === '"' && text[index] === "\\") {
+			index++;
+			continue;
+		}
+		if (text[index] === quote) return index;
+	}
+	return text.length;
+}
+
+function blankQuotedText(text) {
+	let out = "";
+	const heredocs = [];
+	let index = 0;
+	while (index < text.length) {
+		const char = text[index];
+		if (char === "\\") {
+			out += text.slice(index, index + 2);
+			index += 2;
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			const end = closingQuote(text, index);
+			const inner = text.slice(index + 1, end);
+			out += char + (SCRIPT_FLAG_BEFORE_QUOTE.test(out) ? blankQuotedText(inner) : blank(inner));
+			if (end < text.length) out += char;
+			index = end + 1;
+			continue;
+		}
+		if (text.startsWith("<<<", index)) {
+			out += "<<<";
+			index += 3;
+			continue;
+		}
+		const heredoc = char === "<" ? HEREDOC_START.exec(text.slice(index)) : null;
+		if (heredoc) {
+			heredocs.push({ delimiter: heredoc[3], stripTabs: heredoc[1] === "-" });
+			out += heredoc[0];
+			index += heredoc[0].length;
+			continue;
+		}
+		out += char;
+		index++;
+		if (char !== "\n") continue;
+		// Each body starts on the line after its `<<` and ends at a line holding only its delimiter.
+		for (const { delimiter, stripTabs } of heredocs.splice(0)) {
+			while (index < text.length) {
+				const newline = text.indexOf("\n", index);
+				const lineEnd = newline === -1 ? text.length : newline;
+				const line = text.slice(index, lineEnd);
+				const closes = (stripTabs ? line.replace(/^\t+/u, "") : line) === delimiter;
+				out += (closes ? line : blank(line)) + (newline === -1 ? "" : "\n");
+				index = newline === -1 ? text.length : newline + 1;
+				if (closes) break;
+			}
+		}
+	}
+	return out;
+}
+
 export const GROUP_SIGNAL_NOTICE_TAG = "[senpi:group-signal]";
 
 export function signalsProcessGroup(commandText) {
-	return KILL_GROUP.test(commandText) || PKILL_GROUP.test(commandText) || KILLALL.test(commandText);
+	const text = blankQuotedText(commandText);
+	return KILL_GROUP.test(text) || PKILL_GROUP.test(text) || KILLALL.test(text);
 }
 
 export function groupSignalNotice(api, readGroup = agentProcessGroup) {
