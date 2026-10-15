@@ -1,3 +1,4 @@
+import { clientFacingIdentity } from "./client-admission-record.ts";
 /**
  * Per-connection RPC handler.
  *
@@ -57,6 +58,7 @@ import type {
 } from "../../core/extensions/index.ts";
 import { ExtensionRpcRequestNotFoundError } from "../../core/extensions/runner.ts";
 import { describeUsageLimitEntry, describeUsageLimitMessage } from "../../core/retry-fallback/usage-limit.ts";
+import { subscriptionLimits } from "../../core/subscription-limits/limit-store.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { DURABLE_CLIENT_MESSAGE_ID_CAPABILITY } from "./client-admission-record.ts";
 import { ClientAdmissions } from "./client-admissions.ts";
@@ -75,6 +77,16 @@ import {
 	RETRY_FALLBACK_COMMAND_CAPABILITY,
 	SESSION_HELD_CAPABILITY,
 } from "./custom-capability.ts";
+import {
+	type EffectCommandContext,
+	runAbort,
+	runGetEffectStatus,
+	runQueuedInputChange,
+	runSetModel,
+	runSetThinkingLevel,
+} from "./effect-commands.ts";
+import { EffectLedger } from "./effect-ledger.ts";
+import { EFFECT_LEDGER_CAPABILITY } from "./effect-record.ts";
 import { createRpcEventOutputBuffer } from "./event-output-buffer.ts";
 import { settleExtensionUiResponse } from "./extension-ui-response.ts";
 import { HostSessionControl } from "./host-session-control.ts";
@@ -110,9 +122,9 @@ import {
 	RPC_ERROR_EVAL_CELLS_UNAVAILABLE,
 	RPC_ERROR_INVALID_EVAL_CELL_REQUEST,
 	RPC_ERROR_MEDIA_NOT_FOUND,
-	RPC_ERROR_MODEL_NOT_FOUND,
+	STEER_WHEN_IDLE_CAPABILITY,
 } from "./rpc-types.ts";
-import { availableModelsData, interruptRunningTurn, unsupportedThinkingLevel } from "./session-control-actions-data.ts";
+import { availableModelsData, interruptRunningTurn } from "./session-control-actions-data.ts";
 import { SessionExtensionUiRequests } from "./session-extension-ui-requests.ts";
 
 export { buildRpcSessionState } from "./rpc-session-state.ts";
@@ -312,6 +324,12 @@ export function createRpcConnectionHandler(
 	let rpcCommandsDigest: string | undefined;
 	let suppressLoadedSurfaceEvents = false;
 	const eventOutput = createRpcEventOutputBuffer(sink.writeRaw, options.eventFlushScheduler);
+
+	const effectContext = (): EffectCommandContext => ({
+		session,
+		by: { connectionId: options.clientInfo?.connectionId() ?? "local" },
+		...(routingSessionId === undefined ? {} : { sessionId: routingSessionId }),
+	});
 
 	const tagSessionRecord = <T extends object>(value: T): T | (T & { sessionId: string }) =>
 		routingSessionId === undefined ? value : { ...value, sessionId: routingSessionId };
@@ -841,6 +859,11 @@ export function createRpcConnectionHandler(
 					correlatedEvents.accept(event satisfies RpcCommandInvocationEvent);
 					return;
 				}
+				if (event.type === "queue_update") {
+					// Same route as every other event; only the minted ids are taken out of the projection.
+					correlatedEvents.accept({ ...event, ordered: event.ordered.map(clientFacingIdentity) });
+					return;
+				}
 				if (event.type === "thinking_level_changed" || event.type === "model_changed") {
 					// Core emits the effective level only; the selection provenance lives beside it
 					// on the session and is what distinguishes an explicit choice from a default.
@@ -864,6 +887,8 @@ export function createRpcConnectionHandler(
 				await waitForRpcBackpressure();
 			});
 		}
+		// Seals what a previous load left nonterminal before any command can read or replay it.
+		EffectLedger.forSession(session);
 		if (deferRefresh) {
 			// The subscription is already installed on the replaced session above, so
 			// the deferred refresh only needs its failure reported. Re-installing here
@@ -967,6 +992,8 @@ export function createRpcConnectionHandler(
 								AUTO_TITLE_SESSIONS_CAPABILITY,
 								MEDIA_PLACEHOLDERS_CAPABILITY,
 								DURABLE_CLIENT_MESSAGE_ID_CAPABILITY,
+								EFFECT_LEDGER_CAPABILITY,
+								STEER_WHEN_IDLE_CAPABILITY,
 								CONTINUE_FROM_LEAF_CAPABILITY,
 								EVAL_CELLS_CAPABILITY,
 								...(options.retryFallbackCommand ? [RETRY_FALLBACK_COMMAND_CAPABILITY] : []),
@@ -1042,16 +1069,23 @@ export function createRpcConnectionHandler(
 				return undefined;
 			}
 
-			case "abort": {
-				void session.abort().catch((cause: unknown) => {
-					// Abort is acknowledged once dispatched; report quiesce failures out of band.
-					outputEvent({ type: "rpc_error", error: String(cause) });
+			case "abort":
+				return runAbort(effectContext(), command, () => {
+					void session.abort().catch((cause: unknown) => {
+						// Abort is acknowledged once dispatched; report quiesce failures out of band.
+						outputEvent({ type: "rpc_error", error: String(cause) });
+					});
 				});
-				return success(id, "abort");
-			}
 
 			case "interrupt":
-				return success(id, "interrupt", await interruptRunningTurn(session, command.turnId, () => session.abort()));
+				return success(
+					id,
+					"interrupt",
+					await interruptRunningTurn(session, command.turnId, () => {
+						ClientAdmissions.forSession(session).noteAbort(effectContext().by);
+						return session.abort();
+					}),
+				);
 
 			case "abort_compaction": {
 				session.abortCompaction();
@@ -1067,6 +1101,10 @@ export function createRpcConnectionHandler(
 				return success(id, "check_reload_veto", await session.checkReloadVeto());
 			}
 
+			case "dequeue_message":
+			case "edit_queued_message":
+				return runQueuedInputChange(effectContext(), command);
+
 			case "clear_queue": {
 				const cleared = session.clearQueue({ abortWillFollow: command.abortWillFollow ?? false });
 				return success(id, "clear_queue", {
@@ -1079,13 +1117,19 @@ export function createRpcConnectionHandler(
 			case "get_steering_messages":
 				return success(id, "get_steering_messages", {
 					messages: [...session.getSteeringMessages()],
-					ordered: session.getQueuedInputs().filter((input) => input.mode === "steer"),
+					ordered: session
+						.getQueuedInputs()
+						.filter((input) => input.mode === "steer")
+						.map(clientFacingIdentity),
 				});
 
 			case "get_follow_up_messages":
 				return success(id, "get_follow_up_messages", {
 					messages: [...session.getFollowUpMessages()],
-					ordered: session.getQueuedInputs().filter((input) => input.mode === "followUp"),
+					ordered: session
+						.getQueuedInputs()
+						.filter((input) => input.mode === "followUp")
+						.map(clientFacingIdentity),
 				});
 
 			case "abort_branch_summary":
@@ -1122,24 +1166,15 @@ export function createRpcConnectionHandler(
 			case "get_state":
 				return success(id, "get_state", buildRpcSessionState(session, lastAbortSource));
 
+			case "get_effect_status":
+				return runGetEffectStatus(effectContext(), command);
+
 			// =================================================================
 			// Model
 			// =================================================================
 
-			case "set_model": {
-				const models = await session.modelRegistry.getAvailable();
-				const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					return error(
-						id,
-						"set_model",
-						`Model not found: ${command.provider}/${command.modelId}`,
-						RPC_ERROR_MODEL_NOT_FOUND,
-					);
-				}
-				const systemPromptChange = await session.setModel(model, { source: "rpc" });
-				return success(id, "set_model", { ...model, systemPromptName: systemPromptChange?.systemPromptName });
-			}
+			case "set_model":
+				return runSetModel(effectContext(), command);
 
 			case "set_favorite_models":
 				session.setFavoriteModels(command.models);
@@ -1166,20 +1201,8 @@ export function createRpcConnectionHandler(
 			// Thinking
 			// =================================================================
 
-			case "set_thinking_level": {
-				if (command.scope === "turn") {
-					// Validate BEFORE mutating: the session clamps an unsupported level to a supported
-					// neighbour, so applying first would leave a REJECTED request's clamped level in
-					// place. A failed command must not change session state.
-					if (!session.getAvailableThinkingLevels().includes(command.level)) {
-						return error(id, "set_thinking_level", unsupportedThinkingLevel(command.level));
-					}
-					session.setSessionThinkingLevel(command.level);
-				} else {
-					session.setThinkingLevel(command.level);
-				}
-				return success(id, "set_thinking_level");
-			}
+			case "set_thinking_level":
+				return runSetThinkingLevel(effectContext(), command);
 
 			case "cycle_thinking_level": {
 				const level = session.cycleThinkingLevel();
@@ -1599,6 +1622,10 @@ export function createRpcConnectionHandler(
 			// Messages
 			// =================================================================
 
+			case "get_subscription_limits": {
+				return success(id, "get_subscription_limits", { accounts: subscriptionLimits.snapshot() });
+			}
+
 			case "get_messages": {
 				return success(id, "get_messages", {
 					messages: session.messages.map((message) =>
@@ -1817,7 +1844,16 @@ export function createRpcConnectionHandler(
 		}
 	};
 
+	// A single-session connection hears its account's new limit windows as they are reported. A host
+	// session's handler (it has a routing `sessionId`) does not: the host broadcasts the record once.
+	const stopLimitEvents =
+		options.sessionId === undefined
+			? subscriptionLimits.subscribe((limits) =>
+					eventOutput.enqueueEvent({ type: "subscription_limits", ...limits }),
+				)
+			: () => {};
 	const dispose = async (): Promise<void> => {
+		stopLimitEvents();
 		sessionControl?.dispose();
 		sessionControl = undefined;
 		questions.cancelAll();

@@ -1,3 +1,21 @@
+## 2026-10-13 - Advertised [CC] floor 2.1.296 (senpi#3258)
+
+### What changed
+
+- `packages/ai/src/api/anthropic-messages.ts`: `claudeCodeVersion` (the bundled [CC] version and the floor of the advertised `claude-cli/<version>`) moves 2.1.292 -> 2.1.296 to match the @anthropic-ai/claude-agent-sdk 0.3.296 bump in `packages/coding-agent/package.json`.
+
+### Why
+
+- The floor must track the pinned claude-agent-sdk's shipped [CC] version; the currency regression (senpi#2033) floors the advertised version at the SDK's and fails when they drift.
+
+### Why an extension could not handle it
+
+- The advertised [CC] identity is a build-time constant a downstream installer rewrites byte-for-byte; it is not runtime extension surface.
+
+### Expected merge conflict zones
+
+- The single `claudeCodeVersion` declaration line.
+
 
 ## 2026-10-12 - Recover from expired native web search payloads (senpi#3201)
 
@@ -255,3 +273,21 @@ The Mistral message mapping runs inside the provider adapter after every extensi
 ### Expected merge conflict zones
 
 - LOW: the `msg.role === "user"` branch of `toChatMessages` and the new `appendUserMessage` helper above it in `mistral-conversations.ts`.
+
+## 2026-10-13 - Generation-4 ids use discrete thinking levels (senpi#3292)
+
+### What changed
+
+- `packages/ai/src/api/google-shared.ts`: `usesGoogleThinkingLevel` also matches generation-4 and later ids through `isGoogleGeneration4OrLaterModelId` (`packages/ai/src/google-thinking-generation.ts`, anchored to a complete id or a `models/` namespace), so both adapters (`google-generative-ai`, `google-vertex`) send `thinkingLevel` and, when thinking is off, clamp to the lowest supported level instead of sending `thinkingBudget`.
+
+### Why
+
+The provider documents that its generation-4 models support only `LOW`, `MEDIUM` and `HIGH`, and reject a thinking budget (or `MINIMAL`) with HTTP 400. Under the generation-3-only match, every request to those models failed.
+
+### Why an extension could not handle it
+
+The thinking wire form is chosen inside the shared Google request builder, below any extension hook.
+
+### Expected merge conflict zones
+
+The id matchers in `usesGoogleThinkingLevel`.

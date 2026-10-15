@@ -18,6 +18,8 @@ import type { PromptSurface } from "../../core/dynamic-prompt/types.ts";
 import type { ServiceTier } from "../../core/extensions/builtin/service-tier.ts";
 import { MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { unknownCommandErrorFromWire } from "../../core/unknown-command.ts";
+import { DETACH_CONNECTION_CAPABILITY } from "./custom-capability.ts";
+import { ORIGIN_HOST_INSTANCE_FIELD, originHostInstance } from "./host-observe-request.ts";
 
 /** A command the host refused; `errorCode` carries the typed code when the command defines one. */
 export class RpcCommandError extends Error {
@@ -44,6 +46,7 @@ import {
 	PROMPT_COMPACTION_DEADLINE_MS,
 	promptStalledMessage,
 	REQUEST_DEADLINE_MS,
+	RpcRequestTimeoutError,
 } from "./rpc-request-deadline.ts";
 import type {
 	EditAssistantMessageResult,
@@ -65,6 +68,7 @@ import type {
 	RpcSessionReplacedEvent,
 	RpcSessionState,
 	RpcSlashCommand,
+	RpcUnloadAnswer,
 } from "./rpc-types.ts";
 import { RPC_ERROR_UNKNOWN_COMMAND } from "./rpc-types.ts";
 import {
@@ -219,6 +223,8 @@ export class RpcClient {
 	private disconnectNotified = false;
 	private stopping = false;
 	private options: RpcClientOptions;
+	/** The host generation this client runs inside, named on every socket request (#3272). */
+	private readonly originHost = originHostInstance();
 
 	constructor(options: RpcClientOptions = {}) {
 		this.options = options;
@@ -286,7 +292,7 @@ export class RpcClient {
 				// SENPI_RUNTIME=bun pin makes the launcher re-exec under Bun via spawnSync, so a
 				// SIGTERM to the wrapper leaves the Bun host running: it keeps the session lease
 				// and keeps writing session state after stop() resolved. Pin the runtime to the
-				// interpreter chosen here, the same way app-server/daemon.ts does; options.env is
+				// interpreter chosen here; options.env is
 				// spread last so a caller can still override the pin explicitly.
 				SENPI_RUNTIME: "node",
 				...this.options.env,
@@ -459,6 +465,8 @@ export class RpcClient {
 	}
 
 	async openSession(options: {
+		/** Attach only on this generation; requires `expected_host_instance`. */
+		expectedHostInstance?: string;
 		sessionPath?: string;
 		cwd?: string;
 		provider?: string;
@@ -503,6 +511,17 @@ export class RpcClient {
 		await this.send(progress, true, undefined, false);
 	}
 
+	/** `unload_session`: a refusal is an answer (`outcome: "refused"` with reason and action), not a throw. */
+	async unloadSession(
+		options: Omit<Extract<RpcCommand, { type: "unload_session" }>, "type" | "id" | "sessionId"> & {
+			readonly sessionId?: string;
+		},
+	): Promise<RpcUnloadAnswer> {
+		const sessionId = options.sessionId ?? this.sessionId;
+		if (!sessionId) throw new Error("unload_session needs a session");
+		return this.getData<RpcUnloadAnswer>(await this.send({ ...options, type: "unload_session", sessionId }, false));
+	}
+
 	async closeSession(sessionId = this.sessionId): Promise<void> {
 		if (!sessionId) return;
 		try {
@@ -514,6 +533,22 @@ export class RpcClient {
 			this.sessionId = undefined;
 			this.compactions.clear();
 		}
+	}
+
+	/**
+	 * Drop this connection's session attachments and wait until the host confirms they are gone (senpi#3238).
+	 * A host without `detach_connection` is left to today's release on socket close: `"unsupported"`.
+	 * Otherwise `deferred` names the sessions that still count this connection (see `detach_connection`).
+	 */
+	async detachConnection(): Promise<{ readonly deferred: readonly string[] } | "unsupported"> {
+		const info = this.getData<{ capabilities?: unknown }>(await this.send({ type: "get_protocol_info" }, false));
+		if (!Array.isArray(info.capabilities) || !info.capabilities.includes(DETACH_CONNECTION_CAPABILITY))
+			return "unsupported";
+		const data = this.getData<{ deferred?: unknown }>(await this.send({ type: "detach_connection" }, false));
+		const deferred = Array.isArray(data?.deferred)
+			? data.deferred.filter((id): id is string => typeof id === "string")
+			: [];
+		return { deferred };
 	}
 
 	async listSessions(options?: { observe?: boolean; include_workers?: boolean }): Promise<
@@ -1324,6 +1359,7 @@ export class RpcClient {
 			...command,
 			...(route && this.sessionId && !("sessionId" in command) ? { sessionId: this.sessionId } : {}),
 			...(ownId === undefined ? { id } : {}),
+			...(this.socket && this.originHost ? { [ORIGIN_HOST_INSTANCE_FIELD]: this.originHost } : {}),
 		} as RpcCommand;
 
 		if (!expectResponse) {
@@ -1353,7 +1389,7 @@ export class RpcClient {
 			if (command.type === "prompt") {
 				promptCap = setTimeout(() => {
 					deadline.clear();
-					expire(new Error(timeoutMessage()));
+					expire(new RpcRequestTimeoutError(timeoutMessage()));
 				}, PROMPT_ACK_MAX_WAIT_MS);
 			}
 

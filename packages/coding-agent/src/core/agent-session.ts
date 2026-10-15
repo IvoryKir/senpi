@@ -277,6 +277,7 @@ import {
 import { ModelRegistry } from "./model-registry.ts";
 import { type AvailableModelsSource, getModelNarrowingPatterns, resolveModelScope } from "./model-resolver.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { ModelSwitchAuthError } from "./model-switch-auth-error.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
 import { PROMPT_CACHE_SAFE_WAIT_ENV, resolvePromptCacheSafeWaitSeconds } from "./prompt-cache-budget.ts";
 import { PromptCachePrefixBuilds } from "./prompt-cache-prefix-request.ts";
@@ -378,7 +379,7 @@ const EVAL_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(["workflow", "monitor"
 /** Sample eval-cell call for an eval-only tool, using the argument name that tool actually takes. */
 function evalHelperCall(name: string): string {
 	if (name === "bash" || name === "powershell") return `tool.${name}({ command: "..." })`;
-	if (name === "grep") return `tool.grep({ pattern: "...", path: "..." })`;
+	if (name === "grep" || name === "glob") return `tool.${name}({ pattern: "...", path: "..." })`;
 	if (name === "workflow") return `tool.${name}({ action: "..." })`;
 	if (name === "monitor") return `tool.monitor({ description: "...", command: "...", filter: "..." })`;
 	return `tool.${name}({ ... })`;
@@ -430,11 +431,23 @@ type WithParentToolCallId<E> = E extends {
 	? E & { parentToolCallId?: string }
 	: E;
 
-/** Session-specific events that extend the core AgentEvent */
+/** Why a session-level abort happened, when the caller knows: today only a session replacement says so. */
+export interface AgentAbortCause {
+	readonly kind: "session_replaced";
+	/** What replaced the session: `new_session`, `fork` or a `switch_session`/resume. */
+	readonly reason: "new" | "fork" | "resume";
+	/** The replacement's transcript and durable session id, when they are known before the teardown. */
+	readonly targetSessionFile?: string;
+	readonly targetSessionId?: string;
+}
+
 type AgentSessionAgentEndEvent = Extract<AgentEvent, { type: "agent_end" }> & {
 	willRetry: boolean;
+	/** Present when the run was aborted by an abort that named its cause (for example a session replacement). */
+	abortCause?: AgentAbortCause;
 };
 
+/** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| WithParentToolCallId<Exclude<AgentEvent, { type: "agent_end" | "message_update" }>>
 	| AgentSessionAgentEndEvent
@@ -536,6 +549,12 @@ export type AgentSessionEvent =
 			shortfallTokens: number;
 			safetyMarginProfile: string;
 			direction: "forward" | "backward";
+	  }
+	| {
+			type: "model_change_cancelled";
+			origin: ModelChangeOrigin;
+			reason: "superseded" | "context-budget" | "error";
+			detail?: string;
 	  }
 	/** A switch accepted but held until the next send can compact for it (#1873). */
 	| {
@@ -928,7 +947,12 @@ export type QueuedInput = ClientMessageIdentity & {
 	readonly text: string;
 	readonly mode: "steer" | "followUp";
 	readonly enqueueOrder: number;
+	/** Session-unique id of this queued input (`q_<n>`), stable until it is delivered or removed. */
+	readonly queuedId: string;
 };
+
+/** What a dequeue or edit of one queued input did; `already_delivered` once the input reached a turn. */
+export type QueuedInputChange = "removed" | "edited" | "already_delivered" | "not_found";
 
 export type ClearedQueue = {
 	steering: string[];
@@ -951,6 +975,8 @@ export interface QueuedInputOptions extends ClientMessageIdentity {
 }
 
 export interface PromptOptions extends ClientMessageIdentity {
+	/** Where the input sorts among queued inputs if it ends up queued (a replaying client keeps its order). */
+	enqueueOrder?: number;
 	/** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
 	expandPromptTemplates?: boolean;
 	/** Image attachments */
@@ -1103,6 +1129,10 @@ export class AgentSession {
 	private _toolExecutionDepth = 0;
 	private readonly _toolContextDisposers = new Set<() => void>();
 	private _promptStartPending = false;
+	/** The pending start claim; `started` is set when it is released (true only for a turn about to start). */
+	private _promptStartClaim: { started?: boolean; joined?: boolean } | undefined;
+	/** The next scheduled continuation runs queued input, not the transcript tail (a failed start's joiners). */
+	private _continueWithQueuedInput = false;
 	/** True while a reload's `session_start` handlers run; a nested reload would retire the runner they run on. */
 	private _sessionStartDispatching = false;
 	/** User-abort generation at the start of an idle trigger turn's awaited admission hooks. */
@@ -1122,7 +1152,14 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Recovery-only order across both native queue modes and TUI compaction ownership. */
 	private _queuedInputOrder: QueuedInput[] = [];
+	/** The cause of the abort in flight, reported on the `agent_end` it produces. */
+	private _abortCause: AgentAbortCause | undefined;
 	private _nextQueuedInputOrder = 0;
+	private _nextQueuedId = 0;
+	/** The exact message object queued for each `queuedId`, so removal and edits hit the native queue by identity. */
+	private readonly _queuedMessages = new Map<string, AgentMessage>();
+	/** Recently delivered `queuedId`s (bounded), so a late dequeue answers `already_delivered`, not `not_found`. */
+	private readonly _deliveredQueuedIds = new Set<string>();
 	private _sessionLogger: SessionLogger;
 	private _activeCompactionLogAttempt:
 		| { id: string; reason: CompactionReason; tokensBefore: number | undefined }
@@ -1418,6 +1455,7 @@ export class AgentSession {
 			},
 			owner: () => this.sessionId,
 			now: this._fallbackNow,
+			wallNow: config.fallbackWallNow ?? config.fallbackNow ?? Date.now,
 			settings: () => this.settingsManager.getFallbackCircuitSettings(),
 			logger: fallbackLogger,
 		});
@@ -2816,7 +2854,7 @@ export class AgentSession {
 				for (const message of queuedMessages) this.agent.steer(message);
 				if (prepared) {
 					this._steeringMessages.push(prepared.text);
-					this._recordQueuedInput(prepared.text, "steer", prepared);
+					this._recordQueuedInput(prepared.text, "steer", prepared, userMessage);
 					this._emitQueueUpdate();
 				}
 				return;
@@ -3256,6 +3294,12 @@ export class AgentSession {
 		}
 
 		const agentEndWillRetry = event.type === "agent_end" && this._willRetryAfterAgentEnd(event.messages);
+		// A cause belongs to the run it stopped: a new run drops a stale one, the aborted run's agent_end takes it.
+		if (event.type === "agent_start") this._abortCause = undefined;
+		// Abort provenance, not the last message's shape: a run stopped mid-tool ends on a toolUse message.
+		const abortCause =
+			event.type === "agent_end" && this.currentAbortSource !== undefined ? this._abortCause : undefined;
+		if (abortCause !== undefined) this._abortCause = undefined;
 
 		// Emit to extensions first. Agent event persistence is intentionally
 		// asynchronous, so retain the source run signal while dispatching.
@@ -3270,7 +3314,11 @@ export class AgentSession {
 		// Notify all listeners
 		this._emit(
 			event.type === "agent_end"
-				? { ...event, willRetry: agentEndWillRetry }
+				? {
+						...event,
+						willRetry: agentEndWillRetry,
+						...(abortCause === undefined ? {} : { abortCause }),
+					}
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))
 					: event,
@@ -3980,6 +4028,11 @@ export class AgentSession {
 		// Nothing reads or writes this manager once its session is gone: it releases
 		// its writer grant and its disposable blob directory here.
 		this.sessionManager.dispose();
+	}
+
+	/** Extension-published wake sources that currently report live work, by `source` name. */
+	get activeWakeSources(): readonly string[] {
+		return this._wakeSources.activeSources;
 	}
 
 	/** Live in-session activity signals; see `session-activity.ts` for the contract. */
@@ -4719,11 +4772,19 @@ export class AgentSession {
 		}
 		// Declared tools and SDK overrides outside the built-in groups still need eval guidance.
 		const otherHelpers = [...registered]
-			.filter((name) => name !== "bash" && name !== "powershell" && name !== "workflow" && name !== "grep")
+			.filter(
+				(name) =>
+					name !== "bash" && name !== "powershell" && name !== "workflow" && name !== "grep" && name !== "glob",
+			)
 			.map(evalHelperCall);
 		if (otherHelpers.length > 0) {
 			sentences.push(
 				`These tools run ONLY inside eval cells via ${otherHelpers.join(" or ")}; hooks and permissions still apply.`,
+			);
+		}
+		if (registered.has("glob")) {
+			sentences.push(
+				`File-name search runs ONLY inside eval cells via ${evalHelperCall("glob")}; it matches a glob such as **/*.ts, respects .gitignore, and applies hooks and permissions - prefer it over find/ls in tool.bash.`,
 			);
 		}
 		if (registered.has("grep")) {
@@ -4857,9 +4918,37 @@ export class AgentSession {
 			);
 		}
 
-		const ownsPromptStart =
-			!this.isStreaming && !this._promptStartPending && options?.streamingBehavior === undefined;
-		if (ownsPromptStart) this._promptStartPending = true;
+		// An idle submission claims the start even when it carries a streamingBehavior, so input arriving
+		// while it is still starting (another `whenIdle: "start"`, a queued-or-start prompt) joins this turn
+		// instead of starting a second one. Queue decisions below read the claim state from before this call.
+		// The claim this input joins, if it joins one; checked (synchronously) again before the input queues.
+		const joinedClaim = this._promptStartPending && !this.isStreaming ? this._promptStartClaim : undefined;
+		let startWasPending = this._promptStartPending;
+		let ownsPromptStart = false;
+		let claim: { started?: boolean; joined?: boolean } | undefined;
+		const claimStart = (): void => {
+			ownsPromptStart = true;
+			claim = {};
+			this._promptStartPending = true;
+			this._promptStartClaim = claim;
+		};
+		if (!this.isStreaming && !startWasPending) claimStart();
+		// Releasing a claim that never started its turn runs the input that joined it, and only that: input
+		// queued on an idle session by default (`whenIdle: "queue"`) still waits for the next turn.
+		const releaseStart = (started: boolean): void => {
+			if (!ownsPromptStart || claim === undefined) return;
+			claim.started = started;
+			this._promptStartPending = false;
+			if (!started && claim.joined === true && !this.isStreaming) this._drainJoinedInput();
+		};
+		// A joiner marks the claim it queued into; one that queues after that claim already failed (it awaited in
+		// between) drains its own input, since the claimer has nothing left to release.
+		const noteJoined = (): void => {
+			if (ownsPromptStart || joinedClaim === undefined) return;
+			if (joinedClaim.started === false) {
+				if (!this.isStreaming) this._drainJoinedInput();
+			} else joinedClaim.joined = true;
+		};
 		// Extension bindings deliberately fire-and-forget sendUserMessage(), so an
 		// extension callback cannot deadlock on this wait. The resulting provider
 		// turn must still serialize behind compaction and other session work just
@@ -4878,10 +4967,14 @@ export class AgentSession {
 		// call for the rest of the run whenever a queued continuation (e.g. an active
 		// goal chain) holds the barrier, making typed input invisible until the run
 		// ends or the user aborts.
+		// A joiner whose claimer already ended without starting (rejected, or handled by an extension or command)
+		// takes the start over instead of queueing onto an idle session.
+		if (joinedClaim?.started === false && !this.isStreaming) {
+			startWasPending = this._promptStartPending;
+			if (!startWasPending) claimStart();
+		}
 		const canQueueWhileStreaming =
-			(this.isStreaming || this._promptStartPending) &&
-			!this.isCompacting &&
-			options?.streamingBehavior !== undefined;
+			(this.isStreaming || startWasPending) && !this.isCompacting && options?.streamingBehavior !== undefined;
 		// Auto-compaction claims only _autoCompactionAbortController, which the
 		// admission guard above deliberately ignores so background compaction never
 		// rejects typed input. Without a queue route that message matched no branch
@@ -4892,7 +4985,7 @@ export class AgentSession {
 			this._autoCompactionAbortController !== undefined &&
 			this._compactionAbortController === undefined &&
 			!this.isStreaming &&
-			!this._promptStartPending &&
+			!startWasPending &&
 			options?.streamingBehavior !== undefined;
 		if (
 			shouldWaitForSessionWork &&
@@ -4919,7 +5012,7 @@ export class AgentSession {
 					}
 				}
 			} catch (error) {
-				if (ownsPromptStart) this._promptStartPending = false;
+				releaseStart(false);
 				throw error;
 			}
 		}
@@ -5065,11 +5158,14 @@ export class AgentSession {
 				if (options.thinkingLevel !== undefined) {
 					throw new Error("Cannot set thinkingLevel on a queued prompt; set it after the current turn completes.");
 				}
+				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
+				releaseStart(false);
 				if (options.streamingBehavior === "followUp") {
 					await this._queueFollowUp(expandedText, currentImages, options);
 				} else {
 					await this._queueSteer(expandedText, currentImages, options);
 				}
+				noteJoined();
 				emitPendingCommandInvocation();
 				await emitInputDisposition("queued");
 				promptDisposition?.("queued");
@@ -5084,11 +5180,14 @@ export class AgentSession {
 				if (options?.thinkingLevel !== undefined) {
 					throw new Error("Cannot set thinkingLevel on a queued prompt; set it after the current turn completes.");
 				}
+				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
+				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
 					await this._queueFollowUp(expandedText, currentImages, options);
 				} else {
 					await this._queueSteer(expandedText, currentImages, options);
 				}
+				noteJoined();
 				emitPendingCommandInvocation();
 				await emitInputDisposition("queued");
 				promptDisposition?.("queued");
@@ -5104,11 +5203,14 @@ export class AgentSession {
 				if (options?.thinkingLevel !== undefined) {
 					throw new Error("Cannot set thinkingLevel on a queued prompt; set it after the current turn completes.");
 				}
+				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
+				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
 					await this._queueFollowUp(expandedText, currentImages, options);
 				} else {
 					await this._queueSteer(expandedText, currentImages, options);
 				}
+				noteJoined();
 				emitPendingCommandInvocation();
 				await emitInputDisposition("queued");
 				promptDisposition?.("queued");
@@ -5133,11 +5235,14 @@ export class AgentSession {
 							"Cannot set thinkingLevel on a queued prompt; set it after the current turn completes.",
 						);
 					}
+					// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
+					releaseStart(false);
 					if (options?.streamingBehavior === "followUp") {
 						await this._queueFollowUp(expandedText, currentImages, options);
 					} else {
 						await this._queueSteer(expandedText, currentImages, options);
 					}
+					noteJoined();
 					emitPendingCommandInvocation();
 					await emitInputDisposition("queued");
 					promptDisposition?.("queued");
@@ -5157,11 +5262,14 @@ export class AgentSession {
 					(this._compactionLifecycle.state.status === "failed" ||
 						this._compactionLifecycle.state.status === "aborted"))
 			) {
+				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
+				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
 					await this._queueFollowUp(expandedText, currentImages, options);
 				} else {
 					await this._queueSteer(expandedText, currentImages, options);
 				}
+				noteJoined();
 				emitPendingCommandInvocation();
 				await emitInputDisposition("queued");
 				promptDisposition?.("queued");
@@ -5228,7 +5336,8 @@ export class AgentSession {
 			preflightResult?.(false);
 			throw error;
 		} finally {
-			if (ownsPromptStart) this._promptStartPending = false;
+			// Resolved before the run starts below, so a joiner enqueues into this turn.
+			releaseStart(messages !== undefined);
 		}
 
 		if (!messages) {
@@ -5630,12 +5739,11 @@ export class AgentSession {
 		input.onQueuedInput?.(prepared);
 		const queue = input.mode === "steer" ? this._steeringMessages : this._followUpMessages;
 		queue.push(input.text);
-		this._recordQueuedInput(input.text, input.mode, prepared);
+		const queuedId = this._recordQueuedInput(input.text, input.mode, prepared);
 		this._sessionLogger.debug("queue_enqueue", {
 			mode: input.mode,
 			count: queue.length,
 		});
-		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [
 			...userTextContent(input.text, input.textBlocks),
 			...(input.images ?? []),
@@ -5646,22 +5754,20 @@ export class AgentSession {
 			timestamp: Date.now(),
 			...clientMessageIdentity(input),
 		};
+		this._queuedMessages.set(queuedId, message);
 		if (this._promptStartPending && this._skipNextPostCompactionAssistantCheck) {
 			const deferred =
 				input.mode === "steer"
 					? this._postCompactionDeferredSteeringMessages
 					: this._postCompactionDeferredFollowUpMessages;
 			deferred.push(message);
-			return;
+		} else if (input.mode === "steer") {
+			this.agent.steer(message);
+		} else {
+			this.agent.followUp(message);
 		}
-		switch (input.mode) {
-			case "steer":
-				this.agent.steer(message);
-				break;
-			case "followUp":
-				this.agent.followUp(message);
-				break;
-		}
+		// Announce the input only once it is queued everywhere, so a listener can already change it by queuedId.
+		this._emitQueueUpdate();
 	}
 
 	private _flushPostCompactionDeferredMessages(): void {
@@ -6056,19 +6162,104 @@ export class AgentSession {
 		return this._nextQueuedInputOrder;
 	}
 
-	private _recordQueuedInput(text: string, mode: QueuedInput["mode"], options?: QueuedInputOptions): void {
+	private _recordQueuedInput(
+		text: string,
+		mode: QueuedInput["mode"],
+		options?: QueuedInputOptions,
+		message?: AgentMessage,
+	): string {
 		const order = options?.enqueueOrder ?? this.reserveQueuedInputOrder();
 		this._nextQueuedInputOrder = Math.max(this._nextQueuedInputOrder, order);
-		this._queuedInputOrder.push({ text, mode, enqueueOrder: order, ...clientMessageIdentity(options) });
+		this._nextQueuedId += 1;
+		const queuedId = `q_${this._nextQueuedId}`;
+		this._queuedInputOrder.push({ text, mode, enqueueOrder: order, queuedId, ...clientMessageIdentity(options) });
+		if (message !== undefined) this._queuedMessages.set(queuedId, message);
+		return queuedId;
 	}
 
+	/** A queued input reached a turn: forget its record and remember its id as delivered. */
 	private _removeQueuedInput(text: string, mode: QueuedInput["mode"], clientMessageId?: string): void {
 		const index = this._queuedInputOrder.findIndex((message) =>
 			clientMessageId === undefined
 				? message.mode === mode && message.text === text
 				: message.clientMessageId === clientMessageId,
 		);
-		if (index !== -1) this._queuedInputOrder.splice(index, 1);
+		if (index === -1) return;
+		const [delivered] = this._queuedInputOrder.splice(index, 1);
+		if (delivered === undefined) return;
+		this._queuedMessages.delete(delivered.queuedId);
+		this._deliveredQueuedIds.add(delivered.queuedId);
+		if (this._deliveredQueuedIds.size > 256) {
+			const oldest = this._deliveredQueuedIds.values().next().value;
+			if (oldest !== undefined) this._deliveredQueuedIds.delete(oldest);
+		}
+	}
+
+	/**
+	 * Removes one queued input before it reaches a turn, from the visible lists and the native queue alike.
+	 * An input already drained into a turn answers `already_delivered`.
+	 */
+	dequeueQueuedInput(queuedId: string): QueuedInputChange {
+		return this._changeQueuedInput(queuedId, undefined);
+	}
+
+	/** Replaces the text of one queued input in place, keeping its order and identity. */
+	editQueuedInput(queuedId: string, text: string): QueuedInputChange {
+		return this._changeQueuedInput(queuedId, text);
+	}
+
+	private _changeQueuedInput(queuedId: string, nextText: string | undefined): QueuedInputChange {
+		const index = this._queuedInputOrder.findIndex((input) => input.queuedId === queuedId);
+		if (index === -1) return this._deliveredQueuedIds.has(queuedId) ? "already_delivered" : "not_found";
+		const record = this._queuedInputOrder[index]!;
+		const message = this._queuedMessages.get(queuedId);
+		// Only user input is queued by id; anything else cannot be edited, and must not be removed by an edit.
+		if (nextText !== undefined && message?.role !== "user") return "not_found";
+		const deferred =
+			record.mode === "steer"
+				? this._postCompactionDeferredSteeringMessages
+				: this._postCompactionDeferredFollowUpMessages;
+		const nextMessage: AgentMessage | undefined =
+			nextText === undefined || message?.role !== "user"
+				? undefined
+				: {
+						...message,
+						content: [
+							...userTextContent(nextText),
+							...(typeof message.content === "string"
+								? []
+								: message.content.filter((part) => part.type === "image")),
+						],
+					};
+		const deferredIndex = message === undefined ? -1 : deferred.indexOf(message);
+		const stillQueued =
+			message !== undefined &&
+			(deferredIndex !== -1 ||
+				(nextMessage === undefined
+					? this.agent.removeQueuedMessage(message)
+					: this.agent.replaceQueuedMessage(message, nextMessage)));
+		if (!stillQueued) return "already_delivered";
+		if (deferredIndex !== -1) {
+			if (nextMessage === undefined) deferred.splice(deferredIndex, 1);
+			else deferred[deferredIndex] = nextMessage;
+		}
+		const texts = record.mode === "steer" ? this._steeringMessages : this._followUpMessages;
+		const occurrence = this._queuedInputOrder
+			.slice(0, index)
+			.filter((input) => input.mode === record.mode && input.text === record.text).length;
+		let seen = -1;
+		const textIndex = texts.findIndex((text) => text === record.text && ++seen === occurrence);
+		if (nextText === undefined || nextMessage === undefined) {
+			if (textIndex !== -1) texts.splice(textIndex, 1);
+			this._queuedInputOrder.splice(index, 1);
+			this._queuedMessages.delete(queuedId);
+		} else {
+			if (textIndex !== -1) texts[textIndex] = nextText;
+			this._queuedInputOrder[index] = { ...record, text: nextText };
+			this._queuedMessages.set(queuedId, nextMessage);
+		}
+		this._emitQueueUpdate();
+		return nextText === undefined ? "removed" : "edited";
 	}
 
 	/**
@@ -6089,6 +6280,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._queuedInputOrder = [];
+		this._queuedMessages.clear();
 		this._postCompactionDeferredSteeringMessages = [];
 		this._postCompactionDeferredFollowUpMessages = [];
 		this.agent.clearAllQueues();
@@ -6128,7 +6320,14 @@ export class AgentSession {
 	/**
 	 * Abort current operation and wait for agent to become idle.
 	 */
-	async abort(): Promise<void> {
+	async abort(options?: { readonly cause?: AgentAbortCause }): Promise<void> {
+		// The first named cause wins until the `agent_end` it explains is emitted (or a new run starts):
+		// a plain abort racing a replacement's teardown never erases the replacement's cause.
+		if (options?.cause !== undefined && this._abortCause === undefined) this._abortCause = options.cause;
+		await this._abortWithProvenance();
+	}
+
+	private async _abortWithProvenance(): Promise<void> {
 		// Streaming aborts are carried by agent_end provenance; only gaps need session_abort.
 		const wasMidRun = this.isStreaming && this._retryAbortController === undefined;
 		const hadRetryBackoff = this._retryAbortController !== undefined;
@@ -6274,6 +6473,7 @@ export class AgentSession {
 		origin: ModelChangeOrigin,
 	): void {
 		const pending = createPendingModelSwitch({ model, projection, persistDefault, origin });
+		this._clearPendingModelSwitch();
 		this._pendingModelSwitch = pending;
 		this._emit({
 			type: "model_change_pending",
@@ -6284,6 +6484,19 @@ export class AgentSession {
 			shortfallTokens: projection.shortfallTokens,
 			notice: pending.notice,
 		});
+	}
+
+	private _clearPendingModelSwitch(error?: ModelUsabilityBudgetError): void {
+		const pending = this._pendingModelSwitch;
+		this._pendingModelSwitch = undefined;
+		if (pending !== undefined) {
+			this._emit({
+				type: "model_change_cancelled",
+				origin: pending.origin,
+				reason: error === undefined ? "superseded" : "context-budget",
+				...(error === undefined ? {} : { detail: error.message }),
+			});
+		}
 	}
 
 	/**
@@ -6355,22 +6568,33 @@ export class AgentSession {
 			}
 		}
 
-		this._pendingModelSwitch = undefined;
 		if (!projection.usable) {
 			const error = new ModelUsabilityBudgetError(projection);
+			this._clearPendingModelSwitch(error);
 			this._recordRejectedModelChange(pending.model, error);
 			throw error;
 		}
+		this._pendingModelSwitch = undefined;
 
-		await this._switchActiveModel(pending.model, {
-			persistDefault: pending.persistDefault,
-			appendSessionEntry: true,
-			emitModelSelect: true,
-			modelSelectSource: "set",
-			invalidateCompaction: true,
-			allowDeferral: false,
-			origin: heldSwitchOrigin(pending.origin),
-		});
+		try {
+			await this._switchActiveModel(pending.model, {
+				persistDefault: pending.persistDefault,
+				appendSessionEntry: true,
+				emitModelSelect: true,
+				modelSelectSource: "set",
+				invalidateCompaction: true,
+				allowDeferral: false,
+				origin: heldSwitchOrigin(pending.origin),
+			});
+		} catch (error) {
+			this._emit({
+				type: "model_change_cancelled",
+				origin: pending.origin,
+				reason: error instanceof ModelUsabilityBudgetError ? "context-budget" : "error",
+				detail: error instanceof Error ? error.message : String(error),
+			});
+			throw error;
+		}
 		return true;
 	}
 
@@ -6545,7 +6769,7 @@ export class AgentSession {
 			this._assertModelUsableForSwitch(model, liveContextTokens);
 		}
 		if (!(await this._modelRuntime.checkAuth(model.provider))) {
-			const error = new Error(`No API key for ${model.provider}/${model.id}`);
+			const error = new ModelSwitchAuthError(model.provider, model.id);
 			this._recordRejectedModelChange(model, error);
 			throw error;
 		}
@@ -6576,9 +6800,12 @@ export class AgentSession {
 		});
 	}
 
-	private async _maybeRestoreFallbackPrimary(): Promise<void> {
+	private async _maybeRestoreFallbackPrimary(boundary: "turn" | "continuation" = "turn"): Promise<void> {
 		try {
-			await this._retryFallback.maybeRestorePrimary(this.settingsManager.getRetryFallbackSettings().revertPolicy);
+			await this._retryFallback.maybeRestorePrimary(
+				this.settingsManager.getRetryFallbackSettings().revertPolicy,
+				boundary,
+			);
 			await this._retryFallback.rerouteAroundOpenCircuit();
 		} catch (error) {
 			this._retryFallback.clear();
@@ -6594,7 +6821,7 @@ export class AgentSession {
 	 */
 	private async _onCompactionContextChanged(): Promise<void> {
 		const released = this._retryFallback.notifyCompactionApplied();
-		if (released && !this.isStreaming) await this._maybeRestoreFallbackPrimary();
+		if (released && !this.isStreaming) await this._maybeRestoreFallbackPrimary("turn");
 	}
 
 	private async _switchActiveModel(
@@ -6710,7 +6937,7 @@ export class AgentSession {
 			// Without this a held switch survives its own resolution - an explicit
 			// /compact followed by a manual retry applies the switch here, and the stale
 			// hold would compact and re-switch again on the next message.
-			this._pendingModelSwitch = undefined;
+			this._clearPendingModelSwitch();
 			// Emit only after all admission hooks have accepted the candidate.
 			this._emit({
 				type: "model_changed",
@@ -6917,7 +7144,7 @@ export class AgentSession {
 			// #1873: the cycle commits here rather than through `_switchActiveModel`, so it
 			// has to supersede a held switch itself - otherwise cycling onto a model that
 			// fits leaves an older hold to reclaim the session on the next message.
-			this._pendingModelSwitch = undefined;
+			this._clearPendingModelSwitch();
 			// Post-switch, same contract as _switchActiveModel: the level in force AFTER the cycle.
 			this._emit({
 				type: "model_changed",
@@ -6958,16 +7185,16 @@ export class AgentSession {
 	 * Clamps to model capabilities based on available thinking levels.
 	 * Refreshes per-model memory, never the startup default; explicit save controls own that setting.
 	 */
-	setThinkingLevel(level: ThinkingLevel): void {
-		this._setThinkingLevel(level, true, { level, source: "explicit" });
+	setThinkingLevel(level: ThinkingLevel, origin?: ModelChangeOrigin): void {
+		this._setThinkingLevel(level, true, { level, source: "explicit" }, origin, true);
 	}
 
 	/**
 	 * Set the thinking level for this session without changing the global default.
 	 * The effective level is still persisted in this session's history.
 	 */
-	setSessionThinkingLevel(level: ThinkingLevel): void {
-		this._setThinkingLevel(level, false, { level, source: "explicit" });
+	setSessionThinkingLevel(level: ThinkingLevel, origin?: ModelChangeOrigin): void {
+		this._setThinkingLevel(level, false, { level, source: "explicit" }, origin, true);
 	}
 
 	private _setThinkingLevel(
@@ -6975,6 +7202,7 @@ export class AgentSession {
 		rememberModelLevel: boolean,
 		selection: ThinkingSelection | undefined,
 		trigger?: ModelChangeOrigin,
+		stampNoOpEffect = false,
 	): void {
 		const availableLevels = this.getAvailableThinkingLevels();
 		const effectiveLevel = availableLevels.includes(level) ? level : this._clampThinkingLevel(level, availableLevels);
@@ -7024,6 +7252,9 @@ export class AgentSession {
 			});
 			this._emitHighReasoningWarningIfNeeded();
 			this._emitThinkingClampWarningIfNeeded();
+		} else if (stampNoOpEffect && trigger?.effectId !== undefined) {
+			// A no-op RPC effect still needs proof it applied if the process dies before its receipt.
+			this.sessionManager.appendThinkingLevelChange(effectiveLevel, effectiveSelection, trigger);
 		}
 	}
 
@@ -8693,7 +8924,7 @@ export class AgentSession {
 			// on the primary, and precedes the admission revalidation below so that
 			// check samples the restored model's context window - the same ordering
 			// the retry-continuation restore uses.
-			await this._maybeRestoreFallbackPrimary();
+			await this._maybeRestoreFallbackPrimary("continuation");
 
 			await this._revalidateScheduledContinuationAdmission();
 			if (this.agent.state.isStreaming) return "taken-over";
@@ -8701,7 +8932,11 @@ export class AgentSession {
 
 			await runBoundedRetryContinuation({
 				continueRun: async () => {
-					if (this._scheduledContinuationRecompacted) {
+					if (this._continueWithQueuedInput) {
+						// Joined input of a start that never ran: the transcript tail may be anything, even empty.
+						this._continueWithQueuedInput = false;
+						await this.agent.continueWithQueuedMessages(options);
+					} else if (this._scheduledContinuationRecompacted) {
 						const tail = this.agent.state.messages.at(-1);
 						if (tail?.role === "assistant" && (tail.stopReason === "error" || tail.stopReason === "aborted")) {
 							this._retireFailedRetryAssistant(tail);
@@ -8744,6 +8979,7 @@ export class AgentSession {
 			throw error;
 		} finally {
 			this._scheduledContinuationRecompacted = false;
+			this._continueWithQueuedInput = false;
 		}
 	}
 
@@ -8766,6 +9002,13 @@ export class AgentSession {
 		if (!failure) return;
 		const message = failure.error instanceof Error ? failure.error.message : String(failure.error);
 		this._emit({ type: "continuation_error", errorMessage: `The session file did not save this run: ${message}` });
+	}
+
+	/** Runs input that joined a start which never ran: the transcript tail may be anything, even empty. */
+	private _drainJoinedInput(): void {
+		if (!this.agent.hasQueuedMessages()) return;
+		this._continueWithQueuedInput = true;
+		this._scheduleContinuationAfterCurrentEvent();
 	}
 
 	private _scheduleContinuationAfterCurrentEvent(
@@ -9204,8 +9447,8 @@ export class AgentSession {
 					}
 					this.sendUserMessage(content, options).catch(reportError);
 				},
-				appendEntry: (customType, data) => {
-					const entryId = this.sessionManager.appendCustomEntry(customType, data);
+				appendEntry: (customType, data, options) => {
+					const entryId = this.sessionManager.appendCustomEntry(customType, data, options);
 					const entry = this.sessionManager.getEntry(entryId);
 					if (entry) {
 						this._emit({ type: "entry_appended", entry });
@@ -9662,6 +9905,7 @@ export class AgentSession {
 					edit: { filesystemPolicy },
 					grep: { filesystemPolicy },
 					find: { filesystemPolicy },
+					glob: { filesystemPolicy },
 					ls: { filesystemPolicy },
 				});
 
@@ -10578,7 +10822,7 @@ export class AgentSession {
 
 		// Turn boundary: a suppression that expired during the backoff sleep lets
 		// the retry continue on the restored primary instead of the fallback model.
-		await this._maybeRestoreFallbackPrimary();
+		await this._maybeRestoreFallbackPrimary("continuation");
 
 		// Model fallback (or reversion) can select a smaller context window after
 		// the prior retry checks. Revalidate canonical session context immediately

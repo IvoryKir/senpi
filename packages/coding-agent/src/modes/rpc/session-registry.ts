@@ -4,6 +4,8 @@ import { ProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/
 import { createAgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type { SessionStartEvent } from "../../core/extensions/types.ts";
 import { assertValidSessionId, SessionManager } from "../../core/session-manager.ts";
+import { ClientAdmissions } from "./client-admissions.ts";
+import { EffectLedger } from "./effect-ledger.ts";
 import { SESSION_PATH_RETRY_AFTER_MS } from "./host-reservations.ts";
 import { createRegistryWarm, type HostWarm } from "./host-warm.ts";
 import { assertRequestedModelResolved } from "./open-session-model.ts";
@@ -132,6 +134,11 @@ export class RpcSessionRegistry {
 				this.now(),
 			);
 		}
+		if (options?.attachOnly)
+			throw new RpcSessionRegistryError("session_not_held", undefined, {
+				reason: "session_not_held",
+				action: "rediscover_holder",
+			});
 		if (sessionPath) {
 			// Taken SYNCHRONOUSLY, before any await: a concurrent open for the same path must find the
 			// reservation already held, not a window between the decision and the record of it.
@@ -172,6 +179,12 @@ export class RpcSessionRegistry {
 			: storedProfile;
 
 		const handle = `rpc-${++this.nextHandle}`;
+		let settleOpen!: { resolve: () => void; reject: (cause: unknown) => void };
+		const openCompletion = new Promise<void>((resolve, reject) => {
+			settleOpen = { resolve, reject };
+		});
+		// A concurrent explicit open for the same path waits on this to attach, never to time it out.
+		openCompletion.catch(() => {});
 		const entry: RpcSessionEntry = {
 			state: "opening",
 			scope: new ProviderScope(),
@@ -184,6 +197,7 @@ export class RpcSessionRegistry {
 			retainOnDisconnect: options?.retainOnDisconnect === true,
 			lastCommandAt: this.now(),
 			lifecycleMutex: Promise.resolve(),
+			openCompletion,
 		};
 		entry.switchSession = createEntrySwitchSession(entry, this.options.createRuntime, () =>
 			this.syncRuntimeMetadata(),
@@ -209,9 +223,12 @@ export class RpcSessionRegistry {
 				}),
 			);
 			assertRequestedModelResolved(runtimeProfile, entry.runtime.diagnostics);
+			ClientAdmissions.sealQueuedOnReplace(entry.runtime);
+			EffectLedger.sealOnReplace(entry.runtime);
 			entry.durableSessionId = manager.getSessionId();
 			entry.sessionPath ??= manager.getSessionFile();
 			entry.state = "open";
+			settleOpen.resolve();
 			return { sessionId: handle, durableSessionId: entry.durableSessionId, sessionPath: entry.sessionPath };
 		} catch (error) {
 			// Runtime construction may have started extensions, watchers, and provider
@@ -231,8 +248,13 @@ export class RpcSessionRegistry {
 					if (sessionPath) await releaseWithinGrace(this.teardownHost, handle, sessionPath);
 				}
 			}
-			if (error instanceof RpcSessionRegistryError) throw error;
-			throw new RpcSessionRegistryError("open_failed", error instanceof Error ? error.message : undefined);
+			if (error instanceof RpcSessionRegistryError) {
+				settleOpen.reject(error);
+				throw error;
+			}
+			const wrapped = new RpcSessionRegistryError("open_failed", error instanceof Error ? error.message : undefined);
+			settleOpen.reject(wrapped);
+			throw wrapped;
 		}
 	}
 
