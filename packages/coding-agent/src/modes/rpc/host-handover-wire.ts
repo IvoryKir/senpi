@@ -120,7 +120,7 @@ export function isHostIdle(
 	const verdicts = selectDrainVerdicts(
 		registry,
 		(sessionId) => (inFlight.get(sessionId) ?? 0) > 0,
-		() => {},
+		() => 0,
 	);
 	return verdicts.park.length + verdicts.gone.length === sessions.length;
 }
