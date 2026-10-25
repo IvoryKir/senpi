@@ -31,6 +31,7 @@ export class LifecycleLedger {
 	private runCompleted: string | undefined;
 	private admissionWriteFailed = false;
 	private unwritten = false;
+	private writeFailed = false;
 	private readonly activityInstanceId: string = crypto.randomUUID();
 	runId: string | undefined;
 	runActive = false;
@@ -234,10 +235,12 @@ export class LifecycleLedger {
 			// Input changes during session_start are collected, but cannot publish.
 			return;
 		}
-		// Pending run/epoch state and failed writes retain the ordinary durable
-		// path. Activity alone cannot consume or clear that work.
-		if (!this.unwritten && this.current.persisted && equivalent(this.current, next)) {
-			if (JSON.stringify(this.current.activity) === JSON.stringify(next.activity)) return;
+		const sameActivity = JSON.stringify(this.current.activity) === JSON.stringify(next.activity);
+		// An unchanged lifecycle writes nothing; an unwritten revision waits for the record that carries it (senpi#3980).
+		if (this.current.persisted && sameActivity && equivalent(this.current, next)) return;
+		// Activity alone only emits, also while custody writes fail. Pending run/epoch state and a failed
+		// lifecycle write retain the ordinary durable path: activity cannot consume or clear that work.
+		if (!sameActivity && !this.unwritten && !this.writeFailed && equivalent(this.current, next)) {
 			this.current = {
 				...next,
 				activityRevision: {
@@ -295,9 +298,11 @@ export class LifecycleLedger {
 		try {
 			this.persistence.append(record);
 			this.current = next;
+			this.writeFailed = false;
 		} catch (error) {
 			if (!(error instanceof Error)) throw error;
 			this.current = { ...next, persisted: false, selfSettleEligible: false };
+			this.writeFailed = true;
 		}
 		if (emit && !this.current.restoring)
 			this.persistence.emit({

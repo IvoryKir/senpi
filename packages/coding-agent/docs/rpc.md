@@ -189,13 +189,15 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
   `{ kind: "tool", toolName, toolCallId, since, outstanding }` represents the oldest outstanding
   top-level tool operation, including preparation, approval and dependency waits. Nested calls
   do not count. `{ kind: "model", since }` covers only an assistant stream from its start to its
-  message end, not the first-token wait or prepared messages. `since` is the recorded activity
-  start time and stays stable while selected. Compaction, retry waits, queued work and other
+  message end, not the first-token wait or prepared messages. `since` is the time the session
+  observed the start boundary, not a timestamp carried by the core event, so it approximates the
+  real start; it stays stable while selected. Compaction, retry waits, queued work and other
   unknown intervals omit activity.
 - Optional `activityRevision: { instanceId, revision }` orders activity separately from durable
   lifecycle state. New writers include it even when activity is absent. The engine owner allocates
   a fresh opaque `instanceId` on reconstruction or rebinding; delivery and reconnect do not change it.
-  An activity-only change keeps lifecycle `seq`, increments `revision`, and appends no durable record.
+  An activity-only change keeps lifecycle `seq`, increments `revision`, and appends no durable record,
+  also while a failed custody write leaves `persisted` false.
   An independently required lifecycle write retains append-before-publish and resets revision to zero
   at its new `seq`, carrying the current activity once. Token deltas and tool progress change neither
   ordering number. Both activity fields are wire-only and ignored on restoration; restored activity

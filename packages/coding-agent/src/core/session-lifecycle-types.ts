@@ -74,7 +74,11 @@ export interface SpawnedBy {
 	readonly taskId: string;
 }
 
-/** Known live activity only. A tool represents the oldest outstanding top-level operation, including waits. */
+/**
+ * Known live activity only. A tool represents the oldest outstanding top-level operation, including waits.
+ * `since` is when the session observed the start boundary (tool execution start, assistant stream start),
+ * not a timestamp carried by the core event, so it approximates the real start; it stays stable while selected.
+ */
 export type LifecycleActivity =
 	| {
 			readonly kind: "tool";
