@@ -269,6 +269,7 @@ import {
 	takeOverInteractiveStderr,
 } from "./interactive-stderr-guard.ts";
 import { applyKeybindingsFileEdit, seedKeybindingsFile } from "./keybindings-command.ts";
+import { LIFECYCLE_STATUS_KEY, LifecycleStatus } from "./lifecycle-status.ts";
 import {
 	buildResourceScopeGroups,
 	type DisplaySourceInfo,
@@ -1082,6 +1083,8 @@ export class InteractiveMode {
 
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
+	private agentSubscriptionGeneration = 0;
+	private readonly lifecycleStatus = new LifecycleStatus();
 	private signalCleanupHandlers: Array<() => void> = [];
 
 	// Track if editor is in bash mode (text starts with !)
@@ -2901,6 +2904,7 @@ export class InteractiveMode {
 		this.externalOwnerCompactionNoticeShown = false;
 		this.footer?.setCompactionDelegated?.(false);
 		const session = this.session;
+		this.agentSubscriptionGeneration++;
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -5237,7 +5241,23 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
-		this.unsubscribe = this.session.subscribe(async (event) => {
+		this.unsubscribe?.();
+		const session = this.session;
+		const generation = ++this.agentSubscriptionGeneration;
+		this.lifecycleStatus.bind(session.sessionId, session.lifecycle);
+		this.setExtensionStatus(LIFECYCLE_STATUS_KEY, this.lifecycleStatus.text());
+		this.unsubscribe = session.subscribe(async (event) => {
+			if (generation !== this.agentSubscriptionGeneration || session !== this.session) return;
+			if (event.type === "session_lifecycle") {
+				if (event.sessionId !== session.sessionId) return;
+				if (!this.lifecycleStatus.owns(event.lifecycle))
+					this.lifecycleStatus.bind(session.sessionId, session.lifecycle);
+				this.lifecycleStatus.accept(event.lifecycle);
+				const text = this.lifecycleStatus.text();
+				if (this.footerDataProvider.getExtensionStatuses().get(LIFECYCLE_STATUS_KEY) !== text)
+					this.setExtensionStatus(LIFECYCLE_STATUS_KEY, text);
+				return;
+			}
 			await this.handleEvent(event);
 		});
 	}
@@ -10320,6 +10340,8 @@ export class InteractiveMode {
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
+		this.agentSubscriptionGeneration++;
+		this.setExtensionStatus(LIFECYCLE_STATUS_KEY, undefined);
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}
