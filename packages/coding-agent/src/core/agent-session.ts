@@ -350,6 +350,12 @@ import {
 	probeBackSchedule,
 } from "./retry-fallback/hint-policy.ts";
 import { createFallbackLogger } from "./retry-fallback/log.ts";
+import {
+	createModelConfigErrorReporter,
+	isModelConfigError,
+	type ModelConfigErrorEvent,
+	type ModelConfigErrorReporter,
+} from "./retry-fallback/model-config-error.ts";
 import { ProbeBackScheduler } from "./retry-fallback/probe-scheduler.ts";
 import {
 	REQUEST_SHAPE_FAILURE_TEXT,
@@ -725,6 +731,7 @@ export type AgentSessionEvent =
 			cause?: "fallback-unusable";
 	  }
 	| { type: "retry_fallback_exhausted"; chainKey: string; lastError: string }
+	| ModelConfigErrorEvent
 	| {
 			type: "server_fallback_aborted";
 			from: string;
@@ -1646,6 +1653,7 @@ export class AgentSession {
 	private readonly _fallbackValidationWarnings: readonly string[];
 	private _providerRequiredNoticed = false;
 	private readonly _retryFallback: RetryFallbackController;
+	private readonly _modelConfigErrors: ModelConfigErrorReporter;
 	private readonly _selectorCooldowns: SelectorCooldowns;
 	private readonly _fallbackCircuits: FallbackCircuitAccess;
 	private readonly _fallbackCircuitsLease: ReturnType<typeof acquireFallbackCircuits>;
@@ -1746,6 +1754,7 @@ export class AgentSession {
 		this._modelRegistry = config.modelRegistry ?? new ModelRegistry(modelRuntime);
 		this._agentDir = config.agentDir ?? getAgentDir();
 		const fallbackLogger = createFallbackLogger(this._agentDir);
+		this._modelConfigErrors = createModelConfigErrorReporter(fallbackLogger, (event) => this._emit(event));
 		this._sessionLogger = createSessionLogger(this._agentDir, {
 			context: () => ({
 				sessionId: this.sessionManager.getSessionId(),
@@ -4101,6 +4110,9 @@ export class AgentSession {
 				retryOutcome === "not-handled" &&
 				(msg.stopReason === "error" || msg.stopReason === "aborted");
 
+			if (retryOutcome === "not-handled" && msg.stopReason === "error" && isModelConfigError(msg.errorMessage)) {
+				this._modelConfigErrors.report(msg, this.sessionManager.getSessionId());
+			}
 			if (retryOutcome === "not-handled" && cursorQuotaRe && msg.errorMessage) {
 				msg.errorMessage = `${msg.errorMessage} (likely provider usage/quota exhaustion: conversation is well below the model context window)`;
 			}
@@ -12494,6 +12506,7 @@ export class AgentSession {
 		return (
 			!message.errorMessage?.startsWith(TURN_RETRY_SUPPRESSION_PREFIX) &&
 			!this._isLocalFailure(message) &&
+			!isModelConfigError(message.errorMessage) &&
 			!this._isClaudeSdkAuthMissError(message) &&
 			!this._isClaudeSdkSameModelRemintError(message) &&
 			message.stopReason === "error" &&
