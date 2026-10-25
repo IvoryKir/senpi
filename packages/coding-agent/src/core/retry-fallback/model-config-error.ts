@@ -2,9 +2,11 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { redactSecrets } from "../sensitive-output.ts";
 import type { FallbackLogger } from "./log.ts";
 
-// A route that does not serve a configured model id: the code an OpenAI-compatible gateway returns,
-// and the text a gateway uses when no provider behind it serves that id.
-const MODEL_CONFIG_ERROR = /\bmodel_not_found\b|\bunknown provider for model\b/i;
+// A route that does not serve a configured model id: the OpenAI-compatible `model_not_found` code, a gateway's
+// "unknown provider for model", Anthropic's not_found_error whose message names the model ("model: <id>"; any
+// other not_found_error is not one), and Google's "models/<id> is not found".
+const MODEL_CONFIG_ERROR =
+	/\bmodel_not_found\b|\bunknown provider for model\b|\bnot_found_error\b[^}]{0,120}?\bmodel:\s*[\w.:/-]|\bmodels\/[\w.:-]+ is not found\b/i;
 const EXCERPT_LIMIT = 500;
 
 export interface ModelConfigErrorEvent {

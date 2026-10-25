@@ -4,15 +4,14 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerFallbackModels } from "../fallback-provider-fixture.ts";
 import { createHarness, type Harness } from "../harness.ts";
+import { MODEL_NOT_FOUND_ANSWERS, NOT_MODEL_NOT_FOUND_ANSWERS } from "../model-not-found-inventory.ts";
+import { isModelConfigError } from "../../../src/core/retry-fallback/model-config-error.ts";
 import { READABLE_PROVIDER_TEXT, SECRET_CELLS } from "../secret-inventory.ts";
 
 // A gateway that does not serve a configured model id answers model_not_found. That is a configuration
 // error: walking the fallback chain silently ran the turn on another provider's model.
 const primary = "faux/faux-1";
 const modelNotFound = '400 {"code":"model_not_found","message":"unknown provider for model faux-1"}';
-const unknownProvider = "400 Bad Request: unknown provider for model faux-1";
-const wrappedIn503 = '503 {"code":"model_not_found","message":"model faux-1 not found"}';
-const wrappedIn502 = "502 Bad Gateway: unknown provider for model faux-1";
 
 async function chainedHarness(harnesses: Harness[], options: { persistSession?: boolean } = {}): Promise<Harness> {
 	const harness = await createHarness({
@@ -64,12 +63,20 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 		while (harnesses.length > 0) harnesses.pop()?.cleanup();
 	});
 
-	for (const [label, errorMessage] of [
-		["model_not_found", modelNotFound],
-		["unknown provider for model", unknownProvider],
-		["model_not_found wrapped in a 503", wrappedIn503],
-		["unknown provider for model wrapped in a 502", wrappedIn502],
-	] as const) {
+	describe("classifies the shared model-not-found inventory", () => {
+		for (const [label, message] of MODEL_NOT_FOUND_ANSWERS) {
+			it(`${label} is a configuration error`, () => {
+				expect(isModelConfigError(message)).toBe(true);
+			});
+		}
+		for (const [label, message] of NOT_MODEL_NOT_FOUND_ANSWERS) {
+			it(`${label} is not a configuration error`, () => {
+				expect(isModelConfigError(message)).toBe(false);
+			});
+		}
+	});
+
+	for (const [label, errorMessage] of MODEL_NOT_FOUND_ANSWERS) {
 		it(`fails the turn loudly on ${label} with no retry and no fallback`, async () => {
 			const harness = await chainedHarness(harnesses);
 			harness.setResponses([
