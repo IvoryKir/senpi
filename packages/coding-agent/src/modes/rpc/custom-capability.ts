@@ -47,6 +47,13 @@ export const TOOL_BARRIER_CAPABILITY = "tool_barrier";
 export const SESSION_RELOCATION_CAPABILITY = "session_relocation";
 
 /**
+ * HOST capability: a drain hands a session to the next generation only by a strict transfer
+ * (code-yeongyu/oh-my-openagent#10091): proven quiet (unreadable activity holds it), sealed against new work,
+ * its park record durable before teardown, and its path claim kept until that teardown.
+ */
+export const STRICT_SESSION_TRANSFER_CAPABILITY = "strict_session_transfer_v1";
+
+/**
  * HOST capability (advertised in `get_protocol_info`, never sent by a client):
  * this host honors `open_session.retain_on_disconnect`, so a session opened with
  * that flag survives its last client's disconnect instead of being closed with it.
