@@ -1,15 +1,14 @@
 import { stripVTControlCharacters } from "node:util";
-import { type Container, TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { type Container, TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../../../tui/test/virtual-terminal.ts";
-import { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.ts";
-import type { AgentSession, AgentSessionEvent } from "../../../src/core/agent-session.ts";
+import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { SessionLifecycle } from "../../../src/core/session-lifecycle-types.ts";
-import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { subscribeSessionRecords } from "../../../src/modes/rpc/session-record-stream.ts";
 import { createHarness, type Harness } from "../harness.ts";
 import { createLifecycleHarness } from "../lifecycle-test-harness.ts";
+import { createTuiLifecycle, emit, invoke, render } from "../tui-lifecycle-harness.ts";
 
 const cleanups: Array<() => unknown> = [];
 beforeAll(() => initTheme("dark"));
@@ -18,47 +17,7 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 });
 
-function invoke(mode: InteractiveMode, name: string): void {
-	const method: unknown = Reflect.get(mode, name);
-	if (typeof method !== "function") throw new Error(`Missing ${name}`);
-	method.call(mode);
-}
-
-function render(mode: InteractiveMode, width = 240): string {
-	const footer: unknown = Reflect.get(mode, "footer");
-	if (!footer || typeof footer !== "object" || !("render" in footer) || typeof footer.render !== "function")
-		throw new Error("Missing rendered footer");
-	const lines: string[] = footer.render(width);
-	for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-	return stripVTControlCharacters(lines.join("\n"));
-}
-
-function emit(session: AgentSession, lifecycle: SessionLifecycle): void {
-	const publish: unknown = Reflect.get(session, "_emit");
-	if (typeof publish !== "function") throw new Error("Missing session event path");
-	publish.call(session, { type: "session_lifecycle", sessionId: session.sessionId, lifecycle });
-}
-
-async function terminal(h?: Harness) {
-	const harness = h ?? (await createHarness());
-	cleanups.push(() => harness.cleanup());
-	const runtime = Object.assign(Object.create(AgentSessionRuntime.prototype), { _session: harness.session });
-	const mode = new InteractiveMode(runtime, { terminal: new VirtualTerminal(120, 40) });
-	Reflect.set(mode, "isInitialized", true);
-	cleanups.push(() => {
-		Reflect.set(mode, "isInitialized", false);
-		mode.stop({ restoreStderr: false });
-	});
-	invoke(mode, "subscribeToAgent");
-	const base: SessionLifecycle = {
-		...harness.session.lifecycle,
-		seq: 100,
-		state: "running",
-		activity: undefined,
-		activityRevision: { instanceId: harness.session.lifecycle.activityRevision?.instanceId ?? "owner", revision: 0 },
-	};
-	return { harness, runtime, mode, base };
-}
+const terminal = (h?: Harness) => createTuiLifecycle(cleanups, h);
 
 it("renders initial lifecycle status and live named child/background waits from the real bus, matching RPC content", async () => {
 	const { h, publish } = await createLifecycleHarness();

@@ -126,9 +126,8 @@ type InteractiveModeStopThis = {
 	themeController: { disableAutoSync(): void };
 	clearExtensionTerminalInputListeners(): void;
 	footer: { dispose(): void };
-	footerDataProvider: { dispose(): void };
+	footerDataProvider: { dispose(): void; setExtensionStatus(key: string, text: string | undefined): void };
 	agentSubscriptionGeneration: number;
-	setExtensionStatus(key: string, text: string | undefined): void;
 	unsubscribe: (() => void) | undefined;
 	isInitialized: boolean;
 	unregisterSignalHandlers(): void;
@@ -1295,9 +1294,8 @@ describe("ToolExecutionComponent parity", () => {
 			themeController: { disableAutoSync: vi.fn() },
 			clearExtensionTerminalInputListeners: vi.fn(),
 			footer: { dispose: vi.fn() },
-			footerDataProvider: { dispose: vi.fn() },
+			footerDataProvider: { dispose: vi.fn(), setExtensionStatus: vi.fn() },
 			agentSubscriptionGeneration: 0,
-			setExtensionStatus: vi.fn(),
 			unsubscribe: undefined,
 			isInitialized: false,
 			unregisterSignalHandlers: vi.fn(),

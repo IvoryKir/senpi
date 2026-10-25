@@ -3747,7 +3747,10 @@ export class InteractiveMode {
 				request.waitForAnswer ? this.showQuestionOverlay(request, opts) : this.showAsyncQuestion(request, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
-			setStatus: (key, text) => this.setExtensionStatus(key, text),
+			// The host owns the lifecycle status; an extension cannot overwrite or clear it.
+			setStatus: (key, text) => {
+				if (key !== LIFECYCLE_STATUS_KEY) this.setExtensionStatus(key, text);
+			},
 			setSubagentCost: (costUsd) => {
 				this.footerDataProvider.setSubagentCost(costUsd);
 				this.ui.requestRender();
@@ -5240,12 +5243,16 @@ export class InteractiveMode {
 		};
 	}
 
+	private showLifecycleStatus(session: AgentSession): void {
+		this.lifecycleStatus.bind(session.sessionId, session.lifecycle);
+		this.setExtensionStatus(LIFECYCLE_STATUS_KEY, this.lifecycleStatus.text());
+	}
+
 	private subscribeToAgent(): void {
 		this.unsubscribe?.();
 		const session = this.session;
 		const generation = ++this.agentSubscriptionGeneration;
-		this.lifecycleStatus.bind(session.sessionId, session.lifecycle);
-		this.setExtensionStatus(LIFECYCLE_STATUS_KEY, this.lifecycleStatus.text());
+		this.showLifecycleStatus(session);
 		this.unsubscribe = session.subscribe(async (event) => {
 			if (generation !== this.agentSubscriptionGeneration || session !== this.session) return;
 			if (event.type === "session_lifecycle") {
@@ -9608,6 +9615,8 @@ export class InteractiveMode {
 			// or failed reload with nothing left to restore them, so the TUI stopped
 			// self-repainting until an input event forced a frame.
 			this.resetExtensionUI();
+			// The reset cleared every footer status and reload keeps the agent subscription, so nothing else restores it.
+			this.showLifecycleStatus(this.session);
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 			this.outputPad = this.settingsManager.getOutputPad();
 			// Reload replaces the session runner: a genuine ownership boundary, so the
@@ -10341,7 +10350,8 @@ export class InteractiveMode {
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
 		this.agentSubscriptionGeneration++;
-		this.setExtensionStatus(LIFECYCLE_STATUS_KEY, undefined);
+		// The footer is disposed: clear the data without scheduling a frame.
+		this.footerDataProvider.setExtensionStatus(LIFECYCLE_STATUS_KEY, undefined);
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

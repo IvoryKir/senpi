@@ -46,6 +46,9 @@ export class LifecycleStatus {
 				: newer;
 		if (newer) {
 			// An unfamiliar owner cannot smuggle activity in alongside an independently newer durable state.
+			// Deliberate: a newer state from another owner also drops the bound owner's activity, so the footer
+			// shows no activity rather than one it has no evidence for, until the bound owner's next update or a
+			// rebind from the authoritative `session.lifecycle`.
 			this.snapshot = { ...snapshot, activity: undefined, activityRevision: undefined };
 		}
 		if (acceptedActivity && this.snapshot) {
