@@ -167,7 +167,7 @@ export async function startSuccessor(context: {
 		// NOT moved here - the predecessor still owns the socket until the rename lands.
 		await writeGenerationRecord(paths, registration);
 		await options._test?.afterSpawn?.(spawned.pid);
-		const window = options._test?.readinessTimeoutMs ?? DEFAULT_HANDOFF_READINESS_MS;
+		const window = options._test?.readinessTimeoutMs ?? readinessWindow(options.deadline);
 		const answer =
 			(await awaitSuccessor(options.socket, host, exit, window)) ??
 			(await followWithdrawnPublication(publishToken, options.socket, host, exit));
@@ -223,6 +223,16 @@ export async function startSuccessor(context: {
 		instanceId: published.answer.instanceId ?? "",
 		...(repair !== undefined && { repair }),
 	};
+}
+
+/**
+ * The readiness window a handoff with a deadline can afford: what is left once the late-publication follow and a
+ * refusal's exit wait are reserved, never more than the default window (code-yeongyu/oh-my-openagent#10091).
+ */
+function readinessWindow(deadline: number | undefined): number {
+	if (deadline === undefined) return DEFAULT_HANDOFF_READINESS_MS;
+	const left = deadline - Date.now() - LATE_PUBLICATION_MS - SUCCESSOR_EXIT_WAIT_MS;
+	return Math.max(0, Math.min(DEFAULT_HANDOFF_READINESS_MS, left));
 }
 
 interface Published {

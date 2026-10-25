@@ -85,6 +85,15 @@ export class RouterContext {
 	/** What last held each session a drain keeps, so a pass logs a change once. */
 	readonly heldTransfers = new Map<string, string>();
 
+	/** Connections a fresh open could reuse: every one that routed anything but an observing read. */
+	readonly applicationConnections = new Set<string>();
+
+	/** The membership seal of a handover publication in flight (`session-router-handover.ts`). */
+	handoverSeal: { readonly settled: Promise<boolean>; readonly resolve: (published: boolean) => void } | undefined;
+
+	/** A handover published this generation's successor: clients that cannot follow it reconnect. */
+	handoverPublished = false;
+
 	/** When a retained session whose park record could not be written may be tried again, on `idleNow`. */
 	readonly parkRetryAt = new Map<string, { readonly at: number; readonly attempts: number }>();
 

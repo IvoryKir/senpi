@@ -41,7 +41,8 @@ import { unloadSession } from "./session-unload.ts";
  */
 export function handle(host: RouterContext, command: RpcCommand): Promise<RpcResponse | undefined> {
 	const admission = admissionAnswer(host, command);
-	if (admission) return Promise.resolve(admission.answer);
+	if (admission)
+		return "hold" in admission ? admission.hold.then(() => handle(host, command)) : Promise.resolve(admission.answer);
 	const sessionId = "sessionId" in command ? command.sessionId : undefined;
 	// A warm holds no session and no path, so it stays out of the accounting a drain waits on (senpi#2314).
 	if (command.type === "warm")

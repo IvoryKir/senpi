@@ -3,6 +3,7 @@ import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { probeHost } from "../src/modes/rpc/host-probe.ts";
+import { OVERLAP_HANDOVER_ENV } from "../src/modes/rpc/host-idle-handover.ts";
 import { readHostStatus } from "../src/modes/rpc/host-status.ts";
 import { signalGeneration } from "../src/modes/rpc/host-stop.ts";
 import {
@@ -65,10 +66,10 @@ interface SuccessorInfo {
 	readonly runtimeBuildId: string;
 }
 
-// Drives a conditional handover until the target build serves the socket. A host that is still
-// settling work answers handover_pending and switches over on its own once idle; it then drains the
-// connection it answered on, so completion is read from the socket (the process and build that
-// answer it), never from a reply on that connection. Every attempt opens a fresh
+// Drives a handover until the target build serves the socket. The endpoint opted in to overlapping updates, so the
+// successor is published at once while the retained session transfers when it is quiet; the predecessor then drains
+// the connection it answered on, so completion is read from the socket (the process and build that answer it),
+// never from a reply on that connection. Every attempt opens a fresh
 // connection and uses its own request id: JsonlPeer.request resolves on the first stored response
 // with a given id.
 async function handOverUntilServed(
@@ -138,7 +139,8 @@ afterEach(async () => {
 
 describe.skipIf(process.platform === "win32")("client-less retained sessions across a generation handoff", () => {
 	it("the successor host reopens the predecessor's handoff_parked retained session with the same durable id", async () => {
-		const rig = await startHandoverRig("ih-clientless");
+		// A retained session makes the update overlap (code-yeongyu/oh-my-openagent#10091): the endpoint opts in.
+		const rig = await startHandoverRig("ih-clientless", undefined, { [OVERLAP_HANDOVER_ENV]: "1" });
 		scratches.push(rig.qa);
 		pids.push(rig.firstPid);
 
@@ -153,8 +155,7 @@ describe.skipIf(process.platform === "win32")("client-less retained sessions acr
 		);
 		const openedState = opened.state as { durableSessionId?: string; sessionFile?: string } | undefined;
 		// A real retained session has a transcript on disk; the file is written incrementally during a
-		// turn. Drive one turn so the file exists, then abort it (the conditional handover waits for no
-		// busy session; the retry below absorbs the abort's settle timing).
+		// turn. Drive one turn so the file exists, then abort it.
 		await opener.request({ id: "turn", type: "prompt", sessionId: opened.sessionId, message: "say ok" }, 120_000);
 		await opener.request({ id: "abort", type: "abort", sessionId: opened.sessionId }, 120_000);
 		const durableId =
@@ -166,8 +167,6 @@ describe.skipIf(process.platform === "win32")("client-less retained sessions acr
 		expect(typeof durableId).toBe("string");
 		opener.destroy();
 
-		// The conditional idle handover refuses while the just-aborted turn is still settling; retry
-		// until it admits the handoff, so the test does not hinge on the abort's settle timing.
 		const successor = await handOverUntilServed(rig, rig, rig.buildB.runtimeBuildId, {}, "begin");
 		if (!("pid" in successor)) throw new Error(`first handover did not complete: ${JSON.stringify(successor)}`);
 		pids.push(successor.pid);
