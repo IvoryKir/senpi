@@ -79,7 +79,13 @@ describe("a session-path claim across generations", () => {
 		const daemon = await daemonDirectory("strict");
 		const owner = await stranger();
 		const sessionPath = join(daemon.root, "held.jsonl");
-		await writeClaim(daemon.paths, { instanceId: "old", ...owner, sessionPath, attached: false, strict_transfer: true });
+		await writeClaim(daemon.paths, {
+			instanceId: "old",
+			...owner,
+			sessionPath,
+			attached: false,
+			strict_transfer: true,
+		});
 		await writePointer(daemon.paths, "current");
 
 		const reservations = createSessionPathReservations({ daemonDir: daemon.paths.dir, instanceId: "current" });

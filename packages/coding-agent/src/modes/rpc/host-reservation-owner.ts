@@ -93,8 +93,10 @@ export async function readOwner(file: string): Promise<SessionPathOwner | undefi
 		return undefined;
 	}
 	if (typeof parsed !== "object" || parsed === null) return undefined;
-	const { instanceId, pid, processStartTime, sessionPath, attached, host_socket, strict_transfer } =
-		parsed as Record<string, unknown>;
+	const { instanceId, pid, processStartTime, sessionPath, attached, host_socket, strict_transfer } = parsed as Record<
+		string,
+		unknown
+	>;
 	if (typeof instanceId !== "string" || typeof pid !== "number" || typeof sessionPath !== "string") return undefined;
 	return {
 		instanceId,
