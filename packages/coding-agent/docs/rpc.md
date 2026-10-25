@@ -918,8 +918,7 @@ client's sessions. A GENERATION HANDOFF replaces the process while its sessions 
    their connection closes and reopen with `open_session { sessionPath }` on the successor. Losing
    ownership of the public socket triggers the same sequence even if SIGUSR1 never arrives.
 
-A host that advertises `strict_session_transfer_v1` parks a session only by a STRICT TRANSFER
-(code-yeongyu/oh-my-openagent#10091):
+The drain parks a session only by a STRICT TRANSFER (code-yeongyu/oh-my-openagent#10091):
 
 - It parks a session only when it is proven quiet: no run, no prompt in preflight, no queued input still owed a
   turn, no admitted delivery not yet written, no bash, compaction or barrier-held session work, and no request for

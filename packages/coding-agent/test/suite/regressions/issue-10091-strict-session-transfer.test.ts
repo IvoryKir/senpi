@@ -2,9 +2,10 @@
 // transfer. These pin the predecessor's half: a session parks only when proven quiet, a retained session's park
 // record is durable before anything is torn down, new work for a session sealed for its transfer is refused
 // explicitly, and an explicit close that races the transfer wins.
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RpcCommand } from "../../../src/modes/rpc/rpc-types.ts";
 import { opened } from "../rpc-inprocess-host-metrics.ts";
@@ -47,7 +48,11 @@ async function drainRig(options: RigOptions = {}) {
 	);
 	const sessionPath = join(dir, "s.jsonl");
 	const sessionId = opened(
-		await rig.open("a", { cwd: dir, sessionPath, ...(options.retain === true ? { retain_on_disconnect: true } : {}) }),
+		await rig.open("a", {
+			cwd: dir,
+			sessionPath,
+			...(options.retain === true ? { retain_on_disconnect: true } : {}),
+		}),
 		0,
 	).sessionId;
 	const closes = () =>
@@ -79,26 +84,30 @@ describe("a handoff drain parks only a session proven quiet", () => {
 		expect(closes()).toEqual([expect.objectContaining({ reason: "handoff_parked" })]);
 	}, 10_000);
 
-	it.each(["queued", "delivery"] as const)("keeps a session with %s input still owed a turn", async (kind) => {
-		const { rig, sessionId, closes, exited } = await drainRig();
-		vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-		const session = rig.registry.peek(sessionId)?.runtime?.session;
-		const [turn] = [...rig.turns.values()];
-		if (session === undefined || turn === undefined) throw new Error("the session did not open");
-		if (kind === "queued") Object.defineProperty(session, "pendingMessageCount", { value: 1, configurable: true });
-		else turn.pendingDeliveries.push("delivery-1");
+	it.each(["queued", "delivery"] as const)(
+		"keeps a session with %s input still owed a turn",
+		async (kind) => {
+			const { rig, sessionId, closes, exited } = await drainRig();
+			vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+			const session = rig.registry.peek(sessionId)?.runtime?.session;
+			const [turn] = [...rig.turns.values()];
+			if (session === undefined || turn === undefined) throw new Error("the session did not open");
+			if (kind === "queued") Object.defineProperty(session, "pendingMessageCount", { value: 1, configurable: true });
+			else turn.pendingDeliveries.push("delivery-1");
 
-		rig.router.beginDrain();
-		await rig.settle();
-		expect(closes()).toEqual([]);
+			rig.router.beginDrain();
+			await rig.settle();
+			expect(closes()).toEqual([]);
 
-		if (kind === "queued") Object.defineProperty(session, "pendingMessageCount", { value: 0, configurable: true });
-		else turn.pendingDeliveries.splice(0);
-		rig.router.beginDrain();
-		await exited;
-		await rig.settle();
-		expect(closes()).toEqual([expect.objectContaining({ reason: "handoff_parked" })]);
-	}, 10_000);
+			if (kind === "queued") Object.defineProperty(session, "pendingMessageCount", { value: 0, configurable: true });
+			else turn.pendingDeliveries.splice(0);
+			rig.router.beginDrain();
+			await exited;
+			await rig.settle();
+			expect(closes()).toEqual([expect.objectContaining({ reason: "handoff_parked" })]);
+		},
+		10_000,
+	);
 });
 
 describe("a retained session's transfer", () => {
@@ -128,7 +137,10 @@ describe("a retained session's transfer", () => {
 		await rig.settle();
 		expect(closes()).toEqual([expect.objectContaining({ reason: "handoff_parked" })]);
 		expect(await parkRecords(daemonDir)).toEqual([
-			expect.objectContaining({ sessionPath, transferId: expect.any(String) }),
+			expect.objectContaining({
+				sessionPath: join(realpathSync(dirname(sessionPath)), basename(sessionPath)),
+				transferId: expect.any(String),
+			}),
 		]);
 	}, 10_000);
 
