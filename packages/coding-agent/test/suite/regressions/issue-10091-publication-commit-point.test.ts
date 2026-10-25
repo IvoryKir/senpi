@@ -1,13 +1,12 @@
 // code-yeongyu/oh-my-openagent#10091: publication is the commit point of a generation handoff. Before it, the
 // handoff can always withdraw its successor; after it, a failing bookkeeping step is repaired forward and the
 // generation that took the public socket is never stopped by the handoff that started it.
-import { readdir, rm } from "node:fs/promises";
+import { readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHostDaemonPaths, ensureHost } from "../../../src/modes/rpc/host-ensure.ts";
 import { handoffHost } from "../../../src/modes/rpc/host-handoff.ts";
 import { probeHost } from "../../../src/modes/rpc/host-probe.ts";
-import { revokePublishToken } from "../../../src/modes/rpc/host-publish-token.ts";
 import {
 	GENERATION_HOST_ARGS,
 	type GenerationScratch,
@@ -67,10 +66,12 @@ describe.skipIf(process.platform === "win32")("the publication commit point of a
 			_test: {
 				launch: supervisorLaunch,
 				readinessTimeoutMs: 60_000,
-				// The handoff withdraws the publication before its successor could have bound anything.
+				// The publication is withdrawn before the successor could have bound anything, the way the
+				// handoff withdraws it: its token is renamed away.
 				afterSpawn: async (pid) => {
 					successorPid = pid;
-					expect(await revokePublishToken(await successorToken(first.qa))).toBe("revoked");
+					const token = await successorToken(first.qa);
+					await rename(token, `${token}.revoked`);
 				},
 			},
 		});
