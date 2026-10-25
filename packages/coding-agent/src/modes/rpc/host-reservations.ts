@@ -23,7 +23,6 @@
  * (code-yeongyu/oh-my-openagent#10091): a superseded generation may still be running a turn in a detached
  * session, so its claim stands until it releases the claim itself after that session's teardown.
  */
-import { createHash } from "node:crypto";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -34,9 +33,22 @@ import {
 } from "../../utils/process-identity.ts";
 import { createHostDaemonPaths, HOST_DAEMON_DIR_ENV, hostDaemonDirectoryPaths } from "./host-daemon-paths.ts";
 import { parseJson, readFileOrUndefined } from "./host-daemon-state.ts";
-import { readOwner, type SessionPathOwner, standingOwner } from "./host-reservation-owner.ts";
+import {
+	readOwner,
+	readSessionPathClaims,
+	reservationFile,
+	type SessionPathOwner,
+	standingOwner,
+} from "./host-generations.ts";
 
-export { claimOwnerIdentity, claimOwnerIsLive, type SessionPathOwner } from "./host-reservation-owner.ts";
+export {
+	claimOwnerIdentity,
+	claimOwnerIsLive,
+	readSessionPathClaims,
+	reservationFile,
+	type SessionPathClaim,
+	type SessionPathOwner,
+} from "./host-generations.ts";
 
 /** How long a client should wait before retrying a path another generation still holds. */
 export const SESSION_PATH_RETRY_AFTER_MS = 2_000;
@@ -50,17 +62,6 @@ export interface SessionPathReservations {
 	release(sessionPath: string): Promise<void>;
 	/** Republishes this host's claim with the attachment state that session now has. */
 	setAttached(sessionPath: string, attached: boolean): void;
-}
-
-/** One published claim, as a reader of the directory finds it. */
-export interface SessionPathClaim {
-	readonly file: string;
-	readonly owner: SessionPathOwner;
-}
-
-/** One claim per canonical session path, named by its hash so the file name is bounded. */
-export function reservationFile(dir: string, sessionPath: string): string {
-	return join(dir, `${createHash("sha256").update(sessionPath, "utf8").digest("hex").slice(0, 16)}.json`);
 }
 
 /**
@@ -241,19 +242,6 @@ export function createSessionPathReservations(options: {
 			updates.set(sessionPath, update);
 		},
 	};
-}
-
-/** Every claim published in one reservations directory, for a reader pruning or reporting them. */
-export async function readSessionPathClaims(dir: string): Promise<readonly SessionPathClaim[]> {
-	const entries = await readdir(dir).catch(() => [] as string[]);
-	const claims: SessionPathClaim[] = [];
-	for (const entry of entries) {
-		if (!entry.endsWith(".json")) continue;
-		const file = join(dir, entry);
-		const owner = await readOwner(file);
-		if (owner) claims.push({ file, owner });
-	}
-	return claims;
 }
 
 function errorMessage(cause: unknown): string {
