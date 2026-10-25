@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { redactSensitiveOutput } from "../sensitive-output.ts";
+import { redactSecrets } from "../sensitive-output.ts";
 import type { FallbackLogger } from "./log.ts";
 
 // A route that does not serve a configured model id: the code an OpenAI-compatible gateway returns,
@@ -15,6 +15,7 @@ export interface ModelConfigErrorEvent {
 }
 
 export interface ModelConfigErrorReporter {
+	/** Emit the event and log warning once per model and session for a message already marked. */
 	report(message: AssistantMessage, sessionId: string): void;
 }
 
@@ -26,6 +27,17 @@ export function isModelConfigError(errorMessage: string | undefined): boolean {
 	return errorMessage !== undefined && MODEL_CONFIG_ERROR.test(errorMessage);
 }
 
+/**
+ * Redact and mark a failed message that hit a model configuration error. Runs at `message_end`, before the
+ * message is persisted or published, so the provider body never reaches a sink unredacted.
+ */
+export function markModelConfigError(message: AssistantMessage): boolean {
+	if (message.stopReason !== "error" || !isModelConfigError(message.errorMessage)) return false;
+	message.errorMessage = redactSecrets(message.errorMessage ?? "");
+	message.errorCause = { type: "model_config", model: `${message.provider}/${message.model}` };
+	return true;
+}
+
 export function createModelConfigErrorReporter(
 	logger: FallbackLogger,
 	emit: (event: ModelConfigErrorEvent) => void,
@@ -34,12 +46,10 @@ export function createModelConfigErrorReporter(
 	return {
 		report(message, sessionId) {
 			const model = `${message.provider}/${message.model}`;
-			const errorMessage = redactSensitiveOutput(message.errorMessage ?? "");
-			message.errorMessage = errorMessage;
-			message.errorCause = { type: "model_config", model };
 			const key = `${sessionId}\u0000${model}`;
 			if (reported.has(key)) return;
 			reported.add(key);
+			const errorMessage = message.errorMessage ?? "";
 			logger.warn("model_config_error", { model, provider: message.provider, errorMessage });
 			emit({
 				type: "model_config_error",

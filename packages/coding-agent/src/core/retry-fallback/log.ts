@@ -1,6 +1,7 @@
 import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rotateLogIfNeeded } from "../log-file-rotation.ts";
+import { redactSecrets } from "../sensitive-output.ts";
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_STRING_LENGTH = 200;
@@ -120,6 +121,6 @@ function safeEntries(value: object): Array<[string, unknown]> {
 }
 
 function safeText(value: string): string {
-	const redacted = value.replace(SENSITIVE_TEXT, "$1[redacted]");
+	const redacted = redactSecrets(value.replace(SENSITIVE_TEXT, "$1[redacted]"), "[redacted]");
 	return redacted.length <= MAX_STRING_LENGTH ? redacted : `${redacted.slice(0, MAX_STRING_LENGTH - 3)}...`;
 }
