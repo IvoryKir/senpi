@@ -5,6 +5,7 @@ import { McpPresenterAuthority, type McpPresenterConnection } from "./mcp-presen
 import type { SecurityNoticeSnapshot, SecurityNoticeState } from "../../core/security-notices.ts";
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
 import { serializeJsonLine } from "./jsonl.ts";
+import { observeLifecycleDelivery } from "./lifecycle-delivery.ts";
 import { type MediaPersister, omitInlineMedia } from "./media-placeholders.ts";
 import type {
 	RpcHostLifecycleEvent,
@@ -417,7 +418,7 @@ export class SessionEventWriter {
 			record.type === "relocation_due" ||
 			(record.type === "extension_ui_request" &&
 				["select", "confirm", "input", "editor"].includes(String(record.method)));
-		const tagged = { ...value, sessionId } as RpcRecord;
+		const tagged = { ...observeLifecycleDelivery(value), sessionId } as RpcRecord;
 		const line = serializeJsonLine(tagged);
 		if (this.fanout.isEmpty() && this.exceedsStdioCapacity(line)) {
 			this.closeSession(
