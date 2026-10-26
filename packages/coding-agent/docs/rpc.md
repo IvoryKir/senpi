@@ -3519,12 +3519,15 @@ only reads and may be sent with `observe: true`.
 `classes` names every inbound record type (the example shows five). `dynamic` marks a type whose class depends on
 the record, and `dynamic_versions` gives the version of each such rule: `append_session_entry` is `drive` for a
 user-authored message entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_admin` for any
-other entry. `export_html` and `export_jsonl` are `device_admin` with or without `outputPath`: both write a file on
+other entry; `open_session` is `thread` unless it names `sessionPath`, `cwd` or `permissionPreset` (then `device_admin`), and
+`new_session` is `thread` unless it names `parentSession`. `switch_session` and `import_jsonl` are always `device_admin`
+(they open or read a host file), and so are `set_steering_mode`, `set_follow_up_mode` and `set_auto_retry` (they
+write the device-wide settings). `export_html` and `export_jsonl` are `device_admin` with or without `outputPath`: both write a file on
 the engine's filesystem (into the session's working directory when no path is given). The classes, least to most dangerous:
 `observe` (side-effect-free reads), `drive` (runs, steers or edits a session), `answer` (`extension_ui_response`,
-`extension_ui_progress`), `thread` (creates, opens, attaches, switches, forks or closes sessions), `device_admin`
+`extension_ui_progress`), `thread` (creates, opens, attaches, forks or closes sessions by id), `device_admin`
 (acts on the device outside the agent's permission flow: direct shell, path probes and writes, credentials,
-device-wide model settings, reloads, forged session entries; a forwarding client should unlock it only with an
+device-wide settings, host session files and permission presets, reloads, forged session entries; a forwarding client should unlock it only with an
 explicit `admin` grant) and `connection_local` (configures or tears down the sender's own connection, its session
 subscriptions (`subscribe_sessions`, `unsubscribe_sessions`) or host ownership, so it is meaningful only to the
 connection that sends it; a forwarding client serves those itself). A type missing from `classes` is unclassified: treat it

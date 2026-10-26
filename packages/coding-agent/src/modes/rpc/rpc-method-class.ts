@@ -10,9 +10,12 @@
  *
  * Classes, least to most dangerous:
  * - `observe`: side-effect-free reads.
- * - `drive`: runs, steers or edits the current session (prompts, queue and message edits, session-scoped settings).
+ * - `drive`: runs, steers or edits the current session (prompts, queue and message edits, session-scoped settings;
+ *   a setter that writes the device-wide settings file is `device_admin`).
  * - `answer`: replies to a question or dialog the engine asked.
- * - `thread`: creates, opens, attaches, switches, forks or closes sessions.
+ * - `thread`: creates, opens, attaches, forks or closes sessions by id. A record that names a host path (a session
+ *   file, a cwd, an import source, a parent session) or a permission preset is `device_admin`: it reads or writes host
+ *   files, or changes what the agent may do without asking.
  * - `device_admin`: acts on the device outside the agent's own permission flow (direct shell, filesystem writes and
  *   probes, credentials, device-wide settings, extension reloads, forged session entries). A remote caller needs the
  *   explicit `admin` grant for it.
@@ -93,6 +96,21 @@ function appendEntryClass(record: object): RpcMethodClass {
 	return Reflect.get(message, "role") === USER_ROLE ? "drive" : "device_admin";
 }
 
+/** A field that names a host path or a permission preset; present means any value but `undefined` (null included). */
+function namesAny(record: object, fields: ReadonlyArray<string>): boolean {
+	return fields.some((field) => Object.hasOwn(record, field) && Reflect.get(record, field) !== undefined);
+}
+
+/** Opening by id is a thread operation; naming a session file, a cwd or a permission preset acts on the device. */
+function openSessionClass(record: object): RpcMethodClass {
+	return namesAny(record, ["sessionPath", "cwd", "permissionPreset"]) ? "device_admin" : "thread";
+}
+
+/** A new session is a thread operation; naming a parent session file reads a host path. */
+function newSessionClass(record: object): RpcMethodClass {
+	return namesAny(record, ["parentSession"]) ? "device_admin" : "thread";
+}
+
 export const RPC_METHOD_CLASS = {
 	// observe
 	get_protocol_info: "observe",
@@ -149,10 +167,8 @@ export const RPC_METHOD_CLASS = {
 	set_thinking_level: "drive",
 	cycle_thinking_level: "drive",
 	set_fast_mode: "drive",
-	set_steering_mode: "drive",
-	set_follow_up_mode: "drive",
+	// a session override; set_steering_mode, set_follow_up_mode and set_auto_retry write global settings (device_admin)
 	set_auto_compaction: "drive",
-	set_auto_retry: "drive",
 	set_retry_fallback: "drive",
 	pause_for_run: "drive",
 	resume_for_run: "drive",
@@ -166,13 +182,12 @@ export const RPC_METHOD_CLASS = {
 	extension_ui_response: "answer",
 	extension_ui_progress: "answer",
 	// thread
-	new_session: "thread",
-	switch_session: "thread",
+	// thread by id; device_admin when the record names a host path or a permission preset
+	new_session: { classify: newSessionClass, version: 1 },
+	open_session: { classify: openSessionClass, version: 1 },
 	resume_session: "thread",
 	fork: "thread",
 	clone: "thread",
-	import_jsonl: "thread",
-	open_session: "thread",
 	close_session: "thread",
 	unload_session: "thread",
 	set_session_context: "thread",
@@ -198,6 +213,13 @@ export const RPC_METHOD_CLASS = {
 	account_remove: "device_admin",
 	set_favorite_models: "device_admin",
 	set_scoped_models: "device_admin",
+	// each writes the device-wide settings file, not a session override
+	set_steering_mode: "device_admin",
+	set_follow_up_mode: "device_admin",
+	set_auto_retry: "device_admin",
+	// switch_session opens (and appends to) the named session file; import_jsonl reads any host file into a session
+	switch_session: "device_admin",
+	import_jsonl: "device_admin",
 	// both forms write a file on the host: without `outputPath`, into the session's cwd
 	export_html: "device_admin",
 	export_jsonl: "device_admin",
@@ -218,15 +240,20 @@ export const RPC_METHOD_CLASS = {
 
 /**
  * The class of an inbound record, or `undefined` when the engine cannot classify it: not a plain object, a
- * non-string `type`, or a type the table does not own (own keys only, never the prototype's).
+ * non-string `type`, a type the table does not own (own keys only, never the prototype's), or a record whose rule
+ * throws (a hostile getter or proxy): a rule that cannot decide refuses.
  */
 export function classifyRpcMethod(record: unknown): RpcMethodClass | undefined {
 	if (typeof record !== "object" || record === null || Array.isArray(record)) return undefined;
-	const type: unknown = Reflect.get(record, "type");
-	if (typeof type !== "string" || !Object.hasOwn(RPC_METHOD_CLASS, type)) return undefined;
-	const entry: RpcMethodClass | { readonly classify: (record: object) => RpcMethodClass } =
-		RPC_METHOD_CLASS[type as RpcMethodType];
-	return typeof entry === "string" ? entry : entry.classify(record);
+	try {
+		const type: unknown = Reflect.get(record, "type");
+		if (typeof type !== "string" || !Object.hasOwn(RPC_METHOD_CLASS, type)) return undefined;
+		const entry: RpcMethodClass | { readonly classify: (record: object) => RpcMethodClass } =
+			RPC_METHOD_CLASS[type as RpcMethodType];
+		return typeof entry === "string" ? entry : entry.classify(record);
+	} catch {
+		return undefined;
+	}
 }
 
 /**
