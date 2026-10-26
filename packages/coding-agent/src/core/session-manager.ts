@@ -3123,9 +3123,6 @@ export class SessionManager {
 			parentSession: resolvedSourcePath,
 		};
 		reserveSessionWrite(newSessionFile);
-		if (existsSync(newSessionFile)) {
-			throw Object.assign(new Error(`EEXIST: file already exists, open '${newSessionFile}'`), { code: "EEXIST" });
-		}
 		// Built in a temp file and renamed into place: a full disk part-way leaves no partial fork in the session list.
 		const forkLines = [newHeader, ...sourceEntries.filter((entry) => entry.type !== "session")].map(
 			(entry) => `${JSON.stringify(entry)}\n`,
