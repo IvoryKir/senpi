@@ -16,7 +16,18 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-async function busyHost() {
+const BEGIN: WireRecord = {
+	type: "begin_handover",
+	operation_id: "op-1",
+	if_instance_id: "host-a",
+	if_generation: 2,
+	target_runtime_build_id: "sha256:target",
+	launch: { command: "senpi", args: [] },
+	host_args: [],
+	env: {},
+};
+
+async function hostCore() {
 	const root = await mkdtemp(join(tmpdir(), "senpi-10091-gate-"));
 	const cwd = join(root, "cwd");
 	await mkdir(cwd);
@@ -72,33 +83,29 @@ async function busyHost() {
 		if (data?.sessionId === undefined) throw new Error(`open failed: ${JSON.stringify(opened)}`);
 		return data.sessionId;
 	};
-	const busy = await open("busy.jsonl");
-	const idle = await open("idle.jsonl");
-	for (const turn of turns.values()) {
-		turn.start();
-		break;
-	}
 	cleanups.push(async () => {
 		await core.router.dispose();
 		await rm(root, { recursive: true, force: true });
 	});
-	return { request, routed, busy, idle };
+	return { request, routed, open, turns };
+}
+
+async function busyHost() {
+	const host = await hostCore();
+	const busy = await host.open("busy.jsonl");
+	const idle = await host.open("idle.jsonl");
+	for (const turn of host.turns.values()) {
+		turn.start();
+		break;
+	}
+	return { ...host, busy, idle };
 }
 
 describe("a runtime-identity handover asked of a busy host", () => {
 	it("answers its admission outcome at once and keeps admitting new work", async () => {
 		const host = await busyHost();
 
-		const answer = await host.request({
-			type: "begin_handover",
-			operation_id: "op-1",
-			if_instance_id: "host-a",
-			if_generation: 2,
-			target_runtime_build_id: "sha256:target",
-			launch: { command: "senpi", args: [] },
-			host_args: [],
-			env: {},
-		});
+		const answer = await host.request(BEGIN);
 		const prompt = await host.request({ type: "prompt", sessionId: host.idle, message: "new work" });
 
 		expect(answer?.data).toMatchObject({
@@ -109,5 +116,22 @@ describe("a runtime-identity handover asked of a busy host", () => {
 		});
 		expect(prompt).toMatchObject({ success: true });
 		expect(host.routed).toContain("prompt");
+	});
+});
+
+// A probe or an ensure's attach hold reads the protocol and holds nothing: it must not make an empty host's update
+// look like it overlaps a client (every spawned handover was deferred by the rig's own unreleased ensure hold).
+describe("a runtime-identity handover asked of a host that holds nothing", () => {
+	it("proceeds past a connection that has only read the protocol", async () => {
+		const host = await hostCore();
+		await host.request({ type: "get_protocol_info" });
+
+		const answer = await host.request(BEGIN);
+
+		expect(answer?.data).toMatchObject({
+			operation_id: "op-1",
+			phase: "rolled_back",
+			reason: "this test launches no successor",
+		});
 	});
 });

@@ -1076,7 +1076,8 @@ start (an idle exit and a fresh ensure). A host that advertises `strict_session_
 2. it records the operation durably (`<daemonDir>/handovers/<operationId>.json`, synced before the request is
    accepted; the terms only as a digest, never the environment's values) and judges whether publishing a
    successor now would OVERLAP this generation: it holds a session, or an application connection that a fresh
-   open could reuse. An explicit observer (only `observe: true` reads) never counts. A host holding nothing
+   open could reuse. A connection that has only sent `get_protocol_info` (a probe, an ensure's attach hold) or
+   observing reads (`observe: true`) never counts. A host holding nothing
    overlaps nothing and proceeds. An overlapping update proceeds only when the endpoint opted in
    (`SENPI_RPC_HOST_OVERLAP_HANDOVER=1` in the host's environment) and every application connection declared
    `generation_separated_admission_v1` and `session_transfer_reconciliation_v1` in its connection-level

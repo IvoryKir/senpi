@@ -2,10 +2,12 @@
  * What a handover asks of the router (code-yeongyu/oh-my-openagent#10091): which application connections an
  * overlapping publication would leave behind, which sessions this generation still holds, and the membership seal.
  *
- * A connection becomes an APPLICATION connection with its first routed command that is not an observing read (the
- * supervisor's own rule, `host-observe-request.ts`: an `observe: true` read or a warm): a fresh open it sends next
- * would land on this generation, whatever it holds now. A connection is CAPABLE when its connection-level
- * `set_client_info` declared both overlap capabilities (`host-handover-eligibility.ts`).
+ * A connection becomes an APPLICATION connection with its first routed command that is neither an observing read
+ * (the supervisor's own rule, `host-observe-request.ts`: an `observe: true` read or a warm) nor a protocol read: a
+ * fresh open it sends next would land on this generation, whatever it holds now. A connection that has only read
+ * `get_protocol_info` (a probe, an ensure's attach hold) holds no handle and admitted no input; a handle it asks for
+ * later meets the seal below. A connection is CAPABLE when its connection-level `set_client_info` declared both
+ * overlap capabilities (`host-handover-eligibility.ts`).
  *
  * The seal spans a publication in flight. A client that is not capable and asks for a session handle meanwhile
  * (`open_session`, `attach_session`, `reclaim_session`) is held until the publication's outcome: refused with a
@@ -23,7 +25,7 @@ const HANDLE_REQUESTS: ReadonlySet<string> = new Set(["open_session", "attach_se
 
 export function noteApplicationConnection(host: RouterContext, command: RpcCommand): void {
 	const connection = host.writer.currentConnection();
-	if (connection === undefined || isObservingRecord(command)) return;
+	if (connection === undefined || isObservingRecord(command) || command.type === "get_protocol_info") return;
 	host.applicationConnections.add(connection);
 }
 

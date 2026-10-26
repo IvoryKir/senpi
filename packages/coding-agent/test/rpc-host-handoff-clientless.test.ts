@@ -71,7 +71,8 @@ interface SuccessorInfo {
 // the connection it answered on, so completion is read from the socket (the process and build that answer it),
 // never from a reply on that connection. Every attempt opens a fresh
 // connection and uses its own request id: JsonlPeer.request resolves on the first stored response
-// with a given id.
+// with a given id. Every attempt is also its own operation: a deferral is that operation's outcome, and asking again
+// under the same id would only repeat it (code-yeongyu/oh-my-openagent#10091).
 async function handOverUntilServed(
 	rig: HandoverRig,
 	from: { readonly instanceId: string },
@@ -85,7 +86,14 @@ async function handOverUntilServed(
 		const caller = await connect(rig, peers);
 		try {
 			lastAnswer = dataOf(
-				await caller.request(beginHandoverCommand(rig, { ...overrides, id: `${label}-${attempt}` }), 20_000),
+				await caller.request(
+					beginHandoverCommand(rig, {
+						...overrides,
+						id: `${label}-${attempt}`,
+						operation_id: `${label}-${attempt}`,
+					}),
+					20_000,
+				),
 			);
 		} catch (cause) {
 			lastAnswer = { state: "no_answer", cause: String(cause) };
@@ -209,7 +217,6 @@ describe.skipIf(process.platform === "win32")("client-less retained sessions acr
 			successor,
 			rig.buildA.runtimeBuildId,
 			{
-				operation_id: "op-2",
 				if_instance_id: successor.instanceId,
 				if_generation: successor.generation,
 				target_runtime_build_id: rig.buildA.runtimeBuildId,
