@@ -70,7 +70,9 @@ export class CompactIndexCompactor {
 		const merged: number[] = [];
 		const written: IndexPage[] = [];
 		const loaded: Awaited<ReturnType<Index["readPage"]>>[] = [];
-		let published = false;
+		const unowned = new Set<IndexPage>();
+		let draft = i.base;
+		i.bases.adjust(draft, 1, 0);
 		try {
 			let small: IndexPage | undefined;
 			for (const page of i.pages) {
@@ -119,13 +121,14 @@ export class CompactIndexCompactor {
 					live: 0,
 					pins: 0,
 				});
+				unowned.add(written[written.length - 1]);
 				offset += chunk.length;
 			}
 			if (!i.store.spillAllowed) return false;
 			for (const key of removed) {
-				const next = i.bases.set(i.base, key, undefined);
-				i.bases.adjust(i.base, -1, 0);
-				i.base = next;
+				const next = i.bases.set(draft, key, undefined);
+				i.bases.adjust(draft, -1, 0);
+				draft = next;
 			}
 			for (const candidate of written) {
 				const kept: [string, number][] = [];
@@ -141,25 +144,30 @@ export class CompactIndexCompactor {
 					kept.push([key, offset]);
 				}
 				const page = { ...candidate, owner: i.store.text.own(refs) };
-				for (const [key, offset] of kept) {
-					const next = i.bases.set(i.base, key, { page, offset });
-					i.bases.adjust(i.base, -1, 0);
-					i.base = next;
+				try {
+					for (const [key, offset] of kept) {
+						const next = i.bases.set(draft, key, { page, offset });
+						unowned.delete(candidate);
+						i.bases.adjust(draft, -1, 0);
+						draft = next;
+					}
+				} finally {
+					i.store.adjust(page.owner, -1, 0);
 				}
-				i.store.adjust(page.owner, -1, 0);
-				if (page.live === 0) i.store.discard(page.path, page.bytes);
 			}
+			const previous = i.base;
+			i.base = draft;
+			draft = undefined;
+			i.bases.adjust(previous, -1, 0);
 			for (const [key, value] of selected) {
 				const current = i.overlays.get(i.overrides, key);
 				if (current === value || (current?.deleted && !i.bases.get(i.base, key))) i.drop(key);
 			}
-			published = true;
 			return selected.size > 0;
 		} finally {
+			i.bases.adjust(draft, -1, 0);
 			for (const page of loaded) page[Symbol.dispose]();
-			for (const page of written) {
-				if (!published) i.store.discard(page.path, page.bytes);
-			}
+			for (const page of unowned) i.store.discard(page.path, page.bytes);
 			for (const owner of merged) i.store.adjust(owner, -1, 0);
 			i.release(cut);
 		}
