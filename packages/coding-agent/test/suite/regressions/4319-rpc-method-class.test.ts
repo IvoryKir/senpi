@@ -190,6 +190,11 @@ describe("RPC method classes (senpi#4319)", () => {
 				["by session id", { sessionId: "s", effectId: "e" }, "observe"],
 				["in a named session file", { sessionPath: "/x/s.jsonl", effectId: "e" }, "device_admin"],
 			],
+			"set_thinking_level@1": [
+				["this turn only", { level: "high", scope: "turn" }, "drive"],
+				["remembered for the model", { level: "high" }, "device_admin"],
+				["another scope", { level: "high", scope: "session" }, "device_admin"],
+			],
 			"new_session@1": [
 				["plain", {}, "thread"],
 				["parent session file", { parentSession: "/x/p.jsonl" }, "device_admin"],
@@ -216,6 +221,8 @@ describe("RPC method classes (senpi#4319)", () => {
 			{ type: "set_auto_retry", enabled: true },
 			{ type: "set_model", provider: "p", modelId: "m" },
 			{ type: "cycle_model" },
+			{ type: "cycle_thinking_level" },
+			{ type: "set_thinking_level", level: "high" },
 			{ type: "set_fast_mode", enabled: true },
 		])
 			expect([record.type, classifyRpcMethod(record)]).toEqual([record.type, "device_admin"]);
@@ -249,12 +256,13 @@ describe("RPC method classes (senpi#4319)", () => {
 			get_effect_status: 1,
 			new_session: 1,
 			open_session: 1,
+			set_thinking_level: 1,
 		});
 		expect(
 			Object.keys(classes)
 				.filter((type) => classes[type as "prompt"] === "dynamic")
 				.sort(),
-		).toEqual(["append_session_entry", "get_effect_status", "new_session", "open_session"]);
+		).toEqual(["append_session_entry", "get_effect_status", "new_session", "open_session", "set_thinking_level"]);
 	});
 
 	it("digests the sorted type=class lines, dynamic entries as type=dynamic@<version>, and changes with one reassignment", () => {

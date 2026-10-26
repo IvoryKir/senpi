@@ -110,6 +110,11 @@ function openSessionClass(record: object): RpcMethodClass {
 	return namesAny(record, ["sessionPath", "cwd", "permissionPreset", "browserEngine"]) ? "device_admin" : "thread";
 }
 
+/** `scope: "turn"` changes only this turn; any other scope remembers the model's level device-wide. */
+function thinkingLevelClass(record: object): RpcMethodClass {
+	return Reflect.get(record, "scope") === "turn" ? "drive" : "device_admin";
+}
+
 /** An effect looked up by session id is a read; one looked up in a named session file opens a host path. */
 function effectStatusClass(record: object): RpcMethodClass {
 	return namesAny(record, ["sessionPath"]) ? "device_admin" : "observe";
@@ -172,10 +177,8 @@ export const RPC_METHOD_CLASS = {
 	navigate_tree: "drive",
 	set_label: "drive",
 	set_session_name: "drive",
-
-	set_thinking_level: "drive",
-	cycle_thinking_level: "drive",
-
+	// drive only for this turn's level; otherwise it remembers the model's level in the device-wide settings
+	set_thinking_level: { classify: thinkingLevelClass, version: 1 },
 	// a session override; set_steering_mode, set_follow_up_mode and set_auto_retry write global settings (device_admin)
 	set_auto_compaction: "drive",
 	set_retry_fallback: "drive",
@@ -226,6 +229,7 @@ export const RPC_METHOD_CLASS = {
 	// model, set_fast_mode the service tier)
 	set_model: "device_admin",
 	cycle_model: "device_admin",
+	cycle_thinking_level: "device_admin",
 	set_fast_mode: "device_admin",
 	set_steering_mode: "device_admin",
 	set_follow_up_mode: "device_admin",
