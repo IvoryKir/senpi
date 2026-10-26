@@ -458,15 +458,15 @@ export function classifyRpcMethod(record: unknown): RpcMethodClass | undefined {
 	}
 }
 
-/**
- * Whether a caller holding `granted` may send `record`. Fails closed: an unclassified record is refused whatever is
- * granted, `connection_local` is never permitted, and every other class only when it is granted explicitly.
- */
 /** Whether a wire value (any type) names a method in `methods`; the one place the set is read as strings. */
 export function hasRpcMethod(methods: ReadonlySet<RpcMethodType>, type: unknown): boolean {
 	return typeof type === "string" && (methods as ReadonlySet<string>).has(type);
 }
 
+/**
+ * Whether a caller holding `granted` may send `record`. Fails closed: an unclassified record is refused whatever is
+ * granted, `connection_local` is never permitted, and every other class only when it is granted explicitly.
+ */
 export function rpcMethodPermitted(record: unknown, granted: ReadonlySet<RpcMethodClass>): boolean {
 	const methodClass = classifyRpcMethod(record);
 	return methodClass !== undefined && methodClass !== "connection_local" && granted.has(methodClass);

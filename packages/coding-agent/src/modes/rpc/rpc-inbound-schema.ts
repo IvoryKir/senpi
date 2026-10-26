@@ -7,8 +7,9 @@
  * same ones required. Unknown fields stay accepted, as they are on the local connection, so additive fields keep
  * working against older hosts.
  *
- * Every field is bounded (`RPC_INBOUND_LIMITS`): ids, paths, text and secrets by length, counts as non-negative
- * integers, lists and free-form records by size.
+ * Typed fields are bounded (`RPC_INBOUND_LIMITS`): ids, paths, text and secrets by length, counts as non-negative
+ * integers, lists and free-form records by size; the whole record (unknown additive fields and free-form payloads
+ * included) is bounded by the host's own line limit, measured as its JSON.
  *
  * The local connection does not run this validator; it keeps parsing records as it always has. A caller that
  * forwards records on behalf of someone other than the local interactive user (a relay forwarder, a remote
@@ -18,6 +19,7 @@
 import Type, { type Static, type TLiteral, type TProperties, type TSchema } from "typebox";
 import { Check, Errors } from "typebox/value";
 import type { RpcInboundRecord } from "./rpc-host-command-types.ts";
+import { MAX_RPC_LINE_CHARACTERS } from "./jsonl.ts";
 import {
 	MAX_RPC_MESSAGE_CHARACTERS,
 	rpcCommandPayloadError,
@@ -446,7 +448,7 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	logout: session("logout", { provider: Id }),
 	verify_api_key: session("verify_api_key", { provider: Id, key: Secret }),
 	get_provider_accounts: session("get_provider_accounts", { provider: Id }),
-	account_pin: session("account_pin", { provider: Id, name: Type.Union([Str, Type.Null()]) }),
+	account_pin: session("account_pin", { provider: Id, name: Type.Union([Id, Type.Null()]) }),
 	account_remove: session("account_remove", { provider: Id, name: Id }),
 	account_order: session("account_order", { provider: Id, names: Type.Union([Strings, Type.Null()]) }),
 	set_client_info: session("set_client_info", {
@@ -484,6 +486,15 @@ function fieldBoundsError(record: Record<string, unknown>): string | undefined {
 export function validateRpcInboundRecord(record: unknown): RpcInboundValidation {
 	const shape = rpcCommandShapeError(record);
 	if (shape !== undefined) return refuse(shape);
+	// The whole record, unknown fields and free-form payloads included, stays inside the host's line limit.
+	let size: number;
+	try {
+		size = JSON.stringify(record).length;
+	} catch {
+		return refuse("the record is not JSON-serializable.");
+	}
+	if (size > MAX_RPC_LINE_CHARACTERS)
+		return refuse(`the record is ${size} characters of JSON, at most ${MAX_RPC_LINE_CHARACTERS}.`);
 	const value = record as Record<string, unknown>;
 	const type = value.type;
 	if (typeof type !== "string") return refuse("type must be a string.");

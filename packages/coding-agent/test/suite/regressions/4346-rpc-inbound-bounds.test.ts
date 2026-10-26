@@ -44,6 +44,20 @@ describe("inbound record bounds (senpi#4346)", () => {
 		).toContain("/delivery_ids");
 	});
 
+	it("bounds the whole record, so unknown fields and free-form payloads cannot slip past", () => {
+		const huge = "x".repeat(16 * 1024 * 1024);
+		expect(refused({ type: "get_state", junk: huge })).toContain("characters of JSON");
+		expect(refused({ type: "prompt", message: "hi", images: [{ ...image, data: huge }] })).toContain(
+			"characters of JSON",
+		);
+		expect(refused({ type: "host_response", id: "h", data: { blob: huge } })).toContain("characters of JSON");
+		expect(
+			refused({ type: "account_pin", provider: "p", name: "n".repeat(RPC_INBOUND_LIMITS.identifierCharacters + 1) }),
+		).toContain("/name");
+		expect(validateRpcInboundRecord({ type: "get_state", note: "an additive field" })).toEqual({ ok: true });
+		expect(validateRpcInboundRecord({ type: "account_pin", provider: "p", name: null })).toEqual({ ok: true });
+	});
+
 	it("accepts every bound class at its limit", () => {
 		for (const record of [
 			{ type: "get_state", sessionId: "s".repeat(RPC_INBOUND_LIMITS.identifierCharacters) },
