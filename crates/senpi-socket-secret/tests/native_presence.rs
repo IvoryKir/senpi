@@ -92,6 +92,16 @@ mod windows {
             })
         };
         started_rx.recv().expect("waiter started");
+        // Cancel only once the lock is pending, so this receipt proves the CancelIoEx path and not the
+        // pre-cancel check. Bounded: the waiter issues its lock right after signalling.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !cancel.has_pending_wait() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the wait never became pending"
+            );
+            std::thread::yield_now();
+        }
         cancel.cancel();
         let (outcome, held) = waiter.join().expect("waiter");
         println!("RECEIPT_PRESENCE wait_cancel outcome={outcome:?} held={held}");

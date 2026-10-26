@@ -116,6 +116,16 @@ impl CancelToken {
         true
     }
 
+    /// Whether a wait's I/O is pending with its canceller registered: the moment a cancel takes the
+    /// pending-I/O path rather than the pre-cancel check.
+    pub fn has_pending_wait(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .canceller
+            .is_some()
+    }
+
     /// Drops the canceller once the wait has ended, so a later `cancel` cannot touch a finished I/O.
     pub fn clear(&self) {
         self.0
@@ -581,5 +591,15 @@ mod tests {
         token.cancel();
         assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(!token.register(Box::new(|| {})));
+    }
+
+    #[test]
+    fn a_pending_wait_is_visible_only_while_its_canceller_is_registered() {
+        let token = CancelToken::default();
+        assert!(!token.has_pending_wait());
+        assert!(token.register(Box::new(|| {})));
+        assert!(token.has_pending_wait());
+        token.clear();
+        assert!(!token.has_pending_wait());
     }
 }

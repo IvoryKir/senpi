@@ -116,6 +116,9 @@ impl PresenceBackend for WindowsPresenceBackend {
     }
 
     fn wait_lock(&mut self, handle: &OwnedHandle, cancel: &CancelToken) -> WaitOutcome {
+        if cancel.is_cancelled() {
+            return WaitOutcome::Cancelled;
+        }
         // SAFETY: a manual-reset, initially unsignalled, unnamed event.
         let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
         if event.is_null() {
@@ -126,9 +129,6 @@ impl PresenceBackend for WindowsPresenceBackend {
         // SAFETY: OVERLAPPED is plain data; the event is set below.
         let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         overlapped.hEvent = event.0;
-        if cancel.is_cancelled() {
-            return WaitOutcome::Cancelled;
-        }
         let outcome = if lock(handle.0, LOCKFILE_EXCLUSIVE_LOCK, &mut overlapped) {
             WaitOutcome::Acquired
         } else {
