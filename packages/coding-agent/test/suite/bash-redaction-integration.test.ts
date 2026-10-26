@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { registerTerminalExtension } from "../../src/core/extensions/builtin/terminal/extension.ts";
-import { SettingsManager } from "../../src/core/settings-manager.ts";
 import * as toolChildLaunch from "../../src/modes/rpc/tool-child/launch.ts";
 import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 import { createHarness, getMessageText } from "./harness.ts";
@@ -32,14 +31,12 @@ describe.skipIf(process.platform === "win32")("real bash redaction across runtim
 			const harness = await createHarness({
 				toolRuntime,
 				persistSession: true,
+				fileSettings: true,
 				settings: enabled === undefined ? {} : { tools: { bash: { redactSecretsInOutput: enabled } } },
 				extensionFactories: terminal ? [registerTerminalExtension] : [],
 			});
-			// The extension normally opens global/project settings. Hand it this isolated session's manager.
-			const settings = vi.spyOn(SettingsManager, "create").mockReturnValue(harness.settingsManager);
 			try {
 				await harness.session.bindExtensions({});
-				settings.mockRestore();
 				const fixtures = secretOutputCases();
 				const input = fixtures.map(({ input }) => input).join("\n") + "\n";
 				const expected = enabled ? fixtures.map(({ expected }) => expected).join("\n") + "\n" : input;
@@ -62,7 +59,6 @@ describe.skipIf(process.platform === "win32")("real bash redaction across runtim
 				expect(getMessageText(persisted?.message).trimEnd()).toBe((expected + expected).trimEnd());
 			} finally {
 				launch.mockRestore();
-				settings.mockRestore();
 				harness.cleanup();
 			}
 		},
