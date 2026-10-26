@@ -82,7 +82,9 @@ function formatRequestForDisplay(request: Request): string {
 			const pattern = request.patterns?.[0];
 			const derived =
 				typeof pattern === "string" ? (pattern.includes("*") ? pattern.split("*")[0] : pattern) : undefined;
-			const dir = parent ?? filepath ?? derived ?? "Unknown";
+			// The pattern is the resolved path the tool will touch; the call's raw `filepath` may be a
+			// spelling such as `@/x` or `file:///x` that names the same file differently (senpi#4311).
+			const dir = parent ?? derived ?? filepath ?? "Unknown";
 			parts.push(`Directory: ${dir}`);
 			break;
 		}

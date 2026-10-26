@@ -1,7 +1,9 @@
 import { dirname, resolve } from "node:path";
 import { realpathWithoutOpen } from "../../../../utils/paths.ts";
+import { resolveToCwd } from "../../../tools/path-utils.ts";
 import type { ToolInfo } from "../../types.ts";
 import { extractPatchedPaths } from "../gpt-apply-patch/index.ts";
+import { resolvePatchPath } from "../gpt-apply-patch/workspace.ts";
 import { BashArity } from "../permission-system/arity.ts";
 import {
 	type AlwaysScope,
@@ -83,13 +85,51 @@ function parseFilePath(input: Record<string, unknown>): string | undefined {
 	return getString(input, "path", "file_path");
 }
 
+/**
+ * The paths a tool may actually open for one raw argument. The `external_directory` check must
+ * classify exactly these, never the raw text, or a spelling the tool normalizes away (`@`,
+ * `file://`, Unicode spaces, Windows shell drives) slips past the check (senpi#4311).
+ */
+type TargetResolver = (rawPath: string, cwd: string) => readonly string[];
+
+/** The raw argument as written: tools that resolve with a plain `path.resolve` (monitor). */
+const rawTarget: TargetResolver = (rawPath) => [rawPath];
+
+/** write/edit/ls/find/glob open `resolveToCwd(raw, cwd)`. */
+const toolTarget: TargetResolver = (rawPath, cwd) => [resolveToCwd(rawPath, cwd)];
+
+/** apply_patch writes `resolvePatchPath(cwd, path)` for every patch-body path. */
+const patchTarget: TargetResolver = (rawPath, cwd) => [resolvePatchPath(cwd, rawPath)];
+
+/**
+ * A registration with no known tool implementation: the union of the old (raw) and new (resolved)
+ * readings, so no prompt that existed before disappears.
+ */
+const unknownToolTarget: TargetResolver = (rawPath, cwd) => [rawPath, resolveToCwd(rawPath, cwd)];
+
+/**
+ * grep opens `resolveToCwd(raw, cwd)`, and when that does not exist and ends in a `:L<a>-L<b>`
+ * line selector it searches the prefix instead (tools/grep/index.ts). Both are classified: the
+ * classifier must not stat on the host main thread, and the superset fails closed.
+ */
+const grepTarget: TargetResolver = (rawPath, cwd) => {
+	const resolved = resolveToCwd(rawPath, cwd);
+	const selector = /^(.*):L(\d+)-L?(\d+)$/.exec(resolved);
+	return selector?.[1] ? [resolved, selector[1]] : [resolved];
+};
+
 function withExternalDirectoryRequests(
 	requests: PermissionRequest[],
-	paths: string[],
+	paths: readonly string[],
 	cwd: string,
 	scope: AlwaysScope,
+	resolveTarget: TargetResolver,
 ): PermissionRequest[] {
-	const externalPaths = paths.filter((inputPath) => isExternalPath(inputPath, cwd));
+	const externalPaths = [
+		...new Set(
+			paths.flatMap((rawPath) => resolveTarget(rawPath, cwd)).filter((target) => isExternalPath(target, cwd)),
+		),
+	];
 	if (externalPaths.length === 0) {
 		return requests;
 	}
@@ -223,6 +263,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 				[path],
 				cwd,
 				"file",
+				rawTarget,
 			);
 		}
 		return parseBashLikePermission("command")(toolName, input, cwd);
@@ -232,7 +273,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 		return [fallbackPermissionRequest("edit")];
 	};
 
-	const parseEditPermission: ToolPermissionParser = (_toolName, input, cwd) => {
+	const parseEditPermission: ToolPermissionParser = (toolName, input, cwd) => {
 		const filePath = parseFilePath(input);
 		if (filePath) {
 			return withExternalDirectoryRequests(
@@ -246,6 +287,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 				[filePath],
 				cwd,
 				"file",
+				toolName === "edit" || toolName === "write" ? toolTarget : unknownToolTarget,
 			);
 		}
 
@@ -265,7 +307,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 			always: [patchedPath],
 		}));
 
-		return withExternalDirectoryRequests(editRequests, patchedPaths, cwd, "file");
+		return withExternalDirectoryRequests(editRequests, patchedPaths, cwd, "file", patchTarget);
 	};
 
 	registry.register("edit", parseEditPermission);
@@ -276,21 +318,30 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 	registry.register("read", parseReadPermission);
 
 	registry.register("grep", (_toolName, input, cwd) => {
-		const searchPath = getString(input, "path");
+		// grep's `path` is a string or an array of strings, and the tool searches every element.
+		const rawPath = input.path;
+		const searchPaths =
+			typeof rawPath === "string"
+				? [rawPath]
+				: Array.isArray(rawPath)
+					? rawPath.filter((entry): entry is string => typeof entry === "string")
+					: [];
 		const pattern = getString(input, "pattern");
-		const permissionPattern = searchPath ?? pattern;
-		if (!permissionPattern) {
+		const permissionPatterns = searchPaths.length > 0 ? searchPaths : pattern ? [pattern] : [];
+		if (permissionPatterns.length === 0) {
 			return [fallbackPermissionRequest("grep")];
 		}
 
 		const grepRequests: PermissionRequest[] = [
 			{
 				permission: "grep",
-				patterns: [permissionPattern],
+				patterns: permissionPatterns,
 				always: ["*"],
 			},
 		];
-		return searchPath ? withExternalDirectoryRequests(grepRequests, [searchPath], cwd, "directory") : grepRequests;
+		return searchPaths.length > 0
+			? withExternalDirectoryRequests(grepRequests, searchPaths, cwd, "directory", grepTarget)
+			: grepRequests;
 	});
 
 	const listParser: ToolPermissionParser = (_toolName, input, cwd) => {
@@ -306,6 +357,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 			[searchPath],
 			cwd,
 			"directory",
+			toolTarget,
 		);
 	};
 
