@@ -10,7 +10,7 @@
  */
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 
 export const ENDPOINT_RESERVATION_SCHEMA = 1;
 
@@ -20,6 +20,7 @@ export type RoleStatus = "offered" | "claimed" | "granted" | "released" | "revok
 
 export type ReservationRejection =
 	| "store_insecure"
+	| "store_busy"
 	| "schema_unsupported"
 	| "generation_unknown"
 	| "generation_cancelled"
@@ -107,7 +108,7 @@ async function openDatabase(path: string): Promise<Database> {
  * SQLite opens it: a regular file, owned by this user, with no group or other permission bits (POSIX). Windows DACL
  * validation belongs to the native bridge and is not done here.
  */
-async function precreatePrivate(path: string): Promise<void> {
+async function precreatePrivate(path: string): Promise<{ dev: number; ino: number }> {
 	let handle: Awaited<ReturnType<typeof open>>;
 	try {
 		handle = await open(path, constants.O_RDWR | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
@@ -125,6 +126,7 @@ async function precreatePrivate(path: string): Promise<void> {
 				throw new EndpointReservationError("store_insecure", `readable or writable by others: ${path}`);
 			}
 		}
+		return { dev: info.dev, ino: info.ino };
 	} finally {
 		await handle.close();
 	}
@@ -150,9 +152,14 @@ CREATE TABLE IF NOT EXISTS roles (
 );`;
 
 export async function openEndpointReservationStore(path: string): Promise<EndpointReservationStore> {
-	await precreatePrivate(path);
+	const validated = await precreatePrivate(path);
 	const database = await openDatabase(path);
 	try {
+		// SQLite reopens the path by name; the file it opened must still be the one validated above.
+		const opened = await lstat(path);
+		if (!opened.isFile() || opened.dev !== validated.dev || opened.ino !== validated.ino) {
+			throw new EndpointReservationError("store_insecure", `replaced while opening: ${path}`);
+		}
 		database.exec("PRAGMA journal_mode = DELETE; PRAGMA busy_timeout = 100;");
 		const version = (database.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
 		if (version === 0) {
@@ -220,7 +227,8 @@ export class EndpointReservationStore {
 
 	/**
 	 * Consumes the role's nonce once, recording `participant`. A retry by the participant already recorded answers
-	 * `already_claimed_by_caller`; anyone else is refused.
+	 * `already_claimed_by_caller` without a nonce; that is safe only because callers pass an identity they read from the
+	 * OS for themselves (PID and exact start time), never one taken from another process. Anyone else is refused.
 	 */
 	claim(locator: ReservationLocator, nonce: Uint8Array, participant: string): "claimed" | "already_claimed_by_caller" {
 		return this.#transaction(() => {
@@ -243,11 +251,17 @@ export class EndpointReservationStore {
 			if (expected.length !== 32 || nonce.length !== 32 || !timingSafeEqual(expected, nonce)) {
 				throw new EndpointReservationError("nonce_mismatch", `${locator.role} in ${locator.generation}`);
 			}
-			this.#database
+			// The compare-and-set itself: only the row still offered with this exact nonce changes.
+			const changed = this.#database
 				.prepare(
-					"UPDATE roles SET status = 'claimed', nonce = NULL, participant = ? WHERE generation = ? AND role = ? AND status = 'offered'",
+					"UPDATE roles SET status = 'claimed', nonce = NULL, participant = ? WHERE generation = ? AND role = ? AND status = 'offered' AND nonce = ?",
 				)
-				.run(participant, locator.generation, locator.role);
+				.run(participant, locator.generation, locator.role, expected.toString("hex")) as {
+				changes: number | bigint;
+			};
+			if (Number(changed.changes) !== 1) {
+				throw new EndpointReservationError("role_already_claimed", `${locator.role} in ${locator.generation}`);
+			}
 			this.#bump(locator.generation);
 			return "claimed";
 		});
@@ -275,7 +289,10 @@ export class EndpointReservationStore {
 		});
 	}
 
-	/** The durable cancellation fence: revokes every outstanding offer and keeps claimed and granted identities. */
+	/**
+	 * The durable cancellation fence: revokes every outstanding offer and keeps claimed and granted identities. It also
+	 * fences a `serving` generation, which recovery does to an abandoned generation before its retirement census.
+	 */
 	cancel(generation: string): void {
 		this.#transaction(() => {
 			this.#reservation(generation);
@@ -325,7 +342,14 @@ export class EndpointReservationStore {
 	}
 
 	#transaction<T>(run: () => T): T {
-		this.#database.exec("BEGIN IMMEDIATE");
+		try {
+			this.#database.exec("BEGIN IMMEDIATE");
+		} catch (error: unknown) {
+			if (/busy|locked/i.test(error instanceof Error ? error.message : String(error))) {
+				throw new EndpointReservationError("store_busy", "another process holds the reservation store");
+			}
+			throw error;
+		}
 		try {
 			const result = run();
 			this.#database.exec("COMMIT");
