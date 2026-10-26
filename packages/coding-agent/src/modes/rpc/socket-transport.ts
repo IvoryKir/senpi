@@ -111,6 +111,7 @@ async function writeStaging(staging: string, candidate: Buffer): Promise<void> {
 		constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0),
 		0o600,
 	);
+	let failure: unknown;
 	try {
 		// The creation mode is filtered by the umask; set it on the descriptor before any byte is written.
 		await handle.chmod(0o600);
@@ -122,11 +123,17 @@ async function writeStaging(staging: string, candidate: Buffer): Promise<void> {
 		}
 		await handle.sync();
 	} catch (error: unknown) {
-		await handle.close();
-		await unlink(staging).catch(() => undefined);
-		throw error;
+		failure = error;
 	}
-	await handle.close();
+	// Close always runs, and a failed close fails the attempt: the first failure is the one reported, and this
+	// attempt's staging file never outlives it.
+	await handle.close().catch((error: unknown) => {
+		failure ??= error;
+	});
+	if (failure !== undefined) {
+		await unlink(staging).catch(() => undefined);
+		throw failure;
+	}
 }
 
 async function syncDirectory(dir: string): Promise<void> {
