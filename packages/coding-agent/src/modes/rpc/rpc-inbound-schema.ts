@@ -487,6 +487,7 @@ export function validateRpcInboundRecord(record: unknown): RpcInboundValidation 
 	const shape = rpcCommandShapeError(record);
 	if (shape !== undefined) return refuse(shape);
 	// The whole record, unknown fields and free-form payloads included, stays inside the host's line limit.
+	// This serializes the record once to measure it; a caller that already holds the raw line may cap that instead.
 	let size: number;
 	try {
 		size = JSON.stringify(record).length;

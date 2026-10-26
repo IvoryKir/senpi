@@ -3,6 +3,7 @@
  * than the local user can send.
  */
 import { RPC_INBOUND_LIMITS, validateRpcInboundRecord } from "@code-yeongyu/senpi";
+import { MAX_RPC_LINE_CHARACTERS } from "../../../src/modes/rpc/jsonl.ts";
 import { describe, expect, it } from "vitest";
 
 const refused = (record: unknown) => {
@@ -56,6 +57,19 @@ describe("inbound record bounds (senpi#4346)", () => {
 		).toContain("/name");
 		expect(validateRpcInboundRecord({ type: "get_state", note: "an additive field" })).toEqual({ ok: true });
 		expect(validateRpcInboundRecord({ type: "account_pin", provider: "p", name: null })).toEqual({ ok: true });
+	});
+
+	it("refuses a record one character over the line limit and accepts one exactly at it", () => {
+		const wrapper = JSON.stringify({ type: "get_state", pad: "" }).length;
+		const atLimit = { type: "get_state", pad: "x".repeat(MAX_RPC_LINE_CHARACTERS - wrapper) };
+		expect(JSON.stringify(atLimit).length).toBe(MAX_RPC_LINE_CHARACTERS);
+		expect(validateRpcInboundRecord(atLimit)).toEqual({ ok: true });
+		const overLimit = { type: "get_state", pad: "x".repeat(MAX_RPC_LINE_CHARACTERS - wrapper + 1) };
+		expect(refused(overLimit)).toContain("characters of JSON");
+	});
+
+	it("refuses a record that cannot be serialized as JSON", () => {
+		expect(refused({ type: "get_state", note: 1n })).toContain("not JSON-serializable");
 	});
 
 	it("accepts every bound class at its limit", () => {
