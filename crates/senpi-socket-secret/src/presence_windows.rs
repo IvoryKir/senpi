@@ -126,19 +126,23 @@ impl PresenceBackend for WindowsPresenceBackend {
         // SAFETY: OVERLAPPED is plain data; the event is set below.
         let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         overlapped.hEvent = event.0;
-        let (raw_handle, raw_overlapped) = (handle.0 as usize, &mut *overlapped as *mut OVERLAPPED as usize);
-        let registered = cancel.register(Box::new(move || {
-            // SAFETY: the canceller is cleared before the handle and OVERLAPPED are dropped, so both are live.
-            unsafe { CancelIoEx(raw_handle as HANDLE, raw_overlapped as *const OVERLAPPED) };
-        }));
-        if !registered {
-            return WaitOutcome::Cancelled;
-        }
         let outcome = if lock(handle.0, LOCKFILE_EXCLUSIVE_LOCK, &mut overlapped) {
             WaitOutcome::Acquired
         } else {
             match last_error() {
                 ERROR_IO_PENDING => {
+                    // The I/O exists before its canceller does, so a cancel can never land in between and be lost.
+                    let (raw_handle, raw_overlapped) =
+                        (handle.0 as usize, &mut *overlapped as *mut OVERLAPPED as usize);
+                    let registered = cancel.register(Box::new(move || {
+                        // SAFETY: the token runs this under its lock, and `clear` below takes that lock before the
+                        // handle and OVERLAPPED are dropped, so both are live whenever this runs.
+                        unsafe { CancelIoEx(raw_handle as HANDLE, raw_overlapped as *const OVERLAPPED) };
+                    }));
+                    if !registered {
+                        // SAFETY: the handle and OVERLAPPED of the pending lock are live here.
+                        unsafe { CancelIoEx(handle.0, &*overlapped) };
+                    }
                     // SAFETY: waits on the live event of the pending lock; no timeout by design.
                     unsafe { WaitForSingleObject(event.0, INFINITE) };
                     match overlapped_result(handle.0, &mut overlapped) {

@@ -25,6 +25,8 @@ pub enum LockAttempt {
     Occupied,
     /// The Win32 error of an open, identity or lock failure. Never a release proof.
     Unknown(u32),
+    /// The registry is fenced; nothing is attempted.
+    Fenced,
 }
 
 /// Maps one nonblocking lock call to its meaning: only `ERROR_LOCK_VIOLATION` is contention.
@@ -55,6 +57,8 @@ pub enum WaitOutcome {
     Acquired,
     Cancelled,
     Unknown(u32),
+    /// The registry is fenced; nothing is attempted.
+    Fenced,
 }
 
 /// The OS calls a presence guard needs. `Handle` is owned by the registry and never exposed.
@@ -84,13 +88,12 @@ struct CancelState {
 pub struct CancelToken(std::sync::Arc<std::sync::Mutex<CancelState>>);
 
 impl CancelToken {
+    /// Runs the registered canceller while holding the state lock, so once `clear` returns no canceller can
+    /// still be running against an I/O that has ended.
     pub fn cancel(&self) {
-        let canceller = {
-            let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            state.cancelled = true;
-            state.canceller.take()
-        };
-        if let Some(canceller) = canceller {
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.cancelled = true;
+        if let Some(canceller) = state.canceller.take() {
             canceller();
         }
     }
@@ -102,8 +105,8 @@ impl CancelToken {
             .cancelled
     }
 
-    /// Registers the canceller of a wait about to block. Returns `false`, without registering, when the
-    /// token was already cancelled; the caller must then not start the wait.
+    /// Registers the canceller of a wait whose I/O is already issued. Returns `false`, without registering,
+    /// when the token was already cancelled; the caller must then cancel that I/O itself.
     pub fn register(&self, canceller: Canceller) -> bool {
         let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.cancelled {
@@ -161,7 +164,7 @@ impl<B: PresenceBackend> PresenceRegistry<B> {
     /// handle is closed again and nothing is retained.
     pub fn acquire(&mut self, presence_id: &str, path: &str) -> LockAttempt {
         if self.fenced.is_some() {
-            return LockAttempt::Unknown(0);
+            return LockAttempt::Fenced;
         }
         if self.guards.contains_key(presence_id) {
             return LockAttempt::Acquired;
@@ -193,7 +196,10 @@ impl<B: PresenceBackend> PresenceRegistry<B> {
     /// Repair's cancellable blocking wait (test 26): retains the guard only if the wait acquired it.
     pub fn wait_and_acquire(&mut self, presence_id: &str, path: &str, cancel: &CancelToken) -> WaitOutcome {
         if self.fenced.is_some() {
-            return WaitOutcome::Unknown(0);
+            return WaitOutcome::Fenced;
+        }
+        if self.guards.contains_key(presence_id) {
+            return WaitOutcome::Acquired;
         }
         let handle = match self.backend.open(path) {
             Ok(handle) => handle,
@@ -454,7 +460,7 @@ mod tests {
     fn descriptor_loss_fences_and_nothing_is_reacquired() {
         let (reason, later) = fenced_by(|kernel, handle| kernel.lost_handles.push(handle), true);
         assert_eq!(reason, FenceReason::HandleLost(6));
-        assert_eq!(later, LockAttempt::Unknown(0));
+        assert_eq!(later, LockAttempt::Fenced);
     }
 
     #[test]
@@ -534,5 +540,48 @@ mod tests {
             WaitOutcome::Cancelled
         );
         assert!(!registry.holds("p-1"));
+    }
+
+    #[test]
+    fn a_wait_on_a_presence_id_already_held_opens_no_second_handle() {
+        let mut kernel = FakeKernel::with_file(PATH, 1);
+        let mut registry = PresenceRegistry::new(&mut kernel);
+        assert_eq!(registry.acquire("p-1", PATH), LockAttempt::Acquired);
+        assert_eq!(
+            registry.wait_and_acquire("p-1", PATH, &CancelToken::default()),
+            WaitOutcome::Acquired
+        );
+        drop(registry);
+        assert_eq!(
+            kernel.next_handle, 1,
+            "only the first acquisition opened a handle"
+        );
+    }
+
+    #[test]
+    fn a_fenced_registry_answers_fenced_not_an_os_error() {
+        let (_, later) = fenced_by(|kernel, handle| kernel.lost_handles.push(handle), true);
+        assert_eq!(later, LockAttempt::Fenced);
+        let mut kernel = FakeKernel::with_file(PATH, 1);
+        let mut registry = PresenceRegistry::new(&mut kernel);
+        assert_eq!(registry.pre_action_check("p-9", true), Err(FenceReason::NotHeld));
+        assert_eq!(
+            registry.wait_and_acquire("p-1", PATH, &CancelToken::default()),
+            WaitOutcome::Fenced
+        );
+    }
+
+    #[test]
+    fn a_canceller_registered_after_cancel_is_refused_and_one_cleared_never_runs() {
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancelToken::default();
+        let counter = std::sync::Arc::clone(&ran);
+        assert!(token.register(Box::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })));
+        token.clear();
+        token.cancel();
+        assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!token.register(Box::new(|| {})));
     }
 }
