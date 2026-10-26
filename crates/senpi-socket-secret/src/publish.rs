@@ -13,6 +13,15 @@ pub enum PublishOutcome {
     Collision,
 }
 
+/// What one publication attempt did. `staging_left_behind` is set when the staging file could not be
+/// deleted through its handle (the `GetLastError` value of the failed `FileDispositionInfo`); the file
+/// is then still at the caller's staging path and the caller must remove it. Never carries the bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Publication {
+    pub result: Result<PublishOutcome, PublishError>,
+    pub staging_left_behind: Option<u32>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublishError {
     UnsupportedPlatform,
@@ -24,12 +33,11 @@ pub enum PublishError {
 }
 
 #[cfg(not(windows))]
-pub fn publish_no_replace(
-    _staging: &str,
-    _final_path: &str,
-    _bytes: &[u8],
-) -> Result<PublishOutcome, PublishError> {
-    Err(PublishError::UnsupportedPlatform)
+pub fn publish_no_replace(_staging: &str, _final_path: &str, _bytes: &[u8]) -> Publication {
+    Publication {
+        result: Err(PublishError::UnsupportedPlatform),
+        staging_left_behind: None,
+    }
 }
 
 #[cfg(windows)]
@@ -37,7 +45,7 @@ pub use windows_publish::publish_no_replace;
 
 #[cfg(windows)]
 mod windows_publish {
-    use super::{PublishError, PublishOutcome};
+    use super::{Publication, PublishError, PublishOutcome};
     use crate::owner_dacl::OwnerOnlyDescriptor;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_FILE_EXISTS, GENERIC_WRITE, HANDLE,
@@ -93,11 +101,33 @@ mod windows_publish {
         (raw != INVALID_HANDLE_VALUE).then_some(OwnedHandle(raw))
     }
 
-    pub fn publish_no_replace(
+    pub fn publish_no_replace(staging: &str, final_path: &str, bytes: &[u8]) -> Publication {
+        publish_with(staging, final_path, bytes, mark_for_deletion)
+    }
+
+    /// `delete` is `mark_for_deletion` in production; tests inject a failing disposition.
+    fn publish_with(
         staging: &str,
         final_path: &str,
         bytes: &[u8],
-    ) -> Result<PublishOutcome, PublishError> {
+        delete: impl FnOnce(&OwnedHandle) -> Result<(), u32>,
+    ) -> Publication {
+        match publish_through_staging(staging, final_path, bytes, delete) {
+            Ok(publication) => publication,
+            Err(error) => Publication {
+                result: Err(error),
+                staging_left_behind: None,
+            },
+        }
+    }
+
+    /// `Err` only when nothing was staged: the descriptor or the `CREATE_NEW` staging create failed.
+    fn publish_through_staging(
+        staging: &str,
+        final_path: &str,
+        bytes: &[u8],
+        delete: impl FnOnce(&OwnedHandle) -> Result<(), u32>,
+    ) -> Result<Publication, PublishError> {
         let descriptor = OwnerOnlyDescriptor::for_current_user()
             .map_err(|code| PublishError::Os { step: "dacl", code })?;
         let attributes = SECURITY_ATTRIBUTES {
@@ -115,15 +145,17 @@ mod windows_publish {
             &attributes,
         )
         .ok_or_else(|| last_error("create_staging"))?;
-        let outcome = write_all(&writer, bytes)
+        let result = write_all(&writer, bytes)
             .and_then(|()| flush(&writer))
             .and_then(|()| rename_no_replace(&writer, final_path));
-        if !matches!(outcome, Ok(PublishOutcome::Published)) {
-            if let Err(code) = mark_for_deletion(&writer) {
-                eprintln!("senpi-socket-secret: staging file was not deleted (Windows error {code})");
-            }
-        }
-        outcome
+        let staging_left_behind = match result {
+            Ok(PublishOutcome::Published) => None,
+            _ => delete(&writer).err(),
+        };
+        Ok(Publication {
+            result,
+            staging_left_behind,
+        })
     }
 
     fn flush(handle: &OwnedHandle) -> Result<(), PublishError> {
@@ -205,5 +237,39 @@ mod windows_publish {
         };
         // SAFETY: reads this thread's last-error value, set by the failed call above.
         (ok != 0).then_some(()).ok_or_else(|| unsafe { GetLastError() })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn scratch(label: &str) -> std::path::PathBuf {
+            let dir = std::env::temp_dir().join(format!("senpi-publish-unit-{label}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("scratch dir");
+            dir
+        }
+
+        /// Lead ruling on review r1 LOW 3: a staging file that survives a failed delete disposition is a
+        /// typed part of the result, never only a stderr line.
+        #[test]
+        fn a_failed_delete_disposition_is_reported_as_a_leftover_staging_file() {
+            let dir = scratch("delete-fails");
+            let final_path = dir.join("rpc.sock.secret");
+            let staging = dir.join("rpc.sock.secret.stage-x");
+            std::fs::write(&final_path, [1u8; 32]).expect("winner");
+            let report = publish_with(
+                staging.to_str().expect("utf-8"),
+                final_path.to_str().expect("utf-8"),
+                &[2u8; 32],
+                |_| Err(5),
+            );
+            println!("RECEIPT_PUBLISH delete_disposition_failed report={report:?}");
+            assert_eq!(report.result, Ok(PublishOutcome::Collision));
+            assert_eq!(report.staging_left_behind, Some(5));
+            assert!(staging.exists(), "the undeleted staging file is the one reported");
+            assert_eq!(std::fs::read(&final_path).expect("winner kept"), [1u8; 32]);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

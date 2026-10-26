@@ -4,7 +4,7 @@
 
 #[cfg(windows)]
 mod windows {
-    use senpi_socket_secret::{publish_no_replace, PublishError, PublishOutcome};
+    use senpi_socket_secret::{publish_no_replace, Publication, PublishError, PublishOutcome};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier};
 
@@ -13,6 +13,16 @@ mod windows {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    /// Every receipt here expects the staging file to be gone, so none may report one left behind.
+    fn publish(staging: &str, final_path: &str, bytes: &[u8]) -> Result<PublishOutcome, PublishError> {
+        let Publication {
+            result,
+            staging_left_behind,
+        } = publish_no_replace(staging, final_path, bytes);
+        assert_eq!(staging_left_behind, None, "staging left behind for {result:?}");
+        result
     }
 
     fn s(path: &Path) -> String {
@@ -33,7 +43,7 @@ mod windows {
         let dir = scratch("first");
         let final_path = dir.join("rpc.sock.secret");
         let bytes = [7u8; 32];
-        let outcome = publish_no_replace(&s(&dir.join("rpc.sock.secret.stage-a")), &s(&final_path), &bytes);
+        let outcome = publish(&s(&dir.join("rpc.sock.secret.stage-a")), &s(&final_path), &bytes);
         println!("RECEIPT_PUBLISH first outcome={outcome:?}");
         assert_eq!(outcome, Ok(PublishOutcome::Published));
         assert_eq!(std::fs::read(&final_path).expect("read final"), bytes);
@@ -45,7 +55,7 @@ mod windows {
         let dir = scratch("collision");
         let final_path = dir.join("rpc.sock.secret");
         std::fs::write(&final_path, [1u8; 32]).expect("winner");
-        let outcome = publish_no_replace(
+        let outcome = publish(
             &s(&dir.join("rpc.sock.secret.stage-b")),
             &s(&final_path),
             &[2u8; 32],
@@ -62,7 +72,7 @@ mod windows {
         let final_path = dir.join("rpc.sock.secret");
         std::fs::write(&final_path, [3u8; 32]).expect("winner");
         let reader = std::fs::File::open(&final_path).expect("reader");
-        let outcome = publish_no_replace(
+        let outcome = publish(
             &s(&dir.join("rpc.sock.secret.stage-c")),
             &s(&final_path),
             &[4u8; 32],
@@ -84,7 +94,7 @@ mod windows {
                 std::thread::spawn(move || {
                     let bytes = [index as u8; 32];
                     barrier.wait();
-                    let outcome = publish_no_replace(
+                    let outcome = publish(
                         &s(&dir.join(format!("rpc.sock.secret.stage-{index}"))),
                         &s(&dir.join("rpc.sock.secret")),
                         &bytes,
@@ -123,7 +133,7 @@ mod windows {
         let dir = scratch("stage-exists");
         let staging = dir.join("rpc.sock.secret.stage-d");
         std::fs::write(&staging, b"someone else's").expect("staging");
-        let outcome = publish_no_replace(&s(&staging), &s(&dir.join("rpc.sock.secret")), &[5u8; 32]);
+        let outcome = publish(&s(&staging), &s(&dir.join("rpc.sock.secret")), &[5u8; 32]);
         println!("RECEIPT_PUBLISH staging_exists outcome={outcome:?}");
         assert_eq!(
             outcome,
@@ -142,7 +152,7 @@ mod windows {
         let dir = scratch("dacl");
         let final_path = dir.join("rpc.sock.secret");
         assert_eq!(
-            publish_no_replace(
+            publish(
                 &s(&dir.join("rpc.sock.secret.stage-e")),
                 &s(&final_path),
                 &[6u8; 32]
