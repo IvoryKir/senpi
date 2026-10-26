@@ -1,4 +1,5 @@
 import { type AssistantMessage, describeProviderFailureForUser } from "@earendil-works/pi-ai";
+import { describeChatGptUsageLimit } from "@earendil-works/pi-ai/api/chatgpt-usage-limit";
 import { providerNotConfiguredMessage } from "@earendil-works/pi-ai/auth/resolve";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
@@ -146,6 +147,30 @@ describe("AssistantMessageComponent", () => {
 			}
 		},
 	);
+
+	// #4329: the adapter's next-step sentinel owns its advice; generic limits still need a TUI command.
+	test.each([false, true])("adds a model command only without adapter recovery advice (adapter=%s)", (adapter) => {
+		initTheme("dark");
+		const errorMessage = adapter
+			? describeChatGptUsageLimit({ header: () => undefined })
+			: '429 {"error":{"message":"You have hit your session limit; resets 11pm"}}';
+		const raw = createAssistantMessage([], { stopReason: "error", errorMessage });
+		const published = {
+			...raw,
+			errorMessage: describeProviderFailureForUser(errorMessage, {
+				model: `${raw.provider}/${raw.model}`,
+				usageLimit: "account",
+			}),
+			errorCause: { type: "usage_limit", scope: "account" } as const,
+		};
+		for (const message of [raw, published]) {
+			const rendered = stripAnsi(new AssistantMessageComponent(message).render(120).join("\n"));
+			expect(rendered.match(/\/model\b/g) ?? []).toEqual(adapter ? [] : ["/model"]);
+			if (adapter) {
+				expect(rendered.replace(/\s+/g, " ")).toContain(errorMessage);
+			}
+		}
+	});
 
 	test("renders resumed aborted assistant messages with a stable user-facing label", () => {
 		initTheme("dark");

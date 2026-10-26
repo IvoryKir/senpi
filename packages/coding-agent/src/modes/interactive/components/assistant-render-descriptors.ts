@@ -1,4 +1,5 @@
 import {
+	ACCOUNT_LIMIT_NEXT_STEP_LEAD,
 	type AssistantMessage,
 	describeProviderFailureForUser,
 	SERVER_FALLBACK_ABORTED_DIAGNOSTIC,
@@ -230,7 +231,9 @@ export function createAssistantRenderDescriptors(
 				: usageLimitScope(message) === "account"
 					? message.provider === "anthropic"
 						? " Use /login to connect Anthropic Subscription, or /model to choose another provider."
-						: " Use /model to choose another provider."
+						: described?.includes(ACCOUNT_LIMIT_NEXT_STEP_LEAD)
+							? ""
+							: " Use /model to choose another provider."
 					: "";
 			addError(
 				described === undefined

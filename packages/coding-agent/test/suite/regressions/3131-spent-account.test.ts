@@ -63,7 +63,8 @@ describe("#3131 spent account", () => {
 		expect(published.message).toMatchObject({
 			errorCause: { type: "usage_limit", scope: "account" },
 		});
-		expect(published.message.errorMessage?.trim().length).toBeGreaterThan(0);
+		// #4329: pin the actionable config key, not the surrounding prose.
+		expect(published.message.errorMessage).toContain("retry.fallbackChains");
 		expect(published.message.errorMessage).not.toMatch(/429|rate_limit_error/);
 		expect(published.message.errorMessage).toContain("11pm");
 		// The original provider payload stays available to engine diagnostics.
@@ -174,7 +175,7 @@ describe("#3131 spent account", () => {
 			});
 			// then
 			expect(harness.faux.getCallLog()).toHaveLength(callsBefore);
-			expect(harness.eventsOfType("compaction_end").at(-1)?.errorMessage?.trim().length).toBeGreaterThan(0);
+			expect(harness.eventsOfType("compaction_end").at(-1)?.errorMessage).toContain("retry.fallbackChains");
 		},
 	);
 
@@ -405,6 +406,7 @@ describe("#3131 spent account", () => {
 		// then
 		expect(exitCode).toBe(1);
 		const output = stderr.mock.calls.flat().join("\n");
+		expect(output).toContain("retry.fallbackChains");
 		expect(output).toContain("11pm");
 		expect(output).not.toContain("429");
 		expect(output).not.toContain("rate_limit_error");
@@ -418,6 +420,7 @@ describe("#3131 spent account", () => {
 			hasToolCalls: false,
 		});
 		expect(restored.find((descriptor) => descriptor.kind === "error-text")?.text).toContain("11pm");
+		expect(restored.find((descriptor) => descriptor.kind === "error-text")?.text).toContain("/model");
 		expect(JSON.stringify(restored)).not.toContain("429");
 		const published = harness.eventsOfType("message_end").find((event) => event.message.role === "assistant");
 		if (published?.message.role !== "assistant") throw new Error("missing published assistant fixture");
