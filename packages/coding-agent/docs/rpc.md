@@ -3507,7 +3507,7 @@ headers, and through the Claude SDK lane in its `rate_limit_event` messages. A w
 #### get_rpc_method_classes
 
 The engine's class for every inbound record type it accepts (capability `rpc_method_classes`). A client that
-relays requests for someone other than the local user can use the table to decide which requests to accept from
+forwards requests for someone other than the local user can use the table to decide which requests to accept from
 them and to hide what they cannot do; the engine itself does not gate its local connections with it. The command
 only reads and may be sent with `observe: true`.
 
@@ -3523,7 +3523,7 @@ entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_ad
 `observe` (side-effect-free reads), `drive` (runs, steers or edits a session), `answer` (`extension_ui_response`,
 `extension_ui_progress`), `thread` (creates, opens, attaches, switches, forks or closes sessions), `device_admin`
 (acts on the device outside the agent's permission flow: direct shell, path probes and writes, credentials,
-device-wide model settings, reloads, forged session entries; a relaying client should unlock it only with an
+device-wide model settings, reloads, forged session entries; a forwarding client should unlock it only with an
 explicit `admin` grant) and `connection_local` (configures or tears down the sender's own connection or host ownership,
 so it is meaningful only to the connection that sends it). A type missing from `classes` is unclassified: treat it
 as more dangerous than every class and refuse it. `connection_local` is never accepted on someone else's behalf.
