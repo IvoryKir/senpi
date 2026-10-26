@@ -6,6 +6,7 @@ const SECRET_PREFIXES = [
 	"gho_",
 	"ghr_",
 	"ghs_",
+	"ghu_",
 	"github_pat_",
 	"xoxa-",
 	"xoxb-",
@@ -13,9 +14,12 @@ const SECRET_PREFIXES = [
 	"xoxo-",
 	"xoxr-",
 	"xoxs-",
+	"sk-ant-",
+	"sk-proj-",
 	"sk-",
 ];
 const PREFIX = new RegExp(`(?:^|[^A-Za-z0-9])(?:${SECRET_PREFIXES.join("|")})[A-Za-z0-9_./+~=-]+`);
+const STARTED_PREFIX = new RegExp(`(?:^|[^A-Za-z0-9])(?:${SECRET_PREFIXES.join("|")}|AKIA|AIza|eyJ)`);
 const CLOUD_KEY = /(?:^|[^A-Za-z0-9])(?:AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35})/;
 const BEARER_VALUE = /^(?=.{8,}$)(?=.*[0-9_./+~=-])[A-Za-z0-9_./+~=-]+$/;
 const JWT = /^([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.?$/;
@@ -200,8 +204,8 @@ export class SecretOutputRedactor {
 	}
 
 	/**
-	 * Publish an idle prompt without treating the pause as a token boundary. Only a
-	 * complete credential shape is masked; its continuation stays suppressed until a delimiter.
+	 * Publish ordinary prompts without treating the pause as a token boundary.
+	 * Once a public credential prefix is present, withhold the token until it ends.
 	 */
 	flushIdle(): string {
 		if (this.finished || this.oversized) return "";
@@ -209,14 +213,10 @@ export class SecretOutputRedactor {
 		// A PEM opener has spaces: keep parsing it rather than suppressing only its
 		// first word and accidentally releasing the following private-key body.
 		if (token.length > 0 && "-----BEGIN".startsWith(token)) return "";
-		const secret = this.isSecret(token);
-		const output = secret ? this.controls + REDACTED : this.rawToken;
+		if (this.startedPrefix() !== undefined || this.isSecret(token)) return "";
+		const output = this.rawToken;
 		this.rawToken = "";
 		this.controls = "";
-		if (secret) {
-			this.token = "";
-			this.oversized = true;
-		}
 		// Keep the logical token after publishing ordinary text: a following '=' still
 		// needs its key, and a following credential prefix still needs its boundary.
 		return output;
@@ -234,6 +234,12 @@ export class SecretOutputRedactor {
 		return (this.bearer && BEARER_VALUE.test(token)) || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
 	}
 
+	private startedPrefix(): string | undefined {
+		if (this.bearer && this.token.length > 0) return "";
+		const match = STARTED_PREFIX.exec(this.token);
+		return match ? this.token.slice(0, match.index + match[0].length) : undefined;
+	}
+
 	private flushToken(): string {
 		if (this.oversized) {
 			this.oversized = false;
@@ -243,12 +249,18 @@ export class SecretOutputRedactor {
 		const token = this.token;
 		const rawToken = this.rawToken;
 		const controls = this.controls;
+		const prefix = this.finished ? this.startedPrefix() : undefined;
 		this.token = "";
 		this.rawToken = "";
 		this.controls = "";
 		if (token.length === 0) return rawToken;
-		const secret = this.isSecret(token);
+		const secret = token !== prefix && this.isSecret(token);
 		this.bearer = !secret && /^Bearer$/i.test(token);
-		return secret ? controls + REDACTED : rawToken;
+		if (secret) return controls + REDACTED;
+		if (prefix !== undefined) {
+			const published = token.length - (rawToken.length - controls.length);
+			return controls + prefix.slice(published) + REDACTED;
+		}
+		return rawToken;
 	}
 }

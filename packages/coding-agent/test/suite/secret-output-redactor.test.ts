@@ -4,6 +4,106 @@ import { SecretOutputRedactor } from "../../src/core/tools/secret-output-redacto
 import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 
 describe("streaming secret tokenizer", () => {
+	it.each(["AWS", "Google", "JWT", "Bearer"])("withholds %s bodies across repeated idle pauses", (name) => {
+		const fixture = secretOutputCases().find((entry) => entry.name === name);
+		assert(fixture);
+		const split = name === "JWT" ? fixture.input.lastIndexOf(".") : fixture.input.length - 1;
+		const redactor = new SecretOutputRedactor();
+		const visible = name === "Bearer" ? "Bearer " : "";
+		expect(redactor.push(fixture.input.slice(0, split)) + redactor.flushIdle()).toBe(visible);
+		expect(redactor.flushIdle()).toBe("");
+		expect(redactor.push(fixture.input.slice(split)) + redactor.flushIdle()).toBe("");
+		expect(visible + redactor.push(" done\n") + redactor.finish()).toBe(`${fixture.expected} done\n`);
+	});
+	it.each(["I", "e.g.", "git", "sk", "AI", "s", "g", "x", "A", "AK", "e"])(
+		"releases ordinary idle fragment %s verbatim",
+		(input) => {
+			const redactor = new SecretOutputRedactor();
+			expect(redactor.push(input) + redactor.flushIdle()).toBe(input);
+			expect(redactor.finish()).toBe("");
+		},
+	);
+	it.each([
+		"AKIA",
+		"AIza",
+		"eyJ",
+		"ghp_",
+		"gho_",
+		"ghs_",
+		"ghu_",
+		"ghr_",
+		"github_pat_",
+		"xoxb-",
+		"sk-",
+		"sk-ant-",
+		"sk-proj-",
+	])("sanitizes %s shapes at EOF without duplicating published prefixes", (prefix) => {
+		for (const published of [0, prefix.startsWith("sk-") ? 2 : prefix.length - 1]) {
+			const redactor = new SecretOutputRedactor();
+			expect(redactor.push(prefix.slice(0, published)) + redactor.flushIdle()).toBe(prefix.slice(0, published));
+			expect(redactor.push(prefix.slice(published) + "a".repeat(2)) + redactor.flushIdle()).toBe("");
+			const incomplete = ["AKIA", "AIza", "eyJ"].includes(prefix);
+			expect(redactor.finish()).toBe(`${incomplete ? prefix.slice(published) : ""}<redacted>`);
+		}
+	});
+	it("withholds a short Bearer value until it completes", () => {
+		const redactor = new SecretOutputRedactor();
+		expect(redactor.push(["Bearer ", "abcdef"].join("")) + redactor.flushIdle()).toBe("Bearer ");
+		expect(redactor.push("1-ghijklmnop") + redactor.flushIdle()).toBe("");
+		expect(redactor.push("\n") + redactor.finish()).toBe("<redacted>\n");
+	});
+	it.each([
+		"ghp_",
+		"gho_",
+		"ghs_",
+		"ghu_",
+		"ghr_",
+		"github_pat_",
+		"xoxa-",
+		"xoxb-",
+		"xoxp-",
+		"xoxo-",
+		"xoxr-",
+		"xoxs-",
+		"sk-",
+		"sk-ant-",
+		"sk-proj-",
+		"AKIA",
+		"AIza",
+		"eyJ",
+	])("sanitizes an unfinished public prefix %s at EOF", (prefix) => {
+		const redactor = new SecretOutputRedactor();
+		expect(redactor.push(prefix) + redactor.flushIdle()).toBe("");
+		expect(redactor.finish()).toBe(`${prefix}<redacted>`);
+	});
+	it.each(["", "https://", "prefix.", "--flag="])(
+		"withholds an ANSI-styled cloud key after %j and sanitizes EOF",
+		(leading) => {
+			const redactor = new SecretOutputRedactor();
+			const input = `${leading}AK\x1b[31mIA${"A1".repeat(3)}`;
+			expect(redactor.push(input) + redactor.flushIdle()).toBe(leading === "https://" ? "https:" : "");
+			expect(redactor.finish()).toBe(`\x1b[31m${leading === "https://" ? "//" : leading}AKIA<redacted>`);
+		},
+	);
+	it("releases non-secret Bearer prose at a delimiter, but masks an unfinished value at EOF", () => {
+		const redactor = new SecretOutputRedactor();
+		expect(redactor.push("Bearer ordinary") + redactor.flushIdle()).toBe("Bearer ");
+		expect(redactor.push(" words\n")).toBe("ordinary words\n");
+		expect(redactor.push("Bearer abc") + redactor.flushIdle()).toBe("Bearer ");
+		expect(redactor.finish()).toBe("<redacted>");
+	});
+	it("releases an incomplete cloud shape verbatim at a delimiter", () => {
+		const redactor = new SecretOutputRedactor();
+		const input = ["AK", "IA", "AB"].join("");
+		expect(redactor.push(input) + redactor.flushIdle()).toBe("");
+		expect(redactor.push(" ") + redactor.finish()).toBe(`${input} `);
+	});
+	it("never publishes a secret assignment body at idle or EOF", () => {
+		const redactor = new SecretOutputRedactor();
+		expect(redactor.push("API_KEY") + redactor.flushIdle()).toBe("API_KEY");
+		expect(redactor.push("=synthetic") + redactor.flushIdle()).toBe("=<redacted>");
+		expect(redactor.push("-tail") + redactor.flushIdle() + redactor.finish()).toBe("");
+	});
 	it.each(["https://", "--github-token=", "/tmp/", "value=", "YWJj/", "prefix.", "prefix-", "prefix+", "prefix~"])(
 		"redacts prefixed credentials embedded after %s at every split",
 		(prefix) => {

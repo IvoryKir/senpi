@@ -524,7 +524,8 @@ Bearer credentials, and secret-named `KEY=VALUE` values with `<redacted>`.
 Assignment names are retained; `AUTH` and `AUTHORIZATION` match complete name
 segments, not `AUTHOR`. Quoted assignment values end at their closing quote or
 the next newline. Bearer values must be token-shaped (at least eight characters,
-including a digit or token punctuation), so ordinary prose is retained.
+including a digit or token punctuation), so ordinary prose is retained when
+its word delimiter arrives.
 This applies to core bash, user `!cmd`/`!!cmd`, and persistent terminal
 bash, including streamed updates, background completion notices, terminal screen
 reads, structured results, output spill files and resulting transcript entries.
@@ -536,10 +537,15 @@ terminal titles and hyperlink targets) are omitted while redaction is enabled.
 
 An incomplete token is held until its delimiter or process exit. Persistent
 terminals also flush after 50 ms without output so idle prompts and complete
-cursor-control sequences reach screen reads. A fragment that could become a
-credential is conservatively redacted at that point, with its continuation
-suppressed until the next delimiter. Ordinary partial words may appear later
-while streaming. Tokens longer than 8,192 characters are
+cursor-control sequences reach screen reads. Once a token contains a full known
+public credential prefix (including `AKIA`, `AIza`, or `eyJ`), or a Bearer value
+has begun, idle flushes withhold it until a delimiter or process exit. Secret-named
+assignment values remain masked from their first character. Mere prefix fragments
+such as `I`, `e.g.`, `git`, `sk`, and `AI` are published verbatim at idle.
+At a delimiter, withheld tokens are redacted if they match a complete credential
+shape, otherwise released verbatim. At process exit, incomplete started shapes
+are replaced by their public prefix plus `<redacted>`; already published prefix
+characters are not repeated. Tokens longer than 8,192 characters are
 conservatively redacted to bound memory. Enabling the setting affects newly
 started commands; it does not rewrite existing terminal sessions, transcripts,
 command arguments, or files created by commands. This is shape detection, not a

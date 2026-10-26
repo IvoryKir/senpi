@@ -69,7 +69,7 @@ describe("persistent terminal output redaction", () => {
 			vi.useRealTimers();
 		}
 	});
-	// senpi#4358: idle output must use complete-token rules, not possible-prefix rules.
+	// senpi#4358: fragments below a full public prefix remain ordinary output.
 	it.each([
 		"Enter name",
 		"\x1b[10;5H",
@@ -88,7 +88,6 @@ describe("persistent terminal output redaction", () => {
 		"C",
 		"D",
 		"eye",
-		"Bearer ordinary",
 	])("flushes idle prompt text and complete controls: %j", async (input) => {
 		vi.useFakeTimers();
 		const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
@@ -133,15 +132,13 @@ describe("persistent terminal output redaction", () => {
 		vi.useFakeTimers();
 		try {
 			for (const fixture of secretOutputCases().filter(({ name }) => /^(prefix|AWS|Google|JWT)/.test(name))) {
-				// Prefix tokens need one value character; cloud keys need their full length;
-				// JWTs need a complete header, a payload and the second dot.
 				const minimumLength = fixture.name.startsWith("prefix")
 					? fixture.input.startsWith("sk-")
-						? 4
-						: fixture.input.indexOf("synthetic") + 1
+						? 3
+						: fixture.input.indexOf("synthetic")
 					: fixture.name === "JWT"
-						? fixture.input.lastIndexOf(".") + 1
-						: fixture.input.length;
+						? 3
+						: 4;
 				for (let split = 1; split < fixture.input.length; split++) {
 					const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
 					const session = pty.sessions.at(-1);
@@ -150,9 +147,9 @@ describe("persistent terminal output redaction", () => {
 						session.emit(fixture.input.slice(0, split));
 						await vi.advanceTimersByTimeAsync(100);
 						const released = split < minimumLength ? fixture.input.slice(0, split) : "";
-						expect(runtime.fullOutput()).toBe(released || "<redacted>");
+						expect(runtime.fullOutput()).toBe(released);
 						await vi.advanceTimersByTimeAsync(100);
-						expect(runtime.fullOutput()).toBe(released || "<redacted>");
+						expect(runtime.fullOutput()).toBe(released);
 						session.emit(`${fixture.input.slice(split)} done\n`);
 						expect(runtime.fullOutput()).toBe(`${released}<redacted> done\n`);
 						expect(runtime.fullOutput()).not.toContain(fixture.input);
@@ -174,6 +171,33 @@ describe("persistent terminal output redaction", () => {
 				}),
 			).redactSecretsInOutput,
 		).toBe(true);
+	});
+	it("withholds a split Bearer body from observers, retained output and screen", async () => {
+		vi.useFakeTimers();
+		const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
+		const session = pty.sessions.at(-1);
+		assert(session);
+		const observed: string[] = [];
+		runtime.onOutput((text) => observed.push(text));
+		try {
+			for (const part of ["Bearer ", "abcdef", "1-ghijklmnop"]) {
+				session.emit(part);
+				await vi.advanceTimersByTimeAsync(100);
+				expect(runtime.fullOutput()).toBe("Bearer ");
+				expect(observed.join("")).toBe("Bearer ");
+				expect(runtime.snapshot().visibleGrid).toEqual(["Bearer "]);
+			}
+			expect(runtime.readDelta().text).toBe("Bearer ");
+			session.finish();
+			await runtime.screenReleased();
+			expect(runtime.readDelta().text).toBe("<redacted>");
+			expect(runtime.fullOutput()).toBe("Bearer <redacted>");
+			expect(observed.join("")).toBe("Bearer <redacted>");
+			expect(runtime.snapshot().visibleGrid).toEqual(["Bearer <redacted>"]);
+		} finally {
+			runtime.dispose();
+			vi.useRealTimers();
+		}
 	});
 
 	it.each([false, true])("protects observers, delta, retained output and screen (enabled=%s)", async (enabled) => {
