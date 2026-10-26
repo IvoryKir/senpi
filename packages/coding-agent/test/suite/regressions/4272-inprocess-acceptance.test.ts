@@ -209,16 +209,33 @@ it("R21.1 R21.2 keeps persisted host retention per accepted append bounded: entr
 	}));
 	for (const entry of entries) manager.appendCustomEntry("retention", entry);
 	const transitions = manager.drainTranscript();
+	const clientMessages = [{ clientMessageId: "c-1" }, { clientMessageId: "c-2", clientTurnId: "t-1" }];
+	const correlation = { clientMessageId: "c-2", clientTurnId: "t-1", clientMessages };
+	lane.accept({ type: "turn_start", ...correlation }, undefined);
+	const before = lane.freeze();
+	lane.release(before);
 	const stringify = vi.spyOn(JSON, "stringify");
 	lane.applyTranscript(transitions);
-	const refs = entries.map((entry) => lane.accept({ type: "entry_appended", entry }, undefined));
+	const refs = entries.map((entry) => {
+		lane.accept(
+			{
+				type: "message_update",
+				message: { role: "assistant", content },
+				...correlation,
+				clientMessages: clientMessages.map((identity) => ({ ...identity })),
+			},
+			undefined,
+		);
+		return lane.accept({ type: "entry_appended", entry }, undefined);
+	});
 	const calls = stringify.mock.calls.length;
 	stringify.mockRestore();
-	expect(calls, "no serialization per append on the host loop").toBe(0);
+	expect(calls, "no serialization for appends or message_update records while client correlation stands").toBe(0);
 	expect(refs.every((ref) => ref?.historyVersion === baseline.transcript.historyVersion + appends)).toBe(true);
 	// Mirror trimming mutates the manager's entry objects later; the root names entries, it does not alias them.
 	for (const entry of entries) entry.parentId = "trimmed";
 	const root = lane.freeze();
+	expect(root.correlation, "shallow-equal client identities keep the same transition").toBe(before.correlation);
 	expect(root.transcript.count).toBe(appends + 1);
 	expect(root.transcript.leafId).toBe(manager.getLeafId());
 	expect(root.transcript.tail.retainedBytes).toBe(0);
