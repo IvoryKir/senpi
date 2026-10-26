@@ -3,10 +3,11 @@ import { pathToFileURL } from "node:url";
 import { MessageChannel, parentPort } from "node:worker_threads";
 import { authorityDecision } from "./permission-authority.mjs";
 import { createPermissionRequester } from "./permission-slots.mjs";
+import { createCodePermissionGuard } from "./interpose-code.js";
 
 let initialized = false;
 
-export async function initializePermissionRuntime(install, workerData) {
+export async function initializePermissionRuntime(install, workerData, engine) {
 	if (initialized) throw new Error("Permission runtime already initialized");
 	initialized = true;
 	const context = new AsyncLocalStorage();
@@ -35,8 +36,9 @@ export async function initializePermissionRuntime(install, workerData) {
 		const rule = token?.rules[0] ?? [...bound.values()].find((entry) => entry.rules.length)?.rules[0] ?? kernel.rules[0];
 		if (disposition === "refuse" || !requester || !token) throw refusal("Permission authority unavailable", rule);
 		try {
-			const { call, unsupported } = operation();
+			const { call, unsupported, granted } = operation();
 			if (unsupported) throw refusal("Operation cannot be checked", rule);
+			if (granted) return;
 			const result = requester.check({ token: token.id, call });
 			// Revocation may have raced an already-published answer.
 			if (!(Atomics.load(new Int32Array(token.authority), 0) & 2)) throw new Error("Permission authority revoked");
@@ -47,12 +49,13 @@ export async function initializePermissionRuntime(install, workerData) {
 		}
 	};
 	install(authorize);
-	const runAuthority = async (token, run) => {
+	const codeGuard = createCodePermissionGuard(authorize);
+	const runAuthority = async (token, run, source) => {
 		if (!token && authorityDecision(undefined, [...bound.values()], kernel) !== "pass") {
 			throw refusal("Permission authority unavailable", kernel.rules[0]);
 		}
 		if (token) bound.set(token.id, token);
-		try { return await context.run(token, run); }
+		try { return await context.run(token, () => { codeGuard.scan(source); return run(); }); }
 		finally { if (token) bound.delete(token.id); }
 	};
 
@@ -135,6 +138,7 @@ export async function initializePermissionRuntime(install, workerData) {
 			globalThis.onmessage?.(event);
 			events.dispatchEvent(event);
 		}));
+		engine.activate();
 		await runAuthority(data.token, async () => {
 			// User preloads still precede the script, but never precede interposition.
 			const preloads = typeof workerData.preload === "string" ? [workerData.preload] : workerData.preload ?? [];
@@ -149,6 +153,12 @@ export async function initializePermissionRuntime(install, workerData) {
 		return;
 	}
 	const { createWorkerCore } = await import("./worker-core.js");
+	const { initializeResolverIO } = await import("./worker-package-resolve.js");
+	initializeResolverIO(engine.resolverIO);
+	const { initializeProcessCleanup } = await import("./process-tree.js");
+	const { initializeWindowsCleanup } = await import("./windows-tree-kill.js");
+	initializeProcessCleanup(engine.cleanupExecFile);
+	initializeWindowsCleanup(engine.cleanupExecFile);
 	createWorkerCore({
 		send: (message) => parentPort.postMessage(message),
 		onMessage(handler) { parentPort.on("message", handler); return () => parentPort.off("message", handler); },
@@ -158,5 +168,6 @@ export async function initializePermissionRuntime(install, workerData) {
 		parallelPoolWidth: workerData.parallelPoolWidth,
 		cwdInstallOptions: { permissionInterposed: true },
 		runAuthority,
+		permissionIO: engine.permissionIO,
 	});
 }
