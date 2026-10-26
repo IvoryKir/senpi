@@ -51,19 +51,20 @@ import {
 	terminateFinalSessionLine,
 } from "./session-entry-file.ts";
 import { materializeSessionEntries } from "./session-entry-materializer.ts";
+import { captureAndCloseFileIdentity, captureFileIdentity, loadedFileIdentities } from "./session-file-identity.ts";
 import { replaceFileAtomically } from "./session-file-replace.ts";
 import { type HistoryReducer, HistoryReductions } from "./session-history-reduce.ts";
 import type { SpawnedBy } from "./session-lifecycle-types.ts";
 import { compactUpdatesEnabled } from "./engine-socket-flag.ts";
 import { planLoadedTail } from "./session-loaded-tail.ts";
 import {
-	captureTranscriptBase,
-	type PersistedBase,
+	type FileIdentity,
 	snapshotTranscript,
 	TranscriptJournal,
 	type TranscriptPersistence,
 	type TranscriptTransition,
 } from "./session-transcript-journal.ts";
+import { TranscriptFile } from "./session-transcript-file.ts";
 import { SessionWriteGuard } from "./session-move/write-guard.ts";
 import { type ResidentStoreStats, ResidentStringStore } from "./session-resident-store.ts";
 import { SessionWriteFence } from "./session-write-fence.ts";
@@ -1133,7 +1134,6 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 let sessionEntryLoader = loadEntriesFromFile;
 
 const DEFERRED_FILE_LOAD = Symbol("deferred-session-file-load");
-const NO_TRANSCRIPT_BASE = { base: null, history: 0 } as const;
 
 /** Test seam for observing disk reloads without mocking ESM filesystem exports. */
 export function setSessionEntryLoaderForTesting(loader: typeof loadEntriesFromFile): () => void {
@@ -1194,7 +1194,7 @@ export class SessionManager {
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 	// The persisted base of the last load or rewrite, and how many history entries it holds (R3.C1.1).
-	private transcriptBase: { readonly base: PersistedBase | null; readonly history: number } = NO_TRANSCRIPT_BASE;
+	private readonly transcriptFile = new TranscriptFile();
 	private transcriptJournal: TranscriptJournal | undefined;
 	private transcriptBytes = new WeakMap<FileEntry, string>();
 	private readonly capturesTranscriptBase = compactUpdatesEnabled();
@@ -1309,7 +1309,7 @@ export class SessionManager {
 		// A live session file can be observed between truncate and rewrite. Treat
 		// that window (and an invalid replacement) as unavailable rather than
 		// routing it through the create/recover path in _setSessionFile().
-		const fileEntries = loadEntriesFromFile(this.sessionFile);
+		const fileEntries = loadEntriesFromFile(this.sessionFile, this.capturesTranscriptBase);
 		if (fileEntries.length === 0) {
 			if (statSync(this.sessionFile).size === 0) return;
 			throw new Error(`Session file is not a valid ${APP_NAME} session: ${this.sessionFile}`);
@@ -1342,9 +1342,9 @@ export class SessionManager {
 	): void {
 		const existingFile = this._beginSessionFile(sessionFile, newSessionOptions);
 		if (existingFile === undefined) return;
-		const entries = preloadedFileEntries ?? loadEntriesFromFile(existingFile);
+		const entries = preloadedFileEntries ?? loadEntriesFromFile(existingFile, this.capturesTranscriptBase);
+		this._captureTranscriptBase(loadedFileIdentities.get(entries), entries);
 		if (!this._adoptFileEntries(existingFile, entries, newSessionOptions)) return;
-		this._captureTranscriptBase(existingFile);
 		const loadedHistory = this._retainLoadedTail();
 		this.fileEntries = this.fileEntries.map((entry) => this.residentStore.externalize(entry));
 		this._completeFileLoad(loadedHistory);
@@ -1362,12 +1362,14 @@ export class SessionManager {
 	): Promise<void> {
 		const existingFile = this._beginSessionFile(sessionFile, newSessionOptions);
 		if (existingFile === undefined) return;
-		const entries = preloadedFileEntries ?? (await loadEntriesFromFileAsync(existingFile, slicer));
+		const entries =
+			preloadedFileEntries ?? (await loadEntriesFromFileAsync(existingFile, slicer, this.capturesTranscriptBase));
+		this._captureTranscriptBase(loadedFileIdentities.get(entries), entries);
 		if (!this._adoptFileEntries(existingFile, entries, newSessionOptions)) return;
-		this._captureTranscriptBase(existingFile);
 		const loadedHistory = this._retainLoadedTail();
 		this.fileEntries = await mapInSlices(this.fileEntries, (entry) => this.residentStore.externalize(entry), slicer);
 		this._completeFileLoad(loadedHistory);
+		await this.transcriptFile.ready;
 	}
 
 	/** Points this manager at `sessionFile`; the path when it exists, undefined when a new session was started there. */
@@ -1378,6 +1380,7 @@ export class SessionManager {
 			this.writeFence.opened(resolvedFile);
 		}
 		this.sessionFile = resolvedFile;
+		this.transcriptFile.reset();
 		this.mirrorTrimmed = false;
 		this.trimmedIds.clear();
 		this.residentStore.clear();
@@ -1486,7 +1489,8 @@ export class SessionManager {
 			...(options?.spawnedBy ? { spawnedBy: options.spawnedBy } : {}),
 		};
 		this.fileEntries = [header];
-		this.transcriptBase = NO_TRANSCRIPT_BASE;
+		this.transcriptFile.reset();
+		this.transcriptBytes = new WeakMap();
 		this.historyGeneration++;
 		this.verbatimFromCount = 0;
 		this.mirrorTrimmed = false;
@@ -1604,13 +1608,28 @@ export class SessionManager {
 		this.writeGuard.assertRewritable(this.fileEntries, this.sessionFile);
 		this.writeFence.assertOwned(this.sessionFile);
 		reserveSessionWrite(this.sessionFile);
-		replaceFileAtomically(this.sessionFile, this._serializedFileEntries());
-		this._captureTranscriptBase(this.sessionFile);
+		replaceFileAtomically(
+			this.sessionFile,
+			this._serializedFileEntries(),
+			this.capturesTranscriptBase ? (identity) => this._captureTranscriptBase(identity, this.fileEntries) : undefined,
+		);
 	}
 
-	/** Flag off, no load or rewrite stats the file or fingerprints its entries. */
-	private _captureTranscriptBase(path: string): void {
-		if (this.capturesTranscriptBase) this.transcriptBase = captureTranscriptBase(path, this.fileEntries);
+	/** Wire the owning reader/writer's capture; until it lands snapshots use the bounded accepted tail. */
+	private _captureTranscriptBase(
+		identity: Promise<FileIdentity | undefined> | undefined,
+		entries?: readonly FileEntry[],
+	): void {
+		if (!identity) return;
+		this.transcriptFile.capture(identity, entries, () => {
+			const persistence = this._transcriptPersistence();
+			if (persistence) {
+				this.transcriptJournal?.record({ kind: "persisted", persistence });
+				if (entries) this._journalReplace();
+				this.transcriptBytes = new WeakMap();
+			} else if (this.transcriptFile.unavailable)
+				this.transcriptJournal?.record({ kind: "unavailable", reason: this.transcriptFile.unavailable });
+		});
 	}
 
 	/** Starts journaling committed transcript changes and returns the whole transcript they follow (R3.C1.1). */
@@ -1629,7 +1648,8 @@ export class SessionManager {
 	}
 
 	private _transcriptSnapshot(): TranscriptTransition[] {
-		const { base, history } = this.transcriptBase;
+		const { base, history, unavailable } = this.transcriptFile;
+		if (unavailable) return [{ kind: "unavailable", reason: unavailable }];
 		const unpersisted = base ? this.fullEntryCount - history : this.fileEntries.length;
 		const resident = base ? this.fileEntries.length - 1 : this.mirrorTrimmed ? -1 : this.fileEntries.length;
 		return snapshotTranscript({
@@ -1642,10 +1662,9 @@ export class SessionManager {
 	}
 
 	private _transcriptPersistence(): TranscriptPersistence | undefined {
-		if (!this.flushed || !this.sessionFile) return undefined;
-		const stat = statSync(this.sessionFile, { bigint: true });
+		if (!this.flushed || !this.transcriptFile.identity) return undefined;
 		return {
-			fileIdentity: { path: this.sessionFile, dev: String(stat.dev), ino: String(stat.ino) },
+			fileIdentity: this.transcriptFile.identity,
 			count: this.fullEntryCount + 1,
 		};
 	}
@@ -1655,13 +1674,16 @@ export class SessionManager {
 		const cached = this.transcriptBytes.get(entry);
 		if (cached !== undefined) return cached;
 		const bytes = JSON.stringify(this.residentStore.materialize(entry));
-		if (this.transcriptJournal && !this.flushed) this.transcriptBytes.set(entry, bytes);
+		if (this.persist && this.capturesTranscriptBase && (!this.flushed || !this.transcriptFile.identity))
+			this.transcriptBytes.set(entry, bytes);
 		return bytes;
 	}
 
 	private *_serializedFileEntries(): Generator<string> {
 		for (const entry of this.fileEntries) {
-			yield `${JSON.stringify(this.residentStore.materialize(entry))}\n`;
+			const bytes = this._transcriptEntryBytes(entry);
+			if (this.capturesTranscriptBase) this.transcriptBytes.set(entry, bytes);
+			yield `${bytes}\n`;
 		}
 	}
 
@@ -1709,7 +1731,7 @@ export class SessionManager {
 	 * persisted while it runs are appended by it before the transcript counts as flushed.
 	 */
 	persistHeaderNow(): Promise<void> {
-		if (!this.persist || !this.sessionFile || this.flushed) return this.headerWrite ?? Promise.resolve();
+		if (!this.persist || !this.sessionFile || this.flushed) return this.headerWrite ?? this.transcriptFile.ready;
 		const sessionFile = this.sessionFile;
 		this.headerWrite ??= this._writeHeaderAsync(sessionFile).finally(() => {
 			this.headerWrite = undefined;
@@ -1739,6 +1761,7 @@ export class SessionManager {
 		await rm(this.sessionFile, { force: true });
 		this.ownedHeaderFile = undefined;
 		this.flushed = false;
+		this.transcriptFile.reset();
 		return true;
 	}
 
@@ -1757,6 +1780,10 @@ export class SessionManager {
 				await handle.writeFile(serialize(batch));
 			}
 			const closing = handle;
+			if (this.capturesTranscriptBase && this.sessionFile === sessionFile && this.fileEntries === entries) {
+				this._captureTranscriptBase(captureFileIdentity(closing.fd, sessionFile));
+				await this.transcriptFile.ready;
+			}
 			handle = undefined;
 			await closing.close();
 			// Entries persisted while the handle closed: append until a pass finds nothing new.
@@ -1838,9 +1865,10 @@ export class SessionManager {
 		} catch (error) {
 			discardFailedFirstFlush(this.sessionFile, fd, error);
 		}
-		closeSync(fd);
+		if (this.capturesTranscriptBase) this._captureTranscriptBase(captureAndCloseFileIdentity(fd, this.sessionFile));
+		else closeSync(fd);
 		this.flushed = true;
-		this.transcriptBytes = new WeakMap();
+		if (!this.capturesTranscriptBase) this.transcriptBytes = new WeakMap();
 		// Lifecycle bookkeeping created this file before any conversation, so an empty session can still discard it.
 		if (!isConversationEntry(entry) && !this._hasConversation()) this.ownedHeaderFile = this.sessionFile;
 		return bytes;
@@ -1853,7 +1881,8 @@ export class SessionManager {
 		this._commitEntry(committed);
 		if (this.transcriptJournal) {
 			const serialized = bytes ?? this._transcriptEntryBytes(residentEntry);
-			if (!this.flushed) this.transcriptBytes.set(committed, serialized);
+			if (this.persist && (!this.flushed || !this.transcriptFile.identity))
+				this.transcriptBytes.set(committed, serialized);
 			this.transcriptJournal.record({
 				kind: "append",
 				id: residentEntry.id,
@@ -2152,6 +2181,7 @@ export class SessionManager {
 	 * is untouched - it is the authority the next reader loads from. Idempotent.
 	 */
 	dispose(): void {
+		this.transcriptFile.reset();
 		unregisterSessionWriter(this);
 		this._releaseBlobsDirUnlessShared();
 	}
@@ -2918,7 +2948,8 @@ export class SessionManager {
 		if (path.length === 0) {
 			throw new Error(`Entry ${leafId} not found`);
 		}
-		this.transcriptBase = NO_TRANSCRIPT_BASE;
+		this.transcriptFile.reset();
+		this.transcriptBytes = new WeakMap();
 
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map.
 		// Because labels are real tree entries, later entries can be children of labels;
@@ -3075,7 +3106,9 @@ export class SessionManager {
 		const discovery = discoverOpenHeader(resolvedPath, cwdOverride);
 		// The bounded scan is only a discovery optimization. A full load remains
 		// authoritative for legacy files with very large headers or prefixes.
-		const preloadedFileEntries = discovery.needsFullLoad ? loadEntriesFromFile(resolvedPath) : undefined;
+		const preloadedFileEntries = discovery.needsFullLoad
+			? loadEntriesFromFile(resolvedPath, compactUpdatesEnabled())
+			: undefined;
 		// This process opens the session for append; normalize a final unterminated
 		// JSONL entry here, never from read-only loadEntriesFromFile callers.
 		terminateFinalSessionLine(resolvedPath);
@@ -3100,7 +3133,7 @@ export class SessionManager {
 		reserveSessionWrite(resolvedPath);
 		const discovery = discoverOpenHeader(resolvedPath, cwdOverride);
 		const preloadedFileEntries = discovery.needsFullLoad
-			? await loadEntriesFromFileAsync(resolvedPath, slicer)
+			? await loadEntriesFromFileAsync(resolvedPath, slicer, compactUpdatesEnabled())
 			: undefined;
 		terminateFinalSessionLine(resolvedPath);
 		const header = discovery.header ?? headerOf(preloadedFileEntries);

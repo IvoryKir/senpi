@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionManager } from "../../../src/core/session-manager.ts";
+import type { TranscriptTransition } from "../../../src/core/session-transcript-journal.ts";
 import { readTranscriptRoot } from "../../../src/modes/rpc/accepted-transcript.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { SESSION_WORKER_LIMITS, withinFrameLimit } from "../../../src/modes/rpc/session-worker-protocol.ts";
@@ -10,6 +11,21 @@ import { SESSION_WORKER_LIMITS, withinFrameLimit } from "../../../src/modes/rpc/
 afterEach(() => {
 	vi.unstubAllEnvs();
 	vi.restoreAllMocks();
+});
+
+// #4347 LOW-1: raw journal UTF-8 bytes, not JSON's escaping of those bytes, consume the frame budget.
+it("frame accounting uses journal bytes at the limit without serializing transitions again", () => {
+	const overhead = 1024;
+	const budget = SESSION_WORKER_LIMITS.outputBytes - overhead;
+	const entry = '"\\\n'.repeat(Math.floor(budget / 3)) + "x".repeat(budget % 3);
+	expect(Buffer.byteLength(entry) + overhead).toBe(SESSION_WORKER_LIMITS.outputBytes);
+	const at: TranscriptTransition = { kind: "append", id: "at-limit", entry };
+	const over: TranscriptTransition = { kind: "append", id: "over-limit", entry: `${entry}한` };
+	const stringify = vi.spyOn(JSON, "stringify");
+	const frames = withinFrameLimit([at, over]);
+	expect(stringify).not.toHaveBeenCalled();
+	expect(frames[0]).toBe(at);
+	expect(frames[1]).toEqual({ kind: "unavailable", reason: "transition_over_worker_frame_limit" });
 });
 
 /** A new session's entries stay owned until its first message, so each one is a pre-bind transition. */

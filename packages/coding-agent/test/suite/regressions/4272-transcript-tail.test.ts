@@ -93,3 +93,21 @@ it("R21.3 R21.6 an over-cap accepted tail is typed unavailable, never a partial 
 	expect(diagnostic).toHaveBeenCalledWith(expect.stringContaining("transcript_tail_over_byte_limit"));
 	manager.dispose();
 });
+
+// #4347 LOW-2: an in-memory manager has no writer that can consume a serialized-byte cache.
+it("non-persisted journals retain no duplicate serialized cache across many appends", () => {
+	const manager = SessionManager.inMemory(dir);
+	const lane = new SessionAcceptanceLane();
+	const cache = vi.spyOn(WeakMap.prototype, "set");
+	lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
+	for (let index = 0; index < 80; index++) {
+		manager.appendCustomEntry("memory-tail", { text: "x".repeat(256 * 1024), index });
+		lane.applyTranscript(manager.drainTranscript());
+	}
+	const retained = cache.mock.calls
+		.filter(([key, value]) => typeof value === "string" && typeof key === "object" && key !== null && "id" in key)
+		.reduce((bytes, [, value]) => bytes + Buffer.byteLength(String(value)), 0);
+	expect(retained).toBe(0);
+	expect(lane.freeze().transcript.tail.retainedBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
+	manager.dispose();
+});

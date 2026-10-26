@@ -24,13 +24,14 @@ function user(text: string) {
 }
 
 /** A session whose conversation is on disk, reopened: its whole history is the persisted base of the bootstrap. */
-function reopened(): { manager: SessionManager; lane: SessionAcceptanceLane; file: string } {
+async function reopened(): Promise<{ manager: SessionManager; lane: SessionAcceptanceLane; file: string }> {
 	const writer = SessionManager.create(dir, dir);
 	writer.appendMessage(user("first"));
 	writer.appendMessage(user("second"));
 	const file = String(writer.getSessionFile());
 	writer.dispose();
 	const manager = SessionManager.open(file, dir);
+	await manager.persistHeaderNow();
 	const lane = new SessionAcceptanceLane();
 	lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
 	return { manager, lane, file };
@@ -50,8 +51,8 @@ function rootIds(root: TranscriptRoot): string[] {
 }
 
 // Part of #4272, R3.C1.1: a root is a persisted base plus host-owned accepted transitions; a cut never reads past them.
-it("C1.1 journal/cut: a cut reads its persisted base and accepted appends up to its count, never an entry persisted after it", () => {
-	const { manager, lane, file } = reopened();
+it("C1.1 journal/cut: a cut reads its persisted base and accepted appends up to its count, never an entry persisted after it", async () => {
+	const { manager, lane, file } = await reopened();
 	const atBootstrap = lane.freeze();
 	expect(atBootstrap.transcript.base?.count, "the load's parse: header and two messages").toBe(3);
 	expect(atBootstrap.transcript.count, "everything loaded is on the base").toBe(0);
@@ -78,8 +79,8 @@ it("C1.1 journal/cut: a cut reads its persisted base and accepted appends up to 
 	expect(lane.liveRoots).toBe(0);
 });
 
-it("C1.1 branch and reset: each leaf move takes its own sequence and root version, and earlier roots keep their leaf", () => {
-	const { manager, lane, file } = reopened();
+it("C1.1 branch and reset: each leaf move takes its own sequence and root version, and earlier roots keep their leaf", async () => {
+	const { manager, lane, file } = await reopened();
 	const [, firstId, secondId] = fileIds(file);
 	const start = lane.freeze();
 	expect(start.transcript.leafId).toBe(secondId);
@@ -109,8 +110,8 @@ it("C1.1 branch and reset: each leaf move takes its own sequence and root versio
 });
 
 // Part of #4272, ruling 10 Q3: the persisted base is read only through the identity captured at load.
-it("Q3 rewritten: a base whose file was rewritten in place or replaced by rename is a typed failure, never a read of the new file", () => {
-	const { lane, file } = reopened();
+it("Q3 rewritten: a base whose file was rewritten in place or replaced by rename is a typed failure, never a read of the new file", async () => {
+	const { lane, file } = await reopened();
 	const root = lane.freeze();
 	const lines = readFileSync(file, "utf8").trim().split("\n");
 	const renamed = lines.map((line) => {
@@ -131,19 +132,20 @@ it("Q3 rewritten: a base whose file was rewritten in place or replaced by rename
 	});
 });
 
-it("Q3 truncated: a base whose file was truncated under it is a typed failure, never a shorter read", () => {
-	const { lane, file } = reopened();
+it("Q3 truncated: a base whose file was truncated under it is a typed failure, never a shorter read", async () => {
+	const { lane, file } = await reopened();
 	const root = lane.freeze();
 	truncateSync(file, readFileSync(file, "utf8").indexOf("\n") + 1);
 	expect(readTranscriptRoot(root.transcript)).toEqual({ ok: false, error: "base_file_truncated" });
 });
 
-it("C1.1 replacement roots: a branched session and a new session replace the root, and the replaced version still reads its own file", () => {
-	const { manager, lane, file } = reopened();
+it("C1.1 replacement roots: a branched session and a new session replace the root, and the replaced version still reads its own file", async () => {
+	const { manager, lane, file } = await reopened();
 	const before = lane.freeze();
 	const [, , secondId] = fileIds(file);
 
 	const forkFile = String(manager.createBranchedSession(String(secondId)));
+	await manager.persistHeaderNow();
 	lane.applyTranscript(manager.drainTranscript());
 	const branched = lane.freeze();
 	expect(branched.transcript.base?.fileIdentity.path, "the branched file is the new base").toBe(forkFile);
