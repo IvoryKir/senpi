@@ -1,11 +1,10 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, isModelConfigError } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerFallbackModels } from "../fallback-provider-fixture.ts";
 import { createHarness, type Harness } from "../harness.ts";
 import { MODEL_NOT_FOUND_ANSWERS, NOT_MODEL_NOT_FOUND_ANSWERS } from "../model-not-found-inventory.ts";
-import { isModelConfigError } from "../../../src/core/retry-fallback/model-config-error.ts";
 import { READABLE_PROVIDER_TEXT, SECRET_CELLS } from "../secret-inventory.ts";
 
 // A gateway that does not serve a configured model id answers model_not_found. That is a configuration
@@ -41,6 +40,24 @@ function fallbackLogEvents(harness: Harness): readonly Record<string, unknown>[]
 		.split("\n")
 		.filter((line) => line.length > 0)
 		.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function filesText(dir: string): string {
+	return readdirSync(dir, { recursive: true, encoding: "utf8" })
+		.map((name) => join(dir, name))
+		.filter((path) => statSync(path).isFile())
+		.map((path) => readFileSync(path, "utf8"))
+		.join("\n");
+}
+
+// Every place provider error text can reach: the emitted session events (what RPC, --mode json, the UI and
+// extensions receive), every log file under the agent dir, and the persisted session file.
+function everySink(harness: Harness): Record<string, string> {
+	return {
+		events: JSON.stringify(harness.events),
+		logs: filesText(join(harness.tempDir, "agent", "logs")),
+		session: filesText(join(harness.tempDir, "sessions")),
+	};
 }
 
 function persistedSessionText(harness: Harness): string {
@@ -122,6 +139,27 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 		});
 	});
 
+	for (const [label, errorMessage] of [
+		["a credential value that contains the marker", "400 Bad Request x-api-key: model_not_found=0123456789abcdef"],
+		["a cookie line that runs into the marker", "400 Bad Request Cookie: a=b; unknown provider for model faux-1"],
+	] as const) {
+		it(`classifies on the raw body before redaction (${label})`, async () => {
+			const harness = await chainedHarness(harnesses);
+			harness.setResponses([
+				fauxAssistantMessage("", { stopReason: "error", errorMessage }),
+				fauxAssistantMessage("retry answer"),
+				fauxAssistantMessage("fallback answer"),
+			]);
+
+			await harness.session.prompt("hello");
+
+			expect(harness.faux.getCallLog().map((call) => call.modelId)).toEqual(["faux-1"]);
+			expect(harness.eventsOfType("retry_fallback_applied")).toEqual([]);
+			expect(harness.eventsOfType("model_config_error")).toHaveLength(1);
+			expect(harness.session.state.messages.at(-1)).toMatchObject({ errorCause: { type: "model_config" } });
+		});
+	}
+
 	it("ends the turn on a fallback model that is not served instead of trying the next rung", async () => {
 		const harness = await chainedHarness(harnesses);
 		const notServed = '400 {"code":"model_not_found","message":"unknown provider for model faux-2"}';
@@ -156,13 +194,13 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 
 				const [event] = harness.eventsOfType("model_config_error");
 				expect(event?.errorExcerpt).toMatch(/\[REDACTED\]/);
-				expect(event?.errorExcerpt).not.toContain(cell.secret);
 				expect(event?.errorExcerpt).toContain("model_not_found");
 				expect(lastErrorMessage(harness)).not.toContain(cell.secret);
-				expect(persistedSessionText(harness)).toContain("model_not_found");
-				expect(persistedSessionText(harness)).not.toContain(cell.secret);
-				expect(fallbackLogText(harness)).toMatch(/\[REDACTED\]/i);
-				expect(fallbackLogText(harness)).not.toContain(cell.secret);
+				const sinks = everySink(harness);
+				expect(sinks.logs).toMatch(/\[REDACTED\]/i);
+				for (const [sink, text] of Object.entries(sinks)) {
+					expect({ sink, leaked: text.includes(cell.secret) }).toEqual({ sink, leaked: false });
+				}
 			});
 		}
 

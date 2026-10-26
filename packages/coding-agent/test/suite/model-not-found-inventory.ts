@@ -14,6 +14,10 @@ export const MODEL_NOT_FOUND_ANSWERS: readonly (readonly [label: string, message
 	["model_not_found wrapped in a 503", '503 {"code":"model_not_found","message":"model faux-1 not found"}'],
 	["unknown provider for model wrapped in a 502", "502 Bad Gateway: unknown provider for model faux-1"],
 	[
+		"OpenAI prose without the code",
+		'404 {"error":{"message":"The model `faux-1` does not exist","type":"invalid_request_error","param":null,"code":null}}',
+	],
+	[
 		"Anthropic not_found_error naming the model",
 		'404 {"type":"error","error":{"type":"not_found_error","message":"model: faux-1"},"request_id":"req_fixture01"}',
 	],

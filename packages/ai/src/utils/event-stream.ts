@@ -1,4 +1,5 @@
 import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
+import { sanitizeProviderErrorMessage } from "./provider-error.ts";
 
 class FifoQueue<T> {
 	private incoming: T[] = [];
@@ -165,6 +166,20 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 				throw new Error("Unexpected event type for final result");
 			},
 		);
+	}
+
+	// Every provider publishes through this stream, so it is the one boundary where a provider error body enters
+	// our messages: classify it raw, keep only the redacted text (senpi#4282).
+	override push(event: AssistantMessageEvent): void {
+		if ("partial" in event) sanitizeProviderErrorMessage(event.partial);
+		if (event.type === "error") sanitizeProviderErrorMessage(event.error);
+		if (event.type === "done") sanitizeProviderErrorMessage(event.message);
+		super.push(event);
+	}
+
+	override end(result?: AssistantMessage): void {
+		if (result !== undefined) sanitizeProviderErrorMessage(result);
+		super.end(result);
 	}
 }
 

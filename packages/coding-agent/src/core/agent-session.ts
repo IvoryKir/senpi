@@ -352,8 +352,7 @@ import {
 import { createFallbackLogger } from "./retry-fallback/log.ts";
 import {
 	createModelConfigErrorReporter,
-	isModelConfigError,
-	markModelConfigError,
+	isModelConfigFailure,
 	type ModelConfigErrorEvent,
 	type ModelConfigErrorReporter,
 } from "./retry-fallback/model-config-error.ts";
@@ -3475,8 +3474,6 @@ export class AgentSession {
 		// fires; track its exact identity until this event's queued processing
 		// settles so compaction can distinguish pending persistence from stale state.
 		if (event.type === "message_end" && event.message.role === "assistant") {
-			// Before the message is queued for persistence or published: the session file never holds the raw body.
-			markModelConfigError(event.message);
 			this._emitServerFallbackAborted(event.message);
 		}
 
@@ -12426,7 +12423,7 @@ export class AgentSession {
 		if (message.errorMessage?.startsWith(TURN_RETRY_SUPPRESSION_PREFIX)) return false;
 		if (this._isLocalFailure(message)) return false;
 		// A route that does not serve the model fails the same way on every attempt, whatever status wraps it.
-		if (isModelConfigError(message.errorMessage)) return false;
+		if (isModelConfigFailure(message)) return false;
 
 		// Context overflow is handled by compaction, not retry.
 		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
@@ -12511,7 +12508,7 @@ export class AgentSession {
 		return (
 			!message.errorMessage?.startsWith(TURN_RETRY_SUPPRESSION_PREFIX) &&
 			!this._isLocalFailure(message) &&
-			!isModelConfigError(message.errorMessage) &&
+			!isModelConfigFailure(message) &&
 			!this._isClaudeSdkAuthMissError(message) &&
 			!this._isClaudeSdkSameModelRemintError(message) &&
 			message.stopReason === "error" &&
