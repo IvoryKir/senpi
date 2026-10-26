@@ -13,6 +13,7 @@ import type { ThinkingLevelSource } from "../../core/session-thinking-memory.ts"
 import type { SourceInfo } from "../../core/source-info.ts";
 import type { RpcSessionLifecycle } from "./lifecycle-delivery.ts";
 import type { RpcExtensionUIRequest, RpcQuestionUiRequest } from "./rpc-question-types.ts";
+import type { UiAnswerReceipt } from "./ui-answer-ledger.ts";
 
 // ============================================================================
 // Auth provider info (get_auth_providers response)
@@ -103,6 +104,8 @@ export interface RpcSessionModelEntry {
 }
 
 export interface RpcSessionState {
+	/** Latest 64 UI-answer receipts in this session generation, oldest first. */
+	answeredUiRequests?: UiAnswerReceipt[];
 	paused: boolean;
 	pausedNoticeCount: number;
 	holds: { kind: HoldKind; key: string; since: string; data?: unknown; sourceCounts: Record<string, number> }[];
