@@ -1,4 +1,5 @@
 import type { Rule, Ruleset } from "../permission-system/types.ts";
+import { matchesExternalPath } from "./external-pattern.ts";
 import { Wildcard } from "./wildcard.ts";
 
 declare global {
@@ -15,7 +16,12 @@ export function evaluate(permission: string, pattern: string | readonly string[]
 	const patterns = typeof pattern === "string" ? [pattern] : pattern;
 	const matchedRule = rulesets.flat().findLast((rule) => {
 		return (
-			Wildcard.match(permission, rule.permission) && patterns.some((value) => matchesPattern(value, rule.pattern))
+			Wildcard.match(permission, rule.permission) &&
+			patterns.some(
+				(value) =>
+					matchesPattern(value, rule.pattern) ||
+					(permission === "external_directory" && matchesExternalPath(value, rule.pattern)),
+			)
 		);
 	});
 

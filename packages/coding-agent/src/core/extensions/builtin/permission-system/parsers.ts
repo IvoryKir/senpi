@@ -106,7 +106,7 @@ function withExternalDirectoryRequests(
 		{
 			permission: "external_directory",
 			patterns: externalPaths.map(({ target }) => target),
-			always: externalPaths.map(({ target }) => toParentDirectoryPattern(target, scope)),
+			always: externalPaths.map(({ inputPath, target }) => toParentDirectoryPattern(target, scope, inputPath)),
 			...(externalPaths.some(({ inputPath, target }) => inputPath !== target)
 				? { originalPaths: externalPaths.map(({ inputPath }) => inputPath) }
 				: {}),

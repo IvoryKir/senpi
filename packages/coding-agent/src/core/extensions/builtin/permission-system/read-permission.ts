@@ -32,7 +32,7 @@ export const parseReadPermission: ToolPermissionParser = (_toolName, input, cwd)
 		{
 			permission: "external_directory",
 			patterns: [externalTarget],
-			always: [toParentDirectoryPattern(externalTarget, "file")],
+			always: [toParentDirectoryPattern(externalTarget, "file", filePath)],
 			...(filePath !== externalTarget ? { originalPaths: [filePath] } : {}),
 		},
 	];
