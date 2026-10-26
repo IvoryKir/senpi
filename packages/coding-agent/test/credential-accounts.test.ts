@@ -120,7 +120,13 @@ describe("provider-neutral credential accounts", () => {
 			type: "api_key",
 			key: "key-default",
 			accounts: [
-				{ name: "default", key: "key-default", source: "login", blockedUntil: slotUntil, blockReason: "rate_limit" },
+				{
+					name: "default",
+					key: "key-default",
+					source: "login",
+					blockedUntil: slotUntil,
+					blockReason: "rate_limit",
+				},
 			],
 		}));
 		const credentialRevision = await repository.storedCredentialRevision("openai", "default", { key: "key-default" });
