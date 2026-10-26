@@ -96,6 +96,8 @@ export type AuthenticatedQueryInput = {
 	onLongContextFallback?: () => void;
 	/** Full request context estimate, including a resident session's already billed prefix. */
 	contextTokens?: () => number;
+	/** Space reserved for the response, outside the full prompt estimate. */
+	outputReserveTokens?: number;
 	createAttempt?: (
 		input: AuthenticatedAttemptInput,
 	) => RetainableAttempt<SDKMessage> | Promise<RetainableAttempt<SDKMessage>>;
@@ -226,6 +228,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 	const signal = input.signal ?? new AbortController().signal;
 	const pool = await managedPool(input.providerSettings, input.env);
 	let standardWindow = false;
+	let retryAccountName: string | undefined;
 	const buildOptions = (lane: AnthropicSubscriptionTokenInjection): Options => {
 		const options = input.buildOptions(lane);
 		if (standardWindow) {
@@ -239,7 +242,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 	};
 	const onLongContextRefused = (error: unknown): void => {
 		if (isExtraUsageExhausted(error)) {
-			if ((input.contextTokens?.() ?? 0) > CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW) {
+			if ((input.contextTokens?.() ?? 0) > CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW - (input.outputReserveTokens ?? 0)) {
 				const reason = error instanceof Error ? error.message : String(error);
 				throw new Error(
 					`${reason} Top up extra usage to keep the 1M window, or start a new session or compact this session before retrying.`,
@@ -301,6 +304,8 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 				...(input.model === undefined ? {} : { model: input.model }),
 			}),
 		runAttempt: async (slot) => {
+			if (retryAccountName !== slot.name) standardWindow = false;
+			retryAccountName = slot.name;
 			const options = buildOptions(pool.lane);
 			askedLegacyLongContext = asksLegacyLongContext(options.model);
 			const accounts = pool.accounts.map((account) => ({ ...account }));

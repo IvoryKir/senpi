@@ -58,7 +58,13 @@ afterEach(() => {
 	rmSync(directory, { recursive: true, force: true });
 });
 
-type FakeTurn = { body?: string; visible?: boolean; alwaysRefuse?: boolean; contextTokens?: number };
+type FakeTurn = {
+	body?: string;
+	visible?: boolean;
+	alwaysRefuse?: boolean;
+	contextTokens?: number;
+	outputReserveTokens?: number;
+};
 
 function catalogModel(id: string): Model<Api> {
 	const model = getModels("anthropic").find((candidate) => candidate.id === id) as Model<Api> | undefined;
@@ -132,6 +138,7 @@ async function runTurn(lane: "ambient" | "oauth-slots", id: string, turn: FakeTu
 			providerSettings: { tokenInjection: lane },
 			model: id,
 			contextTokens: () => turn.contextTokens ?? 0,
+			outputReserveTokens: turn.outputReserveTokens,
 			onLongContextFallback: () => {
 				fallbacks++;
 			},
@@ -173,8 +180,11 @@ describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion",
 		expect(second.attempts[0].env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
 	});
 
-	it("keeps Claude's reason and actionable guidance when the request cannot fit 200k", async () => {
-		const result = await runTurn(lane, LEGACY, { contextTokens: 200_001 });
+	it.each([
+		{ contextTokens: 200_001, outputReserveTokens: 0 },
+		{ contextTokens: 195_000, outputReserveTokens: 8_192 },
+	])("keeps Claude's reason when prompt and output cannot fit 200k: %j", async (budget) => {
+		const result = await runTurn(lane, LEGACY, budget);
 		expect(result.attempts.map((options) => options.model)).toEqual([`${LEGACY}[1m]`]);
 		expect(String(result.failure)).toContain(EXHAUSTED);
 		expect(String(result.failure)).toMatch(/top up|extra usage/i);

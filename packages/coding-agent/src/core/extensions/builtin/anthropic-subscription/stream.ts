@@ -7,15 +7,15 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { LONG_CONTEXT_FALLBACK_DIAGNOSTIC, LONG_CONTEXT_FALLBACK_NOTICE } from "../../../provider-notices.ts";
 import { getSessionClaudeAccountPin } from "./account-command.ts";
 import { queryWithAuthLane } from "./auth-lane.ts";
-import { estimateColdSeedTokens, markColdSeedOverflow } from "./cold-seed-budget.ts";
+import { markColdSeedOverflow } from "./cold-seed-budget.ts";
 import { CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW } from "./context-window.ts";
 import { buildCustomToolServers } from "./custom-tools.ts";
 import { sdkAssistantFailure, sdkResultFailure, sdkResultFailureUsage } from "./errors.ts";
 import { type ClaudeCodeRun, defaultExecutableDeps, resolveClaudeCodeRun } from "./executable.ts";
+import { estimateLongContextFallbackTokens } from "./long-context-budget.ts";
 import { buildAnthropicSubscriptionQueryOptions } from "./options.ts";
 import { buildDeferredPromptStream, buildPromptBlocks } from "./prompt-bridge.ts";
 import { type PromptCacheTtl, pinOneShotPromptCacheTtl } from "./prompt-cache-ttl.ts";
@@ -151,13 +151,12 @@ export function streamAnthropicSubscription(
 			const useResidentSession =
 				options?.streamKind === "main" && providerSettings.resumeMode !== "off" && options.sessionId !== undefined;
 			const contextTokens = () =>
-				Math.max(
-					estimateContextTokens(context.messages).tokens,
-					estimateColdSeedTokens(
-						context,
-						buildPromptBlocks(context, resolvedTools.customToolNameToSdk, toolWatchNote),
-					),
+				estimateLongContextFallbackTokens(
+					context,
+					buildPromptBlocks(context, resolvedTools.customToolNameToSdk, toolWatchNote),
+					options?.sessionId,
 				);
+			const outputReserveTokens = options?.maxTokens ?? model.maxTokens;
 			if (options?.streamKind === "main" && !useResidentSession) {
 				// The reason must reflect the ACTUAL cause: resume mode "off"
 				// disables the lane by setting, while any other mode simply has no
@@ -187,6 +186,7 @@ export function streamAnthropicSubscription(
 						onContinuityDecision: recordContinuity,
 						onLongContextFallback: recordLongContextFallback,
 						contextTokens,
+						outputReserveTokens,
 						onDispatchShape: (coldSeed, estimatedTokens) => {
 							coldSeedAttempt = coldSeed;
 							coldSeedEstimate = estimatedTokens;
@@ -224,6 +224,7 @@ export function streamAnthropicSubscription(
 						buildOptions,
 						onLongContextFallback: recordLongContextFallback,
 						contextTokens,
+						outputReserveTokens,
 					});
 
 			for await (const message of messages) {

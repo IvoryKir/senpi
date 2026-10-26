@@ -1,13 +1,23 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Api, type AssistantMessage, InMemoryCredentialStore, type Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	InMemoryCredentialStore,
+	type Model,
+	type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import {
 	overrideAuthLaneBoundary,
 	resetAuthLaneBoundary,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/auth-lane.ts";
+import {
+	forgetColdSeedCalibration,
+	restoreColdSeedCalibration,
+} from "../../../src/core/extensions/builtin/anthropic-subscription/cold-seed-budget.ts";
 import { _resetLongContextForTesting } from "../../../src/core/extensions/builtin/anthropic-subscription/long-context.ts";
 import {
 	type Options,
@@ -36,11 +46,12 @@ beforeEach(() => {
 afterEach(() => {
 	resetAuthLaneBoundary();
 	resetSdkBoundary();
+	forgetColdSeedCalibration();
 	_resetLongContextForTesting();
 	rmSync(directory, { recursive: true, force: true });
 });
 
-async function fallbackTurn(content = "hi") {
+async function fallbackTurn(content = "hi", streamOptions: SimpleStreamOptions = {}) {
 	const attempts: Options[] = [];
 	const query: SdkQuery = ({ options }) => {
 		if (!options) throw new Error("Expected SDK options");
@@ -70,7 +81,7 @@ async function fallbackTurn(content = "hi") {
 	const message = await streamAnthropicSubscription(
 		model,
 		{ messages: [{ role: "user", content, timestamp: 1 }] },
-		{ cwd: directory },
+		{ cwd: directory, ...streamOptions },
 	).result();
 	return { message, attempts };
 }
@@ -112,8 +123,30 @@ it("renders both resume and window fallback notices from one message", async () 
 	expect(combined?.split("\n")).toHaveLength(2);
 });
 
-it("does not dispatch a 200k retry for an oversized real stream request", async () => {
-	const { message, attempts } = await fallbackTurn("word ".repeat(200_001));
+// senpi#4065: preserve the billing refusal when prompt plus reserves cannot fit.
+it.each([
+	{ name: "oversized prompt", tokens: 250_001, maxTokens: 8_192, calibration: 1 },
+	{ name: "195k prompt plus output reserve", tokens: 195_000, maxTokens: 8_192, calibration: 1 },
+	{ name: "first-turn preamble", tokens: 180_000, maxTokens: 8_192, calibration: 1 },
+	{ name: "session-calibrated cold seed", tokens: 100_000, maxTokens: 8_192, calibration: 2 },
+])("does not dispatch a doomed 200k retry: $name", async ({ tokens, maxTokens, calibration }) => {
+	const sessionId = "4065-calibrated";
+	restoreColdSeedCalibration(sessionId, [
+		{
+			type: "message",
+			message: {
+				role: "assistant",
+				diagnostics: [
+					{
+						type: "claude_sdk_oauth_cold_seed_overflow",
+						timestamp: 1,
+						details: { estimatedTokens: 100_000, reportedTokens: 100_000 * calibration },
+					},
+				],
+			},
+		},
+	]);
+	const { message, attempts } = await fallbackTurn("x".repeat(tokens * 4), { sessionId, maxTokens });
 	expect(attempts).toHaveLength(1);
 	expect(message.stopReason).toBe("error");
 	expect(message.errorMessage).toContain("You're out of extra usage");
@@ -122,4 +155,11 @@ it("does not dispatch a 200k retry for an oversized real stream request", async 
 	expect(message.diagnostics?.some((diagnostic) => diagnostic.type === LONG_CONTEXT_FALLBACK_DIAGNOSTIC)).not.toBe(
 		true,
 	);
+});
+
+it("still retries when the calibrated prompt and both reserves fit", async () => {
+	const { message, attempts } = await fallbackTurn("x".repeat(150_000 * 4), { maxTokens: 8_192 });
+	expect(attempts).toHaveLength(2);
+	expect(attempts[1].env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("200000");
+	expect(message.stopReason).toBe("stop");
 });
