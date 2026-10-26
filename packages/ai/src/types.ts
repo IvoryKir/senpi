@@ -768,8 +768,11 @@ export interface AssistantMessage {
 	stopDetails?: AssistantStopDetails;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
-	/** Redaction-safe cause retained when a session projects a provider limit as user-facing advice. */
-	errorCause?: { type: "usage_limit"; scope: "account" | "model" };
+	/**
+	 * Redaction-safe cause: a provider limit projected as user-facing advice, or a model id its route does not
+	 * serve (`model_config`, never retried or fallen back).
+	 */
+	errorCause?: { type: "usage_limit"; scope: "account" | "model" } | { type: "model_config"; model: string };
 	/** Structured provider failure family, minted only by a provider adapter from structured error metadata. */
 	providerDiagnostic?: ProviderDiagnostic;
 	/** Explicit owner for an abort initiated by the provider retry watchdog. */
