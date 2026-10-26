@@ -56,6 +56,10 @@ function errorText(error: unknown): string {
 	return String(error);
 }
 
+export function isExtraUsageExhausted(error: unknown): boolean {
+	return EXTRA_USAGE_EXHAUSTED.test(errorText(error).toLowerCase());
+}
+
 export type SdkResultUsage = Extract<SDKMessage, { type: "result" }>["usage"];
 
 /** A failed SDK result keeps the usage it billed so every lane can account for it. */
@@ -117,9 +121,6 @@ export function classifySdkError(error: unknown, askedLegacyLongContext = false)
 
 function classifyErrorKind(error: unknown, askedLegacyLongContext: boolean): SdkErrorClassification {
 	const text = errorText(error).toLowerCase();
-	if (askedLegacyLongContext && EXTRA_USAGE_EXHAUSTED.test(text)) {
-		return { kind: "long_context_unavailable", retryable: true };
-	}
 	// Claude Code reports an account without the 1M window under the rate_limit code. It is a window
 	// entitlement, not a limit: retry at the standard window instead of blocking the account (senpi#3408).
 	if (/\b(?:extra usage|usage credits) (?:is|are) required for long context\b/.test(text)) {
@@ -134,6 +135,9 @@ function classifyErrorKind(error: unknown, askedLegacyLongContext: boolean): Sdk
 	}
 	for (const [code, classification] of Object.entries(SDK_ERROR_CLASSIFICATIONS)) {
 		if (new RegExp(`\\b${code}\\b`).test(text)) return classification ?? OTHER_ERROR;
+	}
+	if (askedLegacyLongContext && isExtraUsageExhausted(error)) {
+		return { kind: "long_context_unavailable", retryable: true };
 	}
 	if (/\b(?:http\s*)?429\b|too many requests|rate[ _-]?limit/.test(text)) {
 		return { kind: "rate_limit", retryable: true };

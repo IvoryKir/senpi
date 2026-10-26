@@ -1,9 +1,10 @@
 import type { AssistantMessage, AssistantMessageDiagnostic } from "@earendil-works/pi-ai";
+import { LONG_CONTEXT_FALLBACK_DIAGNOSTIC, LONG_CONTEXT_FALLBACK_NOTICE } from "../../../core/provider-notices.ts";
 import { theme } from "../theme/theme.ts";
 
 export const CONTINUITY_DIAGNOSTIC_TYPE = "claude_sdk_oauth_session_continuity";
 export const RESUME_FALLBACK_DIAGNOSTIC_TYPE = "claude_sdk_oauth_resume_fallback";
-export const LONG_CONTEXT_FALLBACK_DIAGNOSTIC_TYPE = "claude_sdk_oauth_long_context_fallback";
+export { LONG_CONTEXT_FALLBACK_DIAGNOSTIC as LONG_CONTEXT_FALLBACK_DIAGNOSTIC_TYPE } from "../../../core/provider-notices.ts";
 
 /** Only degradation kinds reach the transcript; healthy kinds stay in session.log and RPC. */
 const DEGRADATION_KINDS = new Set(["flatten", "disabled"]);
@@ -14,8 +15,6 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
 };
 
 const RESUME_FALLBACK_LABEL = "Session continuity lost - resume failed, resent the full conversation";
-const LONG_CONTEXT_FALLBACK_LABEL =
-	"Claude refused the 1M context window - this request was retried on the same model at 200k";
 
 type ContinuityDetails = {
 	kind: string;
@@ -84,9 +83,16 @@ export class ContinuityNoticeTracker {
 	}
 
 	noticeFor(message: AssistantMessage): string | undefined {
+		const notices: string[] = [];
 		for (const diagnostic of message.diagnostics ?? []) {
-			if (diagnostic.type === RESUME_FALLBACK_DIAGNOSTIC_TYPE) return this.format(RESUME_FALLBACK_LABEL);
-			if (diagnostic.type === LONG_CONTEXT_FALLBACK_DIAGNOSTIC_TYPE) return this.format(LONG_CONTEXT_FALLBACK_LABEL);
+			if (diagnostic.type === RESUME_FALLBACK_DIAGNOSTIC_TYPE) {
+				notices.push(this.format(RESUME_FALLBACK_LABEL));
+				continue;
+			}
+			if (diagnostic.type === LONG_CONTEXT_FALLBACK_DIAGNOSTIC) {
+				notices.push(this.format(LONG_CONTEXT_FALLBACK_NOTICE));
+				continue;
+			}
 			const details = continuityDetails(diagnostic);
 			if (!details || !DEGRADATION_KINDS.has(details.kind)) continue;
 			if (details.kind === "disabled") {
@@ -97,16 +103,19 @@ export class ContinuityNoticeTracker {
 				const where =
 					details.settingSource === undefined ? undefined : SETTING_SOURCE_LABELS[details.settingSource];
 				if (where !== undefined) {
-					return this.format(
-						`Session continuity disabled (resumeMode: off, set by ${where}) - resending the conversation each turn${payloadSuffix(details)}`,
+					notices.push(
+						this.format(
+							`Session continuity disabled (resumeMode: off, set by ${where}) - resending the conversation each turn${payloadSuffix(details)}`,
+						),
 					);
+					continue;
 				}
 			}
 			const label = KIND_LABELS[details.kind] ?? "Session continuity degraded";
 			const base = details.reason ? `${label} (${details.reason})` : label;
-			return this.format(`${base}${payloadSuffix(details)}`);
+			notices.push(this.format(`${base}${payloadSuffix(details)}`));
 		}
-		return undefined;
+		return notices.length > 0 ? notices.join("\n") : undefined;
 	}
 
 	private format(text: string): string {

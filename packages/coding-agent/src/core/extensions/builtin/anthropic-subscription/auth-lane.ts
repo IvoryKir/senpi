@@ -20,7 +20,8 @@ import { type AuthenticatedAttemptInput, createAttemptMessages, type RetainableA
 import { recoverAuthBlockedSlots } from "./auth-block-recovery.ts";
 import { hasRequestOauthToken, mergeRequestAuthEnvironment, stripManagedAuthEnvironment } from "./auth-environment.ts";
 import { writeConfigDirCredential } from "./config-dir-credentials.ts";
-import { asksLegacyLongContext } from "./context-window.ts";
+import { asksLegacyLongContext, CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW } from "./context-window.ts";
+import { isExtraUsageExhausted } from "./errors.ts";
 import { runFailover } from "./failover.ts";
 import { markLongContextRefused } from "./long-context.ts";
 import { classifyForRequest, retryAtStandardWindowOnce, sdkFailure, visibleSdkMessage } from "./long-context-retry.ts";
@@ -93,6 +94,8 @@ export type AuthenticatedQueryInput = {
 	onQuery?: (query: ReturnType<SdkQuery>) => void;
 	/** Called once when a refused [1m] request is retried at the 200k window, so the turn can say so. */
 	onLongContextFallback?: () => void;
+	/** Full request context estimate, including a resident session's already billed prefix. */
+	contextTokens?: () => number;
 	createAttempt?: (
 		input: AuthenticatedAttemptInput,
 	) => RetainableAttempt<SDKMessage> | Promise<RetainableAttempt<SDKMessage>>;
@@ -222,6 +225,33 @@ async function prepareSlot(
 export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncGenerator<SDKMessage> {
 	const signal = input.signal ?? new AbortController().signal;
 	const pool = await managedPool(input.providerSettings, input.env);
+	let standardWindow = false;
+	const buildOptions = (lane: AnthropicSubscriptionTokenInjection): Options => {
+		const options = input.buildOptions(lane);
+		if (standardWindow) {
+			options.model = options.model?.replace(/\[1m\]$/, "");
+			options.env = {
+				...options.env,
+				CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW),
+			};
+		}
+		return options;
+	};
+	const onLongContextRefused = (error: unknown): void => {
+		if (isExtraUsageExhausted(error)) {
+			if ((input.contextTokens?.() ?? 0) > CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW) {
+				const reason = error instanceof Error ? error.message : String(error);
+				throw new Error(
+					`${reason} Top up extra usage to keep the 1M window, or start a new session or compact this session before retrying.`,
+				);
+			}
+			// Exhausted balance is not an entitlement verdict: only this request uses 200k.
+			standardWindow = true;
+		} else {
+			markLongContextRefused();
+		}
+		input.onLongContextFallback?.();
+	};
 	if (!pool) {
 		const parentEnvironment = mergeRequestAuthEnvironment(activeBoundary.env(), input.env);
 		const ambientEnvironment: Record<string, string | undefined> = { ...parentEnvironment };
@@ -231,12 +261,12 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 		// Lane-owned variables from buildOptions (the compaction-owner overlay) win over the host.
 		let askedLegacyLongContext = false;
 		const ambientAttempt = async () => {
-			const options = input.buildOptions("ambient");
+			const options = buildOptions("ambient");
 			askedLegacyLongContext = asksLegacyLongContext(options.model);
 			options.env = { ...ambientEnvironment, ...options.env };
 			return createAttemptMessages(input, { accountName: "ambient", accounts: [], authLane: "ambient", options });
 		};
-		yield* retryAtStandardWindowOnce(ambientAttempt, () => askedLegacyLongContext, input.onLongContextFallback);
+		yield* retryAtStandardWindowOnce(ambientAttempt, () => askedLegacyLongContext, onLongContextRefused);
 		return;
 	}
 	pool.accounts = await recoverAuthBlockedSlots({
@@ -271,7 +301,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 				...(input.model === undefined ? {} : { model: input.model }),
 			}),
 		runAttempt: async (slot) => {
-			const options = input.buildOptions(pool.lane);
+			const options = buildOptions(pool.lane);
 			askedLegacyLongContext = asksLegacyLongContext(options.model);
 			const accounts = pool.accounts.map((account) => ({ ...account }));
 			const prepared = await prepareSlot(pool, slot, signal);
@@ -286,10 +316,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 		},
 		classify: (error) => classifyForRequest(error, askedLegacyLongContext),
 		...(input.sessionId === undefined ? {} : { sessionKey: input.sessionId }),
-		onLongContextRefused: () => {
-			markLongContextRefused();
-			input.onLongContextFallback?.();
-		},
+		onLongContextRefused,
 		store: pool.store,
 		providerId: ANTHROPIC_SUBSCRIPTION_PROVIDER_ID,
 		...(input.model === undefined ? {} : { model: input.model }),

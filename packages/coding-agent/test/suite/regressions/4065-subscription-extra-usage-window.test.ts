@@ -58,7 +58,7 @@ afterEach(() => {
 	rmSync(directory, { recursive: true, force: true });
 });
 
-type FakeTurn = { body?: string; visible?: boolean; alwaysRefuse?: boolean };
+type FakeTurn = { body?: string; visible?: boolean; alwaysRefuse?: boolean; contextTokens?: number };
 
 function catalogModel(id: string): Model<Api> {
 	const model = getModels("anthropic").find((candidate) => candidate.id === id) as Model<Api> | undefined;
@@ -131,6 +131,7 @@ async function runTurn(lane: "ambient" | "oauth-slots", id: string, turn: FakeTu
 				}),
 			providerSettings: { tokenInjection: lane },
 			model: id,
+			contextTokens: () => turn.contextTokens ?? 0,
 			onLongContextFallback: () => {
 				fallbacks++;
 			},
@@ -157,10 +158,37 @@ describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion",
 		expect(result.failure).toBeUndefined();
 		expect(result.messages).toEqual([{ type: "result", subtype: "success", result: "ok" }]);
 		expect(result.fallbacks).toBe(1);
-		expect(longContextAvailable()).toBe(false);
-		expect(existsSync(statePath)).toBe(true);
+		expect(longContextAvailable()).toBe(body === EXHAUSTED);
+		expect(existsSync(statePath)).toBe(body !== EXHAUSTED);
 		expect(result.credential).not.toHaveProperty("accounts.0.blockReason");
-		expect(anthropicSubscriptionModels().find((model) => model.id === LEGACY)?.contextWindow).toBe(200_000);
+		expect(anthropicSubscriptionModels().find((model) => model.id === LEGACY)?.contextWindow).toBe(
+			body === EXHAUSTED ? 1_000_000 : 200_000,
+		);
+	});
+
+	it("asks for [1m] again on the next request after exhaustion", async () => {
+		await runTurn(lane, LEGACY);
+		const second = await runTurn(lane, LEGACY);
+		expect(second.attempts[0].model).toBe(`${LEGACY}[1m]`);
+		expect(second.attempts[0].env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
+	});
+
+	it("keeps Claude's reason and actionable guidance when the request cannot fit 200k", async () => {
+		const result = await runTurn(lane, LEGACY, { contextTokens: 200_001 });
+		expect(result.attempts.map((options) => options.model)).toEqual([`${LEGACY}[1m]`]);
+		expect(String(result.failure)).toContain(EXHAUSTED);
+		expect(String(result.failure)).toMatch(/top up|extra usage/i);
+		expect(String(result.failure)).toMatch(/new|compact/i);
+		expect(result.fallbacks).toBe(0);
+		expect(longContextAvailable()).toBe(true);
+		expect(existsSync(statePath)).toBe(false);
+	});
+
+	it("uses coded billing to fail over without a 200k retry", async () => {
+		const result = await runTurn(lane, LEGACY, { body: `${EXHAUSTED} (billing_error)` });
+		expect(result.attempts).toHaveLength(1);
+		expect(result.fallbacks).toBe(0);
+		expect(longContextAvailable()).toBe(true);
 	});
 
 	it.each([NATIVE, LEGACY])("does not retry exhaustion on a plain %s request", async (id) => {
@@ -239,6 +267,6 @@ it("classifies the exhaustion as billing without request context", () => {
 it("reads the exhaustion from Claude's assistant error shape too, keeping the SDK's account verdict without [1m]", () => {
 	const failure = new Error(`${EXHAUSTED} (billing_error)`);
 
-	expect(classifyForRequest(failure, true)).toEqual({ kind: "long_context_unavailable", retryable: true });
+	expect(classifyForRequest(failure, true)).toEqual({ kind: "billing", retryable: true });
 	expect(classifyForRequest(failure, false)).toEqual({ kind: "billing", retryable: true });
 });

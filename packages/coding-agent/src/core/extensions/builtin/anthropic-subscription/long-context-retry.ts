@@ -1,10 +1,9 @@
 import { classifySdkError, type SdkErrorClassification, sdkAssistantFailure, sdkResultFailure } from "./errors.ts";
-import { markLongContextRefused } from "./long-context.ts";
 import { refusalError } from "./refusal.ts";
 import type { SDKMessage } from "./sdk-boundary.ts";
 
 /** Diagnostic on the assistant message of a request that was retried at the 200k window (senpi#4065). */
-export const LONG_CONTEXT_FALLBACK_DIAGNOSTIC = "claude_sdk_oauth_long_context_fallback";
+export { LONG_CONTEXT_FALLBACK_DIAGNOSTIC } from "../../../provider-notices.ts";
 
 export function sdkFailure(message: SDKMessage): unknown | undefined {
 	const refusal = refusalError(message);
@@ -35,15 +34,15 @@ export function classifyForRequest(error: unknown, askedLegacyLongContext: boole
  * The ambient lane has no account failover, so a refused 1M window is retried here: once, and only
  * before anything visible streamed. Messages pass through as they arrive (system/init, api_retry and
  * refusals keep their order and timing); the refused attempt is closed before the retry starts, after
- * the refusal is recorded so the rebuilt options ask for the standard window (senpi#3408).
+ * the refusal handler prepares the rebuilt options for the standard window (senpi#3408).
  */
 export async function* retryAtStandardWindowOnce(
 	attempt: () => Promise<AsyncIterable<SDKMessage>>,
 	askedLegacyLongContext: () => boolean,
-	onFallback?: () => void,
+	onFallback: (error: unknown) => void,
 ): AsyncGenerator<SDKMessage> {
 	const first = (await attempt())[Symbol.asyncIterator]();
-	let refused = false;
+	let refused: { error: unknown } | undefined;
 	let finished = false;
 	try {
 		let visible = false;
@@ -58,7 +57,7 @@ export async function* retryAtStandardWindowOnce(
 				failure !== undefined &&
 				classifyForRequest(failure, askedLegacyLongContext()).kind === "long_context_unavailable"
 			) {
-				refused = true;
+				refused = { error: failure };
 				break;
 			}
 			visible ||= visibleSdkMessage(next.value);
@@ -75,7 +74,6 @@ export async function* retryAtStandardWindowOnce(
 		}
 	}
 	if (!refused) return;
-	markLongContextRefused();
-	onFallback?.();
+	onFallback(refused.error);
 	yield* await attempt();
 }
