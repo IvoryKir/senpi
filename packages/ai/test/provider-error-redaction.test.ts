@@ -16,26 +16,79 @@ const ghp = `ghp_${"FIXTURE".repeat(3)}0008`;
 const sk = `sk-${"proj"}FIXTURE0006`;
 const jwt = ["eyJhbGciOiJub25lIn0", "eyJzdWIiOiJmaXh0dXJlIn0", "Zml4dHVyZS1zaWcx"].join(".");
 
+// senpi#4283: include every prefix alias and JWT, not just the two GitHub alphabets.
+// A body marker catches partial leaks even when the first key consumed the next key's prefix.
+const SUFFIX_SHAPES = [
+	...[
+		["sk-", 12],
+		...["sk_live_", "sk_test_", "rk_live_", "rk_test_"].map((prefix) => [prefix, 24] as const),
+		...["gsk_", "xai-", "hf_"].map((prefix) => [prefix, 24] as const),
+		...["xoxa-", "xoxb-", "xoxo-", "xoxp-", "xoxr-", "xoxs-"].map((prefix) => [prefix, 24] as const),
+		...["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"].map((prefix) => [prefix, 24] as const),
+		...["AKIA", "ASIA"].map((prefix) => [prefix, 16] as const),
+		["AIza", 32],
+	].map(([prefix, length]) => ({
+		label: String(prefix),
+		value: `${prefix}${"F".repeat(Number(length))}`,
+		marker: "F".repeat(12),
+	})),
+	{ label: "JWT", value: jwt, marker: "eyJzdWIiOiJmaXh0dXJlIn0" },
+];
+const SECOND_SHAPES = ["ghp_", "sk-proj-", "xoxb-"].map((prefix) => ({
+	value: `${prefix}${"G".repeat(36)}`,
+	marker: "G".repeat(12),
+}));
+const SUFFIX_SEPARATORS = ["/", ".", ":", "?", "&", "=", "_", "-", "", "z"];
+const SUFFIX_TEMPLATES = [
+	["EN", "rejected ", " while loading configuration"],
+	["KO", "오류: ", " 구성 실패"],
+	["path", "/repo/", " next"],
+	["URL path", "https://example.test/", "?model=faux-1&stream=true"],
+	["URL query", "https://example.test/?value=", "&model=faux-1"],
+	["userinfo", "https://", "@example.test/repo"],
+	["userinfo password", "https://user:", "@example.test/repo"],
+] as const;
+const SUFFIX_CASES = SUFFIX_SHAPES.flatMap((shape) =>
+	SUFFIX_SEPARATORS.flatMap((separator) =>
+		[undefined, ...SECOND_SHAPES].flatMap((second) =>
+			SUFFIX_TEMPLATES.map(([template, before, after]) => ({
+				label: `${shape.label} ${JSON.stringify(separator)} ${second?.value.slice(0, 8) ?? "ordinary"} ${template}`,
+				before,
+				after,
+				value: shape.value,
+				marker: shape.marker,
+				second,
+				text: `${before}${shape.value}${separator}${second?.value ?? ""}${after}`,
+			})),
+		),
+	),
+);
+
 describe.each([
 	["full", redactSecrets],
 	["shapes", redactCredentialShapes],
 ] as const)("credential suffix boundaries (%s)", (_mode, redact) => {
-	it.each(
-		[ghp, `github_pat_${"FIXTURE".repeat(4)}`].flatMap((value) =>
-			[
-				["/hooks.json", "/hooks.json"],
-				[".json", ".json"],
-				[":42", ":42"],
-				["", ""],
-				[`/${ghp}`, "/[REDACTED]"],
-				[`.${ghp}`, ".[REDACTED]"],
-			].map(([suffix, expected]) => ({ value, suffix, expected })),
-		),
-	)("preserves $suffix after $value", ({ value, suffix, expected }) => {
-		const result = redact(`/repo/${value}${suffix}`);
-		expect(result).toBe(`/repo/[REDACTED]${expected}`);
+	it.each(SUFFIX_CASES)("$label", ({ text, value, marker, second, before, after }) => {
+		const result = redact(text);
 		expect(result).not.toContain(value);
-		expect(result).not.toContain(ghp);
+		expect(result).not.toContain(marker);
+		if (second !== undefined) {
+			expect(result).not.toContain(second.value);
+			expect(result).not.toContain(second.marker);
+		}
+		expect(result.startsWith(before)).toBe(true);
+		expect(result.endsWith(after)).toBe(true);
+	});
+
+	it.each(
+		SUFFIX_SHAPES.filter(({ label }) => label !== "JWT").flatMap((shape) =>
+			["/hooks.json", ".json", ":42", ""].map((suffix) => ({ ...shape, suffix })),
+		),
+	)("preserves $suffix after $label", ({ value, marker, suffix }) => {
+		const result = redact(`/repo/${value}${suffix}`);
+		expect(result).toBe(`/repo/[REDACTED]${suffix}`);
+		expect(result).not.toContain(value);
+		expect(result).not.toContain(marker);
 	});
 });
 

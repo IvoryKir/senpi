@@ -99,11 +99,13 @@ function secretRanges(text: string, shapesOnly = false): number[] {
 			slashes === 2 && first.character === 47 && readUnit(text, start + first.length).character === 47;
 		if (!shapesOnly && authority && before.colonOnly && after.colonOnly) userinfoStart = after.end;
 
-		let shape = credentialShapeStart(text, start, end);
-		while (shape >= 0) {
-			const stop = credentialShapeEnd(text, shape, end);
+		const shape = credentialShapeStart(text, start, end);
+		if (shape >= 0) {
+			// A second prefix can begin inside the first alphabet, not just after its end. Keep the old conservative
+			// token span for joined credentials; only an unambiguous single key releases its filename suffix.
+			const joined = credentialShapeStart(text, shape + readUnit(text, shape).length, end, true);
+			const stop = joined >= 0 ? end : credentialShapeEnd(text, shape, end);
 			addRange(ranges, shape, stop);
-			shape = credentialShapeStart(text, stop, end);
 		}
 		if (shapesOnly) continue;
 		if (bearerArmed && valueLength >= MIN_BEARER_LENGTH && !isInert(text, start, end)) {

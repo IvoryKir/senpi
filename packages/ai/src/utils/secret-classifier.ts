@@ -224,16 +224,18 @@ function jwtAt(text: string, p: number, end: number): number {
  * Where the first credential-shaped run in [start, end) begins, or -1: a known key prefix or a JWT at the start of a
  * word anywhere in the token (after "/", "+", "~", "-", "." or "%", so URL userinfo, paths and joined values count),
  * including percent-encoded token punctuation, never inside a word ("tasks-..." is not "sk-...").
+ * After a credential has already been found, withinCredential also checks inside words: an adjoining key may have
+ * had its prefix consumed by the first key's alphabet. The caller retains the whole token in that ambiguous case.
  * Constant work per character plus the JWT walks bounded above.
  */
-export function credentialShapeStart(text: string, start: number, end: number): number {
+export function credentialShapeStart(text: string, start: number, end: number, withinCredential = false): number {
 	let stop = end;
 	while (stop > start && text.charCodeAt(stop - 1) === 46) stop--;
 	let jwtFrom = start;
 	let wordStart = true;
 	for (let p = start; p < stop;) {
 		const unit = readUnit(text, p);
-		const candidate = wordStart;
+		const candidate = withinCredential || wordStart;
 		wordStart = !isWordChar(unit.character);
 		const position = p;
 		p += unit.length;
