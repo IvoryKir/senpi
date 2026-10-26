@@ -6,8 +6,8 @@ import { expect, it } from "vitest";
 const src = fileURLToPath(new URL("../../../src", import.meta.url));
 const journal = join(src, "core/session-transcript-journal.ts");
 
-function callCount(text: string, name: string): number {
-	return (text.match(new RegExp(`(?<!function )\\b${name}\\(`, "g")) ?? []).length;
+function referenceCount(text: string, name: string): number {
+	return (text.match(new RegExp(`(?<!function )\\b${name}\\b`, "g")) ?? []).length;
 }
 
 // Part of #4272 (#4347 review LOW-3, RULING-31): readTranscriptRoot and readPersistedBase still read the session file
@@ -20,8 +20,10 @@ it("keeps the synchronous transcript readers test-only", () => {
 	for (const file of readdirSync(src, { recursive: true, encoding: "utf8" })) {
 		if (!file.endsWith(".ts")) continue;
 		const text = readFileSync(join(src, file), "utf8");
-		if (callCount(text, "readTranscriptRoot") > 0) offenders.push(`${file}: readTranscriptRoot`);
-		if (file !== join("modes", "rpc", "accepted-transcript.ts") && callCount(text, "readPersistedBase") > 0) {
+		const owner = file === join("modes", "rpc", "accepted-transcript.ts");
+		if (referenceCount(text, "readTranscriptRoot") > 0) offenders.push(`${file}: readTranscriptRoot`);
+		const journalOwner = file === join("core", "session-transcript-journal.ts");
+		if (!owner && !journalOwner && referenceCount(text, "readPersistedBase") > 0) {
 			offenders.push(`${file}: readPersistedBase`);
 		}
 	}
