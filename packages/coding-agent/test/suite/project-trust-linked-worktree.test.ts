@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_DIR_NAME } from "../../src/config.ts";
 import type { ProjectTrustContext } from "../../src/core/extensions/types.ts";
 import { resolveProjectTrusted } from "../../src/core/project-trust.ts";
-import { ProjectTrustStore } from "../../src/core/trust-manager.ts";
+import { getSavedProjectTrust, ProjectTrustStore } from "../../src/core/trust-manager.ts";
 
 let scratch: string;
 let store: ProjectTrustStore;
@@ -71,63 +71,63 @@ function promptSpy(): { context: ProjectTrustContext; prompts: string[] } {
 }
 
 describe("a linked git worktree inherits its main checkout's project trust", () => {
-	it("a worktree of a trusted main checkout is trusted, and so is a folder inside it", () => {
+	it("a worktree of a trusted main checkout is trusted, and so is a folder inside it", async () => {
 		const { main, worktree } = linkedWorktree();
 		mkdirSync(join(worktree, "packages", "app"), { recursive: true });
 		store.set(main, true);
 
-		expect(store.get(worktree)).toBe(true);
-		expect(store.get(join(worktree, "packages", "app"))).toBe(true);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
+		expect(await getSavedProjectTrust(store, join(worktree, "packages", "app"))).toBe(true);
 	});
 
-	it("a worktree of an untrusted main checkout is untrusted", () => {
+	it("a worktree of an untrusted main checkout is untrusted", async () => {
 		const { main, worktree } = linkedWorktree();
 		store.set(main, false);
 
-		expect(store.get(worktree)).toBe(false);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(false);
 	});
 
-	it("a main checkout under a trusted parent folder passes that trust on", () => {
+	it("a main checkout under a trusted parent folder passes that trust on", async () => {
 		const { worktree } = linkedWorktree();
 		store.set(join(scratch, "projects"), true);
 
-		expect(store.get(worktree)).toBe(true);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
 	});
 
-	it("a decision saved for the worktree, or a folder above it, wins over the main checkout", () => {
+	it("a decision saved for the worktree, or a folder above it, wins over the main checkout", async () => {
 		const { main, worktree } = linkedWorktree();
 		store.set(main, true);
 		store.set(worktree, false);
-		expect(store.get(worktree)).toBe(false);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(false);
 
 		store.set(worktree, null);
 		store.set(join(scratch, "workspaces"), false);
-		expect(store.get(worktree)).toBe(false);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(false);
 	});
 
-	it("an undecided main checkout leaves the worktree undecided", () => {
+	it("an undecided main checkout leaves the worktree undecided", async () => {
 		const { worktree } = linkedWorktree();
 
-		expect(store.get(worktree)).toBeNull();
+		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
-	it("a worktree whose admin directory does not point back at it inherits nothing", () => {
+	it("a worktree whose admin directory does not point back at it inherits nothing", async () => {
 		const { main, worktree, admin } = linkedWorktree();
 		writeFileSync(join(admin, "gitdir"), `${join(scratch, "elsewhere", ".git")}\n`);
 		store.set(main, true);
 
-		expect(store.get(worktree)).toBeNull();
+		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
-	it("a submodule-style gitdir without a commondir inherits nothing", () => {
+	it("a submodule-style gitdir without a commondir inherits nothing", async () => {
 		const { main, worktree, admin } = linkedWorktree();
 		rmSync(join(admin, "commondir"));
 		store.set(main, true);
 
-		expect(store.get(worktree)).toBeNull();
+		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
-	it("a worktree of a bare or separate-git-dir repository inherits nothing", () => {
+	it("a worktree of a bare or separate-git-dir repository inherits nothing", async () => {
 		const commonDir = join(scratch, "store.git");
 		const admin = join(commonDir, "worktrees", "wt");
 		const worktree = join(scratch, "workspaces", "store", "wt");
@@ -138,16 +138,16 @@ describe("a linked git worktree inherits its main checkout's project trust", () 
 		writeFileSync(join(worktree, ".git"), `gitdir: ${admin}\n`);
 		store.set(commonDir, true);
 
-		expect(store.get(worktree)).toBeNull();
+		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
-	it("a main checkout whose .git is not the common dir is not trusted through it", () => {
+	it("a main checkout whose .git is not the common dir is not trusted through it", async () => {
 		const { main, worktree } = linkedWorktree();
 		rmSync(join(main, ".git"), { recursive: true });
 		writeFileSync(join(main, ".git"), "gitdir: /somewhere/else\n");
 		store.set(main, true);
 
-		expect(store.get(worktree)).toBeNull();
+		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
 	it("starting in a worktree of a trusted repository does not ask, and an untrusted one still asks", async () => {
