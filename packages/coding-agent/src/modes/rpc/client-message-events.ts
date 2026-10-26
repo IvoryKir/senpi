@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentSessionEvent } from "../../core/agent-session.ts";
 import { type ClientMessageIdentity, readClientMessageIdentity } from "../../core/client-message-identity.ts";
+import { carryRecovery } from "../../core/session-recovery-identity.ts";
 import { clientFacingIdentity } from "./client-admission-record.ts";
 
 export const clientInputContext = new AsyncLocalStorage<ClientMessageIdentity>();
@@ -82,7 +83,11 @@ export class ClientMessageEvents {
 			event.type === "agent_end";
 		this.emit(
 			correlated && identity
-				? { ...event, ...identity, ...(this.active.length > 1 ? { clientMessages: this.active } : {}) }
+				? carryRecovery(event, {
+						...event,
+						...identity,
+						...(this.active.length > 1 ? { clientMessages: this.active } : {}),
+					})
 				: event,
 		);
 	}

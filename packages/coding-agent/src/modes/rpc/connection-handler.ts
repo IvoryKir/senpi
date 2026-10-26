@@ -62,6 +62,7 @@ import type {
 import { ExtensionRpcRequestNotFoundError } from "../../core/extensions/runner.ts";
 import { attachMcpGrantPresentation } from "../../core/mcp-grant-presentations.ts";
 import { describeUsageLimitEntry, describeUsageLimitMessage } from "../../core/retry-fallback/usage-limit.ts";
+import { carryRecovery } from "../../core/session-recovery-identity.ts";
 import { subscriptionLimits } from "../../core/subscription-limits/limit-store.ts";
 import { storedKeyHint, verifyApiKey } from "../../core/verify-api-key.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
@@ -394,7 +395,7 @@ export function createRpcConnectionHandler(
 	});
 
 	const tagSessionRecord = <T extends object>(value: T): T | (T & { sessionId: string }) =>
-		routingSessionId === undefined ? value : { ...value, sessionId: routingSessionId };
+		routingSessionId === undefined ? value : carryRecovery(value, { ...value, sessionId: routingSessionId });
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		const record = tagSessionRecord(obj);
