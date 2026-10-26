@@ -121,7 +121,7 @@ try {
 				writeFileSync(join(pkg, "package.json"), '{"name":"permission-native","type":"module","main":"index.js"}');
 				writeFileSync(
 					join(pkg, "index.js"),
-					"import {appendFileSync} from 'node:fs';import {spawnSync} from 'node:child_process';export const put=p=>appendFileSync(p,'bad');export const spawn=p=>spawnSync(p);",
+					"import {appendFileSync} from 'node:fs';import {spawnSync} from 'node:child_process';import Database from 'bun:sqlite';export const put=p=>appendFileSync(p,'bad');export const spawn=p=>spawnSync(p);export const database=p=>new Database(p);",
 				);
 				denied.clear();
 				denied.add(q);
@@ -134,6 +134,13 @@ try {
 				chmodSync(q, 0o755);
 				await check("native dependency spawn", "const lib=await import('permission-native');lib.spawn(q)", active);
 				assert.equal(existsSync(marker), !active);
+				rmSync(q, { force: true });
+				await check(
+					"native dependency database",
+					"const lib=await import('permission-native');lib.database(q).close()",
+					active,
+				);
+				assert.equal(existsSync(q), !active);
 			} finally {
 				await kernel.close();
 			}

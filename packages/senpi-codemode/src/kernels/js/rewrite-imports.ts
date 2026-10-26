@@ -180,11 +180,23 @@ export function rewriteImports(code: string): string {
 
 /** Host-side preflight: worker assets stay dependency-free, and direct eval keeps native lexical scope. */
 export function hasDynamicCodeCapability(code: string): boolean {
-	if (!/\b(?:eval|Function)\b/u.test(code)) return false;
+	if (!/\b(?:eval|Function|plugin)\b/u.test(code)) return false;
 	const ast = parseProgram(code);
 	if (!ast) return false;
 	let unsupported = false;
 	walkNodes(ast.program, (node) => {
+		if (node.type === "MemberExpression" && !node.value.computed) {
+			const owner = nodeFrom(node.value.object);
+			const member = nodeFrom(node.value.property);
+			const outer = owner && nodeFrom(owner.value.object);
+			const inner = owner && nodeFrom(owner.value.property);
+			if (
+				member?.value.name === "plugin" &&
+				(owner?.value.name === "Bun" || (outer?.value.name === "globalThis" && inner?.value.name === "Bun"))
+			) {
+				unsupported = true;
+			}
+		}
 		if (node.type !== "CallExpression" && node.type !== "NewExpression") return;
 		const callee = nodeFrom(node.value.callee);
 		const object = callee && nodeFrom(callee.value.object);

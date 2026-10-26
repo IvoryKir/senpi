@@ -7,6 +7,7 @@ export const capabilityCases = [
 	["process.dlopen", "process.dlopen({exports:{}},'/missing_permission_fixture.node')"],
 	[".node addon", "require(addon)"],
 	["Bun.plugin", "Bun.plugin({name:'cell',setup(){}})"],
+	["globalThis.Bun.plugin", "globalThis.Bun.plugin({name:'cell-global',setup(){}})"],
 	["module.register", "require('node:module').register('file:///missing_permission_fixture.mjs')"],
 	["require.cache mutation", "require.cache.fake={exports:{}}"],
 	["Module._load mutation", "const m=require('node:module');m._load=m._load"],
