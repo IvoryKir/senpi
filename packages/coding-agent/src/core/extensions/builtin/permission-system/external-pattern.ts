@@ -132,7 +132,7 @@ function matchesExternalPath(
 				(!preserveAncestry || sameLexicalPath(ancestor, prefix))
 			) {
 				if (tail.length === 0 && suffix.length > 0) return false;
-				return matchesSuffix(ancestor, tail, suffix.join("/").split(sep).join("/"), stat);
+				return matchesSuffix(ancestor, tail, suffix.join("/").split(sep).join("/"));
 			}
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
@@ -145,17 +145,12 @@ function matchesExternalPath(
 	}
 }
 
-function matchesComponent(
-	parent: string,
-	value: string,
-	pattern: string,
-	stat: (value: string) => BigIntStats,
-): boolean {
+function matchesComponent(parent: string, value: string, pattern: string): boolean {
 	if (Wildcard.match(value, pattern)) return true;
 	if (!Wildcard.match(value.toLowerCase(), pattern.toLowerCase())) return false;
 
 	// Instantiate the rule's literal spelling, retaining what each wildcard consumed.
-	// Case-insensitive text matching only proposes an alias: stat must prove it.
+	// Case-insensitive text matching only proposes an alias: lexical entry identity must prove it.
 	const spelling = value.split("");
 	let valueIndex = 0;
 	let patternIndex = 0;
@@ -181,22 +176,10 @@ function matchesComponent(
 	}
 	while (pattern[patternIndex] === "*") patternIndex++;
 	if (patternIndex !== pattern.length) return false;
-	try {
-		const actual = stat(join(parent, value));
-		const candidate = stat(join(parent, spelling.join("")));
-		return actual.dev === candidate.dev && actual.ino === candidate.ino;
-	} catch {
-		// A missing component has no case identity; its spelling must match exactly.
-		return false;
-	}
+	return sameLexicalPath(join(parent, value), join(parent, spelling.join("")));
 }
 
-function matchesSuffix(
-	parent: string,
-	parts: readonly string[],
-	pattern: string,
-	stat: (value: string) => BigIntStats,
-): boolean {
+function matchesSuffix(parent: string, parts: readonly string[], pattern: string): boolean {
 	if (Wildcard.match(parts.join("/"), pattern)) return true;
 	let positions = new Set([0]);
 	for (let index = 0; index < parts.length; index++) {
@@ -204,7 +187,7 @@ function matchesSuffix(
 		const next = new Set<number>();
 		for (const start of positions) {
 			if (index === parts.length - 1) {
-				if (matchesComponent(parent, value, pattern.slice(start), stat)) return true;
+				if (matchesComponent(parent, value, pattern.slice(start))) return true;
 				continue;
 			}
 			// Wildcard.match lets both * and ? consume '/'. Keep every possible
@@ -214,7 +197,7 @@ function matchesSuffix(
 				const token = pattern[end];
 				if (token !== "*" && token !== "?" && token !== "/") continue;
 				const component = pattern.slice(start, token === "*" ? end + 1 : end);
-				if (matchesComponent(parent, value, component, stat)) next.add(token === "*" ? end : end + 1);
+				if (matchesComponent(parent, value, component)) next.add(token === "*" ? end : end + 1);
 				if (token === "/") break;
 			}
 		}
