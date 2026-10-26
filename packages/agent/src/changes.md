@@ -1,26 +1,3 @@
-## 2026-10-26 - Tool execution behind one ToolHost boundary (senpi#4360, brain/hand split step 1)
-
-### What changed
-
-- `packages/agent/src/types.ts`: new `ToolHost` and `ToolHostCall`. `AgentLoopConfig.toolHost` is optional.
-- `packages/agent/src/agent-loop.ts`:
-  - `executePreparedToolCall` hands the prepared, validated call to `toolHost.execute` instead of calling `tool.execute` itself;
-  - the sequential batch, the parallel batch and `runToolCall` (`RunToolCallOptions.toolHost`) all pass the host;
-  - `localToolHost` (exported) is the default and runs `tool.execute` in-process, exactly as before.
-- The loop keeps name resolution, argument preparation, schema validation, the before/after hooks, events and abort handling.
-
-### Why
-
-- Q (2026-10-26): senpi's brain (the agent loop) and its hands (tool execution) must be separated, with one clean boundary, fusable in one process (the default) and runnable apart. This is the seam that a process-local or relay hand (`omo --hand`) implements later. There is no behaviour change for existing callers.
-
-### Why an extension could not handle it
-
-- Extensions register tools; they cannot replace the loop's own execution step for every tool.
-
-### Expected merge conflict zones
-
-- LOW: `agent-loop.ts` `executePreparedToolCall` and its three call sites.
-
 ## 2026-10-25 - Internal-only ordered agent channel for capture records (senpi#4277, part of #4272)
 
 ### What changed

@@ -162,6 +162,8 @@ export interface AgentOptions {
 	abortServerSideFallback?: boolean;
 	/** Cursor exec-channel tool handlers; see {@link AgentLoopConfig.cursorExecHandlers}. */
 	cursorExecHandlers?: AgentLoopConfig["cursorExecHandlers"];
+	/** Where prepared tool calls execute (senpi#4360); see {@link AgentLoopConfig.toolHost}. */
+	toolHost?: AgentLoopConfig["toolHost"];
 }
 
 /**
@@ -336,6 +338,7 @@ export class Agent {
 	public abortServerSideFallback?: boolean;
 	/** Cursor exec-channel tool handlers; see {@link AgentLoopConfig.cursorExecHandlers}. */
 	public cursorExecHandlers?: AgentLoopConfig["cursorExecHandlers"];
+	public toolHost?: AgentLoopConfig["toolHost"];
 
 	async buildProviderContext(context: AgentContext, signal?: AbortSignal): Promise<TranscriptContext> {
 		return buildProviderContextFromAgentContext(
@@ -376,6 +379,7 @@ export class Agent {
 		this.resolveUnknownToolCall = runtimeOptions.resolveUnknownToolCall;
 		this.abortServerSideFallback = runtimeOptions.abortServerSideFallback;
 		this.cursorExecHandlers = runtimeOptions.cursorExecHandlers;
+		this.toolHost = runtimeOptions.toolHost;
 	}
 
 	/**
@@ -767,6 +771,7 @@ export class Agent {
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			abortServerSideFallback: this.abortServerSideFallback,
 			cursorExecHandlers: this.cursorExecHandlers,
+			toolHost: this.toolHost,
 			toolExecution: this.toolExecution,
 			removedToolHints: this.removedToolHints,
 			resolveUnknownToolCall: this.resolveUnknownToolCall,

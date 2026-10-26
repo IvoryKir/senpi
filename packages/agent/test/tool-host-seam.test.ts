@@ -8,8 +8,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { agentLoop, localToolHost, runToolCall, type ToolHost } from "../src/agent-loop.ts";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool } from "../src/types.ts";
+import { Agent } from "../src/agent.ts";
+import { agentLoop, localToolHost, runToolCall } from "../src/agent-loop.ts";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentTool, ToolHost } from "../src/types.ts";
 
 /**
  * senpi#4360: tool execution sits behind one ToolHost boundary. The loop keeps name resolution, argument
@@ -82,13 +83,13 @@ function isLlmMessage(message: AgentMessage): message is Message {
 
 type Seen = { toolCallId: string; toolName: string; args: unknown };
 const recordingHost = (seen: Seen[], reply?: (call: Seen) => Record<string, unknown>): ToolHost => ({
-	async execute(call, signal, onUpdate) {
+	async execute(call, signal, onUpdate, local) {
 		seen.push({ toolCallId: call.toolCallId, toolName: call.toolName, args: call.args });
 		if (reply) {
 			onUpdate?.({ content: [{ type: "text", text: "partial" }], details: {} } as never);
 			return reply(call) as never;
 		}
-		return localToolHost.execute(call, signal, onUpdate);
+		return localToolHost.execute(call, signal, onUpdate, local);
 	},
 });
 function echoTool(name: string, sequential = false): AgentTool<ReturnType<typeof Type.Object>, unknown> {
@@ -108,12 +109,13 @@ async function runCalls(
 	config: Partial<AgentLoopConfig>,
 	tools: ReturnType<typeof echoTool>[],
 	calls: { id: string; name: string; arguments: Record<string, unknown> }[],
+	signal?: AbortSignal,
 ) {
 	const context: AgentContext = { systemPrompt: "", messages: [], tools };
 	const full: AgentLoopConfig = { model: createModel(), convertToLlm: (m) => m.filter(isLlmMessage), ...config };
 	let llmCalls = 0;
 	const events: AgentEvent[] = [];
-	const stream = agentLoop([createUserMessage("go")], context, full, undefined, () => {
+	const stream = agentLoop([createUserMessage("go")], context, full, signal, () => {
 		llmCalls++;
 		const s = new MockAssistantStream();
 		queueMicrotask(() =>
@@ -235,5 +237,83 @@ describe("ToolHost seam (senpi#4360)", () => {
 	it("with no host configured, the local in-process host runs the tool (fused mode, unchanged)", async () => {
 		const events = await runCalls({}, [echoTool("echo")], [{ id: "a", name: "echo", arguments: { n: 5 } }]);
 		expect(results(events)).toEqual([{ id: "a", text: "local 5", isError: false }]);
+	});
+	it("the call record is serializable (no live tool object) and its args are the loop's prepared args", async () => {
+		const received: unknown[] = [];
+		const prepared: unknown[] = [];
+		await runCalls(
+			{
+				toolHost: {
+					async execute(call, signal, onUpdate, local) {
+						received.push(call);
+						expect(Object.keys(call).sort()).toEqual(["args", "toolCallId", "toolName"]);
+						expect(JSON.parse(JSON.stringify(call))).toEqual(call);
+						return localToolHost.execute(call, signal, onUpdate, local);
+					},
+				},
+				beforeToolCall: async ({ args }) => {
+					prepared.push(args);
+					return undefined;
+				},
+			},
+			[echoTool("echo")],
+			[{ id: "a", name: "echo", arguments: { n: "7" } }],
+		);
+		expect((received[0] as { args: unknown }).args).toBe(prepared[0]);
+	});
+	it("localToolHost refuses a call without the in-process tool (a remote call record alone cannot run locally)", async () => {
+		await expect(
+			Promise.resolve().then(() =>
+				localToolHost.execute({ toolCallId: "x", toolName: "echo", args: {} }, undefined, () => {}),
+			),
+		).rejects.toThrow("localToolHost needs the in-process tool");
+	});
+	it("abort settles the call even when the host ignores the signal", async () => {
+		const controller = new AbortController();
+		const host: ToolHost = {
+			execute: () => {
+				queueMicrotask(() => controller.abort());
+				return new Promise(() => {});
+			},
+		};
+		const events = await runCalls(
+			{ toolHost: host },
+			[echoTool("echo")],
+			[{ id: "a", name: "echo", arguments: { n: 1 } }],
+			controller.signal,
+		);
+		expect(results(events)).toEqual([{ id: "a", text: "Tool execution aborted", isError: true }]);
+	});
+	it("Agent passes its toolHost option to the loop", async () => {
+		const seen: Seen[] = [];
+		let llmCalls = 0;
+		const agent = new Agent({
+			toolHost: recordingHost(seen, (c) => ({
+				content: [{ type: "text", text: `host ${c.toolCallId}` }],
+				details: {},
+			})),
+			initialState: { model: createModel(), tools: [echoTool("echo")] },
+			convertToLlm: (m) => m.filter(isLlmMessage),
+			streamFn: () => {
+				llmCalls++;
+				const s = new MockAssistantStream();
+				queueMicrotask(() =>
+					s.push({
+						type: "done",
+						reason: llmCalls === 1 ? "toolUse" : "stop",
+						message:
+							llmCalls === 1
+								? createAssistantMessage(
+										[{ type: "toolCall", id: "g", name: "echo", arguments: { n: 9 } }],
+										"toolUse",
+									)
+								: createAssistantMessage([{ type: "text", text: "done" }], "stop"),
+					}),
+				);
+				return s;
+			},
+		});
+		await agent.prompt("go");
+		expect(seen).toEqual([{ toolCallId: "g", toolName: "echo", args: { n: 9 } }]);
 	});
 });

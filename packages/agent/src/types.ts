@@ -629,11 +629,17 @@ export type AgentEvent =
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
 
-/** One prepared, validated tool call handed to a {@link ToolHost}. `tool` is the resolved tool (for the local host). */
+/**
+ * One prepared, validated tool call handed to a {@link ToolHost}. Serializable: it can cross a process or machine
+ * boundary unchanged (a remote hand resolves `toolName` in its own registry).
+ */
 export interface ToolHostCall {
 	toolCallId: string;
 	toolName: string;
 	args: unknown;
+}
+/** In-process only: the resolved tool for a host running in the loop's own process. A remote host ignores it. */
+export interface LocalToolBinding {
 	tool: AgentTool;
 }
 /**
@@ -646,5 +652,6 @@ export interface ToolHost {
 		call: ToolHostCall,
 		signal: AbortSignal | undefined,
 		onUpdate: (partialResult: AgentToolResult<unknown>) => void,
+		local?: LocalToolBinding,
 	): Promise<AgentToolResult<unknown>>;
 }

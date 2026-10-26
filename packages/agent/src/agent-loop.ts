@@ -1546,10 +1546,12 @@ function emitToolExecutionUpdate(toolCall: AgentToolCall, emit: AgentEventSink):
 		});
 }
 
-export type { ToolHost, ToolHostCall } from "./types.ts";
 /** The fused mode: run the tool in this process, as the loop always did. */
 export const localToolHost: ToolHost = {
-	execute: (call, signal, onUpdate) => call.tool.execute(call.toolCallId, call.args as never, signal, onUpdate),
+	execute: (call, signal, onUpdate, local) => {
+		if (!local) throw new Error(`localToolHost needs the in-process tool for "${call.toolName}"`);
+		return local.tool.execute(call.toolCallId, call.args as never, signal, onUpdate);
+	},
 };
 
 /** Options for {@link runToolCall}. */
@@ -1602,12 +1604,13 @@ async function executePreparedToolCall(
 
 	try {
 		const execution = toolHost.execute(
-			{ toolCallId: prepared.toolCall.id, toolName: prepared.tool.name, args: prepared.args, tool: prepared.tool },
+			{ toolCallId: prepared.toolCall.id, toolName: prepared.tool.name, args: prepared.args },
 			signal,
 			(partialResult) => {
 				if (!acceptingUpdates) return;
 				updateEvents.push(Promise.resolve(onUpdate(partialResult)));
 			},
+			{ tool: prepared.tool },
 		);
 		const abortRelease = abortReleasePromise(signal);
 		const settled = abortRelease ? await Promise.race([execution, abortRelease]) : await execution;
