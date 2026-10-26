@@ -10,7 +10,7 @@ export type MovedPathToolClass =
 	| { readonly kind: "patch" }
 	/** Shell text: path tokens in the command plus the call's working directory. */
 	| { readonly kind: "command"; readonly field: string }
-	/** Launches a program: every string argument (command, args, cwd, env, probe) is command text, plus the cwd. */
+	/** Launches a program: every string argument (command, args, cwd, env, probe) is command text, plus the resolved launch cwd. */
 	| { readonly kind: "launch" }
 	/** Named input fields holding paths the tool writes or reads. */
 	| { readonly kind: "paths"; readonly write: readonly string[]; readonly read: readonly string[] }

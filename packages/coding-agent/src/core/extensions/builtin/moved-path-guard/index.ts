@@ -57,7 +57,11 @@ function targets(toolName: string, input: Record<string, unknown>, cwd: string):
 				),
 			];
 		case "launch":
-			return of([cwd, ...commandPaths(allStrings(input).join("\n"), cwd)]);
+			// The program runs in its own working directory, so that is a target by itself, not only text to scan.
+			return of([
+				typeof input.cwd === "string" ? resolve(cwd, input.cwd) : cwd,
+				...commandPaths(allStrings(input).join("\n"), cwd),
+			]);
 		case undefined:
 			return of(commandPaths(allStrings(input).join("\n"), cwd));
 		case "filesystem-policy":
