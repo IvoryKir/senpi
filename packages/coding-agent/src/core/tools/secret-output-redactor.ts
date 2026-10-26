@@ -36,8 +36,8 @@ function isJwt(token: string): boolean {
 }
 
 /**
- * One redactor per output stream. Only complete tokens leave push(); finish() seals EOF.
- * No raw token, quoted assignment value, or PEM body reaches output storage while undecided.
+ * One redactor per output stream. push() holds incomplete tokens; finish() seals EOF.
+ * flushIdle() publishes ordinary fragments but retains their logical token for re-evaluation.
  */
 export class SecretOutputRedactor {
 	private token = "";
@@ -200,8 +200,8 @@ export class SecretOutputRedactor {
 	}
 
 	/**
-	 * Publish an idle prompt without treating the pause as a token boundary. A possible
-	 * credential is masked now and its continuation remains suppressed until a delimiter.
+	 * Publish an idle prompt without treating the pause as a token boundary. Only a
+	 * complete credential shape is masked; its continuation stays suppressed until a delimiter.
 	 */
 	flushIdle(): string {
 		if (this.finished || this.oversized) return "";
@@ -209,24 +209,11 @@ export class SecretOutputRedactor {
 		// A PEM opener has spaces: keep parsing it rather than suppressing only its
 		// first word and accidentally releasing the following private-key body.
 		if (token.length > 0 && "-----BEGIN".startsWith(token)) return "";
-		let possibleSecret = this.bearer || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
-		for (let i = 0; !possibleSecret && i < token.length; i++) {
-			if (i > 0 && /[A-Za-z0-9]/.test(token.charAt(i - 1))) continue;
-			const suffix = token.slice(i);
-			possibleSecret = [...SECRET_PREFIXES, "AKIA", "AIza"].some(
-				(prefix) => prefix.startsWith(suffix) || suffix.startsWith(prefix),
-			);
-		}
-		// JSON JWT headers begin with an object, optionally preceded by JSON whitespace.
-		const header = token.split(".")[0] ?? "";
-		if (/^[eICD]/.test(header)) {
-			const decoded = Buffer.from(header, "base64url").toString("utf8").trimStart();
-			possibleSecret ||= decoded.length === 0 || decoded.startsWith("{");
-		}
-		const output = possibleSecret && token.length > 0 ? this.controls + REDACTED : this.rawToken;
+		const secret = this.isSecret(token);
+		const output = secret ? this.controls + REDACTED : this.rawToken;
 		this.rawToken = "";
 		this.controls = "";
-		if (possibleSecret && token.length > 0) {
+		if (secret) {
 			this.token = "";
 			this.oversized = true;
 		}
@@ -243,6 +230,10 @@ export class SecretOutputRedactor {
 		return tail + this.flushToken();
 	}
 
+	private isSecret(token: string): boolean {
+		return (this.bearer && BEARER_VALUE.test(token)) || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
+	}
+
 	private flushToken(): string {
 		if (this.oversized) {
 			this.oversized = false;
@@ -256,8 +247,7 @@ export class SecretOutputRedactor {
 		this.rawToken = "";
 		this.controls = "";
 		if (token.length === 0) return rawToken;
-		const secret =
-			(this.bearer && BEARER_VALUE.test(token)) || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
+		const secret = this.isSecret(token);
 		this.bearer = !secret && /^Bearer$/i.test(token);
 		return secret ? controls + REDACTED : rawToken;
 	}

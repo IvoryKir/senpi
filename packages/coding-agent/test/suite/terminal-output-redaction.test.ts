@@ -69,34 +69,79 @@ describe("persistent terminal output redaction", () => {
 			vi.useRealTimers();
 		}
 	});
-	it.each(["Enter name", "\x1b[10;5H", "Enter name\x1b[10;5H"])(
-		"flushes idle prompt text and complete controls: %j",
-		async (input) => {
-			vi.useFakeTimers();
-			const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
-			const session = pty.sessions.at(-1);
-			assert(session);
-			const observed: string[] = [];
-			runtime.onOutput((text) => observed.push(text));
-			try {
-				session.emit(input);
+	// senpi#4358: idle output must use complete-token rules, not possible-prefix rules.
+	it.each([
+		"Enter name",
+		"\x1b[10;5H",
+		"Enter name\x1b[10;5H",
+		"I",
+		"e.g.",
+		"git",
+		"sk",
+		"AI",
+		"s",
+		"g",
+		"x",
+		"A",
+		"AK",
+		"e",
+		"C",
+		"D",
+		"eye",
+		"Bearer ordinary",
+	])("flushes idle prompt text and complete controls: %j", async (input) => {
+		vi.useFakeTimers();
+		const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
+		const session = pty.sessions.at(-1);
+		assert(session);
+		const observed: string[] = [];
+		runtime.onOutput((text) => observed.push(text));
+		try {
+			session.emit(input);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(observed.join("")).toBe(input);
+			expect(runtime.readDelta().text).toBe(input);
+			expect(runtime.snapshot().visibleGrid).toEqual([input]);
+			session.emit(" next\n");
+			expect(runtime.fullOutput()).toBe(`${input} next\n`);
+		} finally {
+			runtime.dispose();
+			expect(vi.getTimerCount()).toBe(0);
+			vi.useRealTimers();
+		}
+	});
+	it("preserves ordinary words continued across repeated idle pauses", async () => {
+		vi.useFakeTimers();
+		const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
+		const session = pty.sessions.at(-1);
+		assert(session);
+		try {
+			for (const part of ["going to s", "l", "eep now"]) {
+				session.emit(part);
 				await vi.advanceTimersByTimeAsync(100);
-				expect(observed.join("")).toBe(input);
-				expect(runtime.readDelta().text).toBe(input);
-				expect(runtime.snapshot().visibleGrid).toEqual([input]);
-				session.emit(" next\n");
-				expect(runtime.fullOutput()).toBe(`${input} next\n`);
-			} finally {
-				runtime.dispose();
-				expect(vi.getTimerCount()).toBe(0);
-				vi.useRealTimers();
 			}
-		},
-	);
-	it("redacts a possible secret prefix on idle and suppresses its continuation", async () => {
+			expect(runtime.fullOutput()).toBe("going to sleep now");
+			session.finish();
+			await runtime.screenReleased();
+			expect(runtime.fullOutput()).toBe("going to sleep now");
+		} finally {
+			runtime.dispose();
+			vi.useRealTimers();
+		}
+	});
+	it("re-evaluates secrets split at every idle boundary and suppresses their completion", async () => {
 		vi.useFakeTimers();
 		try {
 			for (const fixture of secretOutputCases().filter(({ name }) => /^(prefix|AWS|Google|JWT)/.test(name))) {
+				// Prefix tokens need one value character; cloud keys need their full length;
+				// JWTs need a complete header, a payload and the second dot.
+				const minimumLength = fixture.name.startsWith("prefix")
+					? fixture.input.startsWith("sk-")
+						? 4
+						: fixture.input.indexOf("synthetic") + 1
+					: fixture.name === "JWT"
+						? fixture.input.lastIndexOf(".") + 1
+						: fixture.input.length;
 				for (let split = 1; split < fixture.input.length; split++) {
 					const runtime = new TerminalRuntimeSession("synthetic", { redactSecretsInOutput: true });
 					const session = pty.sessions.at(-1);
@@ -104,9 +149,13 @@ describe("persistent terminal output redaction", () => {
 					try {
 						session.emit(fixture.input.slice(0, split));
 						await vi.advanceTimersByTimeAsync(100);
-						expect(runtime.fullOutput()).toBe("<redacted>");
+						const released = split < minimumLength ? fixture.input.slice(0, split) : "";
+						expect(runtime.fullOutput()).toBe(released || "<redacted>");
+						await vi.advanceTimersByTimeAsync(100);
+						expect(runtime.fullOutput()).toBe(released || "<redacted>");
 						session.emit(`${fixture.input.slice(split)} done\n`);
-						expect(runtime.fullOutput()).toBe("<redacted> done\n");
+						expect(runtime.fullOutput()).toBe(`${released}<redacted> done\n`);
+						expect(runtime.fullOutput()).not.toContain(fixture.input);
 					} finally {
 						runtime.dispose();
 					}
