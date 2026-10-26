@@ -22,13 +22,14 @@ import type { ChildExit } from "../../../src/modes/rpc/host-readiness.ts";
 import { hostChildAlive } from "../../../src/modes/rpc/host-stalled-evidence.ts";
 import { writeJsonAtomic } from "../../../src/modes/rpc/host-state-json.ts";
 import { CHILD_KILL_EXIT_TIMEOUT_MS } from "../../../src/modes/rpc/host-stop-intent.ts";
-import { statSocketIdentity, unlinkOwnedSocket } from "../../../src/modes/rpc/socket-ownership.ts";
 import { processStartTimeMs, readProcessStartTime } from "../../../src/utils/process-identity.ts";
 import { processExitEvent } from "../../helpers/process-exit-event.ts";
 import { type GenerationScratch, generationEnv, generationScratch } from "../../helpers/rpc-generation-support.ts";
 import { processAlive } from "../../helpers/spawned-host-reaper.ts";
 
 const fixture = join(import.meta.dirname, "../../fixtures/rpc-child-exit-supervisor.ts");
+// lsof exits 1 with no output when nothing holds the path (socket-ownership.ts lsofSocketHolders).
+const DEAD_SOCKET_LSOF_EXIT = 1;
 const rigs: Array<{ child: ChildProcess; exited: Promise<unknown>; hostPid: number; qa: GenerationScratch }> = [];
 
 async function childIdentityWritten(generation: HostGenerationPaths): Promise<void> {
@@ -133,8 +134,6 @@ async function rig(mode: string) {
 		generation: 0,
 		launchProfileId: "child-exit-test",
 	});
-	const socketIdentity = await statSocketIdentity(qa.socket);
-	if (socketIdentity === undefined) throw new Error("ready supervisor has no public socket identity");
 	return {
 		qa,
 		paths,
@@ -143,7 +142,6 @@ async function rig(mode: string) {
 		exited,
 		wait,
 		messages,
-		socketIdentity,
 		hostPid: host.pid,
 		stderr: () => stderr,
 	};
@@ -295,14 +293,20 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")("
 					["child-exit"],
 				);
 				await expect(access(r.paths.pointerFile)).rejects.toMatchObject({ code: "ENOENT" });
-				// Force the macOS holder probe's unknown result, without a timing-dependent lsof timeout.
+				// The observed-dead supervisor left its public entry behind; the retained child listens only on its
+				// private hop. ensureHost itself must prove that entry dead and replace it. On macOS a refused connect
+				// asks `lsof -t`, whose real answer races a busy host's probe timeout, so answer it deterministically
+				// with the fixture fact (no holder, lsof's exit 1) for this path only; every other lsof call is real.
 				const probeBin = join(r.qa.root, "probe-bin");
 				await mkdir(probeBin);
-				await writeFile(join(probeBin, "lsof"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+				const realLsof = execFileSync("/bin/sh", ["-c", "command -v lsof || true"], { encoding: "utf8" }).trim();
+				await writeFile(
+					join(probeBin, "lsof"),
+					`#!/bin/sh\nif [ "$1" = "-t" ] && [ "$2" = "--" ] && [ "$3" = ${JSON.stringify(r.qa.socket)} ]; then exit ${DEAD_SOCKET_LSOF_EXIT}; fi\n${realLsof ? `exec ${JSON.stringify(realLsof)} "$@"` : "exit 2"}\n`,
+					{ mode: 0o755 },
+				);
 				vi.stubEnv("PATH", `${probeBin}:${process.env.PATH}`);
-				// The observed-dead supervisor owned this entry; the retained child listens only on its private hop.
-				// An unknown lsof result must still refuse foreign entries, not this fixture's proven dead socket.
-				await unlinkOwnedSocket(r.qa.socket, r.socketIdentity, expect.fail);
+				await expect(access(r.qa.socket)).resolves.toBeUndefined();
 				const replacement = await ensureHost({
 					socket: r.qa.socket,
 					agentDir: r.qa.agentDir,
