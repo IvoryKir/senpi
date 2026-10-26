@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
 import { CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore } from "../../../src/modes/rpc/compact-content-store.ts";
+import { CompactIndexTree, type IndexNode } from "../../../src/modes/rpc/compact-index-tree.ts";
 import { controlledIo, spoolRoot } from "../compact-storage-support.ts";
 
 // senpi#4272: a frozen pending overlay must retain a root, not visit every row.
@@ -109,13 +110,31 @@ it("publishes one changed page through bounded paths without copying the large b
 	const store = new CompactContentStore({ dir: root.dir });
 	const index = new CompactContentIndex<{ n: number }>(store, () => [], 1);
 	try {
-		for (let n = 0; n < 1024; n++) index.set(String(n).padStart(5, "0"), { n });
+		const count = 8192;
+		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
 		const old = index.freeze();
+		const touched = index.bases.get(index.base, "00512")?.page.keys.length ?? 0;
+		const bound = 4 * touched * Math.ceil(Math.log2(count));
+		expect(touched).toBeGreaterThan(0);
+		expect(touched).toBeLessThanOrEqual(128);
+		expect(bound).toBeLessThan(count);
 		const before = index.status().allocatedIndexNodes;
 		index.set("00512", { n: -1 });
 		await store.idle();
-		expect(index.status().allocatedIndexNodes - before).toBeLessThanOrEqual(4096);
+		expect(index.status().allocatedIndexNodes - before).toBeLessThanOrEqual(bound);
+		// Negative control: a real full clone allocates more nodes than the permitted changed paths.
+		const clone = new CompactIndexTree<unknown>(() => undefined);
+		let copied: IndexNode<unknown> | undefined;
+		for (const [key, value] of index.bases.entries(old.base)) {
+			const next = clone.set(copied, key, value);
+			clone.adjust(copied, -1, 0);
+			copied = next;
+		}
+		expect(clone.allocatedNodes).toBeGreaterThan(bound);
+		expect(clone.residentNodes).toBeGreaterThan(bound);
+		clone.adjust(copied, -1, 0);
+		expect(clone.residentNodes).toBe(0);
 		const current = index.freeze();
 		try {
 			const oldRow = (await index.page(old, { cut: old, after: "00511" })).rows[0].row;

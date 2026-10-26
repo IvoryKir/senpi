@@ -4,6 +4,7 @@ import { CompactIndexTree, type IndexNode } from "./compact-index-tree.ts";
 import { CompactReadError, CompactReadLease } from "./compact-read-lease.ts";
 import { CompactValues, type ValueRef } from "./compact-values.ts";
 import { CompactIndexCompactor } from "./compact-index-compactor.ts";
+import { readIndexEntries } from "./compact-index-traversal.ts";
 
 export interface IndexRow {
 	readonly key: ValueRef;
@@ -82,19 +83,32 @@ export class CompactContentIndex<Row extends object> {
 
 	set(key: string, row: Row): void {
 		const value = this.values.own(row);
-		const keyRef = this.values.own(key);
-		const payload = this.store.text.own(this.leavesOf(row));
-		this.put(key, { key: keyRef, value, payload }, new Map(), false);
-		for (const ref of [value.owner, keyRef.owner, payload]) this.store.adjust(ref, -1, 0);
+		const refs = [value.owner];
+		try {
+			const keyRef = this.values.own(key);
+			refs.push(keyRef.owner);
+			const payload = this.store.text.own(this.leavesOf(row));
+			refs.push(payload);
+			this.put(key, { key: keyRef, value, payload }, new Map(), false);
+		} finally {
+			for (const ref of refs) this.store.adjust(ref, -1, 0);
+		}
 	}
 
 	patch(key: string, fields: Partial<Row>): void {
 		const current = this.overlays.get(this.overrides, key);
 		const patch = new Map(current?.patch);
-		const owned = Object.entries(fields).map(([name, value]) => [name, this.values.own(value)] as const);
-		for (const [name, ref] of owned) patch.set(name, ref);
-		this.put(key, current?.row, patch, false);
-		for (const [, ref] of owned) this.store.adjust(ref.owner, -1, 0);
+		const owned: ValueRef[] = [];
+		try {
+			for (const [name, value] of Object.entries(fields)) {
+				const ref = this.values.own(value);
+				owned.push(ref);
+				patch.set(name, ref);
+			}
+			this.put(key, current?.row, patch, false);
+		} finally {
+			for (const ref of owned) this.store.adjust(ref.owner, -1, 0);
+		}
 	}
 
 	delete(key: string): void {
@@ -126,23 +140,7 @@ export class CompactContentIndex<Row extends object> {
 
 	/** Compatibility assembly only; recovery descriptors use page(), never this whole-row view. */
 	async entries(cut: FrozenIndex): Promise<Map<string, Row>> {
-		return this.lease(cut).run(async () => {
-			const result = new Map<string, Row>();
-			let after: IndexCursor | undefined;
-			for (;;) {
-				const page = await this.page(cut, after);
-				for (const entry of page.rows) {
-					const value = await this.values.read(entry.row.value);
-					const row: Row = JSON.parse(JSON.stringify(value));
-					if (entry.patch) Object.assign(row, await this.values.read(entry.patch));
-					const key = await this.values.read(entry.row.key);
-					if (typeof key !== "string") throw new CompactReadError("ownership");
-					result.set(key, row);
-				}
-				if (!page.next) return result;
-				after = page.next;
-			}
-		});
+		return this.lease(cut).run(() => readIndexEntries(this, cut));
 	}
 
 	async page(cut: FrozenIndex, cursor?: IndexCursor) {
@@ -155,19 +153,36 @@ export class CompactContentIndex<Row extends object> {
 			let a = base.next(),
 				b = overlay.next(),
 				last: string | undefined;
-			while ((!a.done || !b.done) && rows.length < 128) {
-				const key = a.done ? b.value?.[0] : b.done ? a.value[0] : a.value[0] < b.value[0] ? a.value[0] : b.value[0];
-				if (key === undefined) break;
-				const old = !a.done && a.value[0] === key ? a.value[1] : undefined;
-				const change = !b.done && b.value[0] === key ? b.value[1] : undefined;
-				if (!change?.deleted) {
-					using data = !change?.row && old ? await this.readPage(old.page) : undefined;
-					const row = change?.row ?? (old ? data?.rows[old.offset] : undefined);
-					if (row) rows.push({ row, patch: change?.patchValue });
+			let loaded: Awaited<ReturnType<typeof this.readPage>> | undefined;
+			let from: IndexPage | undefined;
+			try {
+				while ((!a.done || !b.done) && rows.length < 128) {
+					const key = a.done
+						? b.value?.[0]
+						: b.done
+							? a.value[0]
+							: a.value[0] < b.value[0]
+								? a.value[0]
+								: b.value[0];
+					if (key === undefined) break;
+					const old = !a.done && a.value[0] === key ? a.value[1] : undefined;
+					const change = !b.done && b.value[0] === key ? b.value[1] : undefined;
+					if (!change?.deleted) {
+						if (!change?.row && old && from !== old.page) {
+							loaded?.[Symbol.dispose]();
+							loaded = undefined;
+							from = old.page;
+							loaded = await this.readPage(from);
+						}
+						const row = change?.row ?? (old ? loaded?.rows[old.offset] : undefined);
+						if (row) rows.push({ row, patch: change?.patchValue });
+					}
+					last = key;
+					if (!a.done && a.value[0] === key) a = base.next();
+					if (!b.done && b.value[0] === key) b = overlay.next();
 				}
-				last = key;
-				if (!a.done && a.value[0] === key) a = base.next();
-				if (!b.done && b.value[0] === key) b = overlay.next();
+			} finally {
+				loaded?.[Symbol.dispose]();
 			}
 			this.store.assertReadable();
 			if (Buffer.byteLength(JSON.stringify(rows)) > 65_536) throw new CompactReadError("size_limit");

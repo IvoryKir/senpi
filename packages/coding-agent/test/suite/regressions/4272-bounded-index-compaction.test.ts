@@ -44,7 +44,7 @@ it("reclaims partial descriptor merges after an injected read failure", async ()
 		io: {
 			...real,
 			readFile(path) {
-				if (failing && /[/\\]value-/.test(path) && ++reads === 131)
+				if (failing && /[/\\]value-/.test(path) && ++reads === 2)
 					return Promise.reject(new Error("EIO: descriptor merge"));
 				return real.readFile(path);
 			},
