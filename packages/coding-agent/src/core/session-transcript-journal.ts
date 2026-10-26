@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { parseSessionEntryLine, SESSION_READ_BUFFER_SIZE, SessionLineSplitter } from "./session-entry-file.ts";
 import type { FileEntry } from "./session-manager.ts";
 
@@ -19,6 +19,7 @@ export interface PersistedBase {
 
 export type TranscriptUnavailableReason =
 	| "transition_over_worker_frame_limit"
+	| "transcript_file_identity_unavailable"
 	| "transcript_tail_trimmed"
 	| "transcript_tail_over_byte_limit";
 
@@ -76,18 +77,15 @@ function fingerprint(entries: readonly FileEntry[]): string {
 	return hash.digest("hex");
 }
 
-/** The base `entries` form in `path`, and how many of them are history (every entry but the header). */
-export function captureTranscriptBase(
-	path: string,
-	entries: readonly FileEntry[],
-): { readonly base: PersistedBase; readonly history: number } {
-	const stat = statSync(path, { bigint: true });
+/** Describe the loaded/written entries now; the owning descriptor supplies their identity asynchronously. */
+export function captureTranscriptBase(entries: readonly FileEntry[]): {
+	readonly count: number;
+	readonly idFingerprint: string;
+	readonly history: number;
+} {
 	return {
-		base: {
-			fileIdentity: { path, dev: String(stat.dev), ino: String(stat.ino) },
-			count: entries.length,
-			idFingerprint: fingerprint(entries),
-		},
+		count: entries.length,
+		idFingerprint: fingerprint(entries),
 		history: entries.filter((entry) => entry.type !== "session").length,
 	};
 }

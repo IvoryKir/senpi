@@ -24,8 +24,11 @@ export const SESSION_WORKER_LIMITS = {
 
 /** A transition over the frame limit leaves its epoch's transcript unavailable; S12 transfers it in fragments. */
 export function withinFrameLimit(transitions: readonly TranscriptTransition[]): TranscriptTransition[] {
+	// Reserve fixed metadata space; content is charged in the same raw UTF-8 bytes as the accepted tail.
+	const entryOverhead = 1024;
 	return transitions.map((transition) =>
-		Buffer.byteLength(JSON.stringify(transition)) > SESSION_WORKER_LIMITS.outputBytes
+		(transition.kind === "append" ? Buffer.byteLength(transition.entry ?? "") : 0) + entryOverhead >
+		SESSION_WORKER_LIMITS.outputBytes
 			? { kind: "unavailable", reason: "transition_over_worker_frame_limit" }
 			: transition,
 	);

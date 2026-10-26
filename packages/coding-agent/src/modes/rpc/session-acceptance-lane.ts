@@ -214,7 +214,9 @@ export class SessionAcceptanceLane {
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
 	private acceptCorrelation(record: object): void {
-		// Identity-less input within a turn keeps its correlation, but gains no client identity of its own.
+		// Within a turn, any identity-less correlated record other than turn_start (user input, an extension steer, a
+		// mid-turn session_abort, custom-role message_* records) keeps the standing correlation and gains no client identity
+		// of its own; only a new turn boundary ends it (ruling B).
 		const identified = "clientMessageId" in record || "clientTurnId" in record;
 		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
 		if (!identified && this.turnId !== null && field(record, "type") !== "turn_start") return;
