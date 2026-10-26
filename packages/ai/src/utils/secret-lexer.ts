@@ -83,8 +83,7 @@ function percentWindow(text: string, start: number, prefixEnd: number): Unit {
 	}
 	// Without a possible escape no pass can change the window, so do not allocate its fixpoint buffers.
 	if (!needsDecoding) {
-		if (contiguous && limit < text.length)
-			return { character: 37, length: limit - start, refusal: "percent-window" };
+		if (contiguous && limit < text.length) return { character: 37, length: limit - start, refusal: "percent-window" };
 		return { character: 37, length: prefixEnd - start };
 	}
 	const characters = [37];
