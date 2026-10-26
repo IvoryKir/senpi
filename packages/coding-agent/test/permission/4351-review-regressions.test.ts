@@ -57,6 +57,75 @@ describe("4351 binding review regressions", () => {
 		});
 	}
 
+	// senpi#4351 H1-GLOB: case changes after the first wildcard must not evade a deny.
+	for (const [pattern, direct, alternate] of [
+		["*.json", "package.json", "PACKAGE.JSON"],
+		["*.JSON", "package.json", "PACKAGE.JSON"],
+		["*a*.json", "package.json", "PACKAGE.JSON"],
+		["*/File.txt", "Nested/File.txt", "NESTED/FILE.TXT"],
+		["*/Nested/*.txt", "dir/Nested/File.txt", "DIR/NESTED/FILE.TXT"],
+		["*.txt", "dir/Nested/File.txt", "DIR/NESTED/FILE.TXT"],
+		["*?Nested?*.txt", "dir/Nested/File.txt", "DIR/NESTED/FILE.TXT"],
+		["*/Nested/missing/new.txt", "dir/Nested/missing/new.txt", "DIR/NESTED/missing/new.txt"],
+	]) {
+		it(`H1-GLOB: denies both case spellings for ${pattern}`, (context) => {
+			writeFileSync(join(outside, "package.json"), "{}");
+			mkdirSync(join(outside, "Nested"));
+			writeFileSync(join(outside, "Nested", "File.txt"), "fixture");
+			mkdirSync(join(outside, "dir", "Nested"), { recursive: true });
+			writeFileSync(join(outside, "dir", "Nested", "File.txt"), "fixture");
+			const actual = statSync(join(outside, "package.json"), { bigint: true });
+			try {
+				const alias = statSync(join(outside, "PACKAGE.JSON"), { bigint: true });
+				expect(alias.dev).toBe(actual.dev);
+				expect(alias.ino).toBe(actual.ino);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				return context.skip();
+			}
+			const service = new PermissionService(
+				[
+					{ permission: "external_directory", pattern: "*", action: "allow" },
+					{ permission: "external_directory", pattern: `${outside}/${pattern}`, action: "deny" },
+				],
+				[],
+			);
+			for (const target of [direct, alternate]) {
+				const request = external("write", { path: join(outside, target) }, cwd);
+				expect(service.dispatchDecision(request.permission, request.patterns).action).toBe("deny");
+			}
+			const missing = external("write", { path: join(outside, "dir/Nested/missing/NEW.TXT") }, cwd);
+			if (pattern.endsWith("missing/new.txt")) {
+				expect(service.dispatchDecision(missing.permission, missing.patterns).action).toBe("allow");
+			}
+		});
+	}
+
+	it("H1-GLOB: keeps distinct case-sensitive suffixes separate", (context) => {
+		writeFileSync(join(outside, "package.json"), "{}");
+		try {
+			writeFileSync(join(outside, "PACKAGE.JSON"), "other", { flag: "wx" });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			return context.skip();
+		}
+		expect(statSync(join(outside, "package.json")).ino).not.toBe(statSync(join(outside, "PACKAGE.JSON")).ino);
+		const service = new PermissionService(
+			[
+				{ permission: "external_directory", pattern: "*", action: "allow" },
+				{ permission: "external_directory", pattern: `${outside}/*.json`, action: "deny" },
+			],
+			[],
+		);
+		for (const [target, action] of [
+			["package.json", "deny"],
+			["PACKAGE.JSON", "allow"],
+		]) {
+			const request = external("write", { path: join(outside, target) }, cwd);
+			expect(service.dispatchDecision(request.permission, request.patterns).action).toBe(action);
+		}
+	});
+
 	it("H1: reuses persisted Always scopes across external case aliases", async (context) => {
 		const alternate = join(root, "outside");
 		try {
