@@ -67,9 +67,28 @@ export function tokenUnitLength(text: string, i: number): number {
  * Malformed escapes are literal, but an unfinished escape at the window edge is not a proven boundary.
  */
 function percentWindow(text: string, start: number, prefixEnd: number): Unit {
+	const limit = Math.min(text.length, prefixEnd + PERCENT_WINDOW - 1);
+	let needsDecoding = false;
+	let contiguous = true;
+	let previous = 37;
+	for (let p = prefixEnd; p < limit; p++) {
+		const c = text.charCodeAt(p);
+		const hex = hexValue(c) >= 0;
+		if (previous === 37 && hex) {
+			needsDecoding = true;
+			break;
+		}
+		if (c !== 37 && !hex) contiguous = false;
+		previous = c;
+	}
+	// Without a possible escape no pass can change the window, so do not allocate its fixpoint buffers.
+	if (!needsDecoding) {
+		if (contiguous && limit < text.length)
+			return { character: 37, length: limit - start, refusal: "percent-window" };
+		return { character: 37, length: prefixEnd - start };
+	}
 	const characters = [37];
 	const ends = [prefixEnd];
-	const limit = Math.min(text.length, prefixEnd + PERCENT_WINDOW - 1);
 	for (let p = prefixEnd; p < limit; p++) {
 		characters.push(text.charCodeAt(p));
 		ends.push(p + 1);
@@ -96,12 +115,13 @@ function percentWindow(text: string, start: number, prefixEnd: number): Unit {
 
 	const character = characters[0] ?? 37;
 	if (character === 37 && limit < text.length) {
-		const second = characters[1] ?? 37;
-		const third = characters[2] ?? 37;
-		// A later pass could turn an unresolved "%" into a hex digit and complete this escape.
-		if (second === 37 || (hexValue(second) >= 0 && third === 37)) {
-			return { character, length: limit - start, refusal: "percent-window" };
+		// Only a contiguous percent/hex run can depend on text beyond the window. A non-hex literal
+		// breaks the dependency: the percent before it can never decode on any later pass.
+		for (let p = 1; p < characters.length; p++) {
+			const c = characters[p] ?? 0;
+			if (c !== 37 && hexValue(c) < 0) return { character, length: (ends[0] ?? prefixEnd) - start };
 		}
+		return { character, length: limit - start, refusal: "percent-window" };
 	}
 	return { character, length: (ends[0] ?? prefixEnd) - start };
 }

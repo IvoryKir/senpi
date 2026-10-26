@@ -75,6 +75,27 @@ for (const separator of ["/", ":", "@", "=", "?", "&", "#", " ", "+", "~", "-", 
 }
 
 describe("encoded separator equivalence", () => {
+	describe.each([
+		["full", redactSecrets],
+		["shapes", redactCredentialShapes],
+	] as const)("literal percent diagnostics (%s)", (_mode, redact) => {
+		it.each([
+			"rate 100%% then " + "x".repeat(62),
+			"Progress: %d%% complete while contacting https://api.example.test/v1/...?model=faux-1 request id req_123 failed",
+		])("keeps literal percent diagnostics unchanged: %s", (text) => {
+			expect(redact(text)).toBe(text);
+		});
+
+		it.each(
+			["%%", "%d", "%s", "100%", "%%%", "% ", "%zz"].flatMap((form) =>
+				[60, 64, 65, 200].map((length) => ({ form, length })),
+			),
+		)("keeps literal $form before a $length-character tail", ({ form, length }) => {
+			const text = `Progress: ${form}${"x".repeat(length)}`;
+			expect(redact(text)).toBe(text);
+		});
+	});
+
 	it.each(ENCODING_CELLS)("$label", ({ text, value, shaped }) => {
 		const full = redactSecrets(text);
 		const shapes = redactCredentialShapes(text);
