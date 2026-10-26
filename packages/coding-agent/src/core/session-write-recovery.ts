@@ -7,25 +7,27 @@ const SCAN_CHUNK_BYTES = 64 * 1024;
 /**
  * Cuts a JSONL session file back to its last complete line. An append that failed part-way
  * (ENOSPC) can leave a partial line, and the next append would be glued onto it, losing both
- * entries on reload. A file that already ends in a newline is left untouched.
+ * entries on reload. A file that already ends in a newline is left untouched unless a failed
+ * header catch-up supplied its exact durable boundary: that batch may contain whole lines too,
+ * and all of its bytes must be cut before replaying the batch.
  */
-export function truncateToLastCompleteLine(path: string): void {
+export function truncateToLastCompleteLine(path: string, knownCompleteBytes?: number): void {
 	const fd = openSync(path, "r+");
 	try {
 		const size = fstatSync(fd).size;
 		const chunk = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, size));
 		let end = size;
-		while (end > 0) {
+		let completeLength = knownCompleteBytes;
+		while (completeLength === undefined && end > 0) {
 			const start = Math.max(0, end - chunk.length);
 			const read = readSync(fd, chunk, 0, end - start, start);
 			const newline = chunk.subarray(0, read).lastIndexOf(NEWLINE);
 			if (newline >= 0) {
-				const completeLength = start + newline + 1;
-				if (completeLength < size) ftruncateSync(fd, completeLength);
-				return;
+				completeLength = start + newline + 1;
 			}
 			end = start;
 		}
+		if (completeLength !== undefined && completeLength < size) ftruncateSync(fd, completeLength);
 	} finally {
 		closeSync(fd);
 	}
