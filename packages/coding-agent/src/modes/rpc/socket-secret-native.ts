@@ -1,0 +1,112 @@
+/**
+ * Headless loader for the Windows socket-secret bridge (`crates/senpi-socket-secret`, sisyphuslabs/omo-desktop-app#4199).
+ * There is no optional fallback: a Windows public-secret mutation that cannot load the bridge must fail, never fall
+ * back to a direct final-path write. Nothing here runs at import time.
+ */
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getPackageDir } from "../../config.ts";
+
+/** ABI of the bridge's exports, not the package CalVer. Keep aligned with crates/senpi-socket-secret. */
+export const NATIVE_SOCKET_SECRET_ABI_VERSION = "1";
+
+export const SOCKET_SECRET_NATIVE_PATH_ENV = "SENPI_SOCKET_SECRET_NATIVE_PATH";
+
+export interface NativeKernelSessionIdentity {
+	readonly status: "verified" | "unverified";
+	readonly creationTime: string | null;
+	readonly reason: string | null;
+}
+
+export interface NativeVolumeLocality {
+	readonly locality: "local" | "not_local";
+	readonly reason: string | null;
+	readonly reportedFileSystem: string | null;
+}
+
+export interface NativeSocketSecretBinding {
+	__senpiSocketSecretAbi1(): string;
+	publishNoReplace(stagingPath: string, finalPath: string, bytes: Buffer): "published" | "collision";
+	kernelSessionIdentity(): NativeKernelSessionIdentity;
+	classifyVolume(path: string): NativeVolumeLocality;
+}
+
+export interface SocketSecretNativeOptions {
+	readonly packageDir?: string;
+	readonly moduleDir?: string;
+	readonly execPath?: string;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly platform?: string;
+	readonly arch?: string;
+	readonly requireBinding?: (modulePath: string) => unknown;
+}
+
+export class SocketSecretNativeUnavailableError extends Error {
+	readonly code = "socket-secret-native-unavailable";
+	readonly attemptedPaths: readonly string[];
+
+	constructor(host: string, attemptedPaths: readonly string[], causes: readonly string[]) {
+		super(`The Windows socket-secret bridge for ${host} could not be loaded: ${causes.join("; ")}`);
+		this.name = "SocketSecretNativeUnavailableError";
+		this.attemptedPaths = attemptedPaths;
+	}
+}
+
+export class SocketSecretNativeAbiMismatchError extends Error {
+	readonly code = "socket-secret-native-abi-mismatch";
+
+	constructor(readonly modulePath: string) {
+		super(
+			`Socket-secret bridge ABI mismatch in ${modulePath}: expected __senpiSocketSecretAbi1() === "${NATIVE_SOCKET_SECRET_ABI_VERSION}" and every export`,
+		);
+		this.name = "SocketSecretNativeAbiMismatchError";
+	}
+}
+
+export function socketSecretNativeCandidatePaths(options: SocketSecretNativeOptions = {}): readonly string[] {
+	const env = options.env ?? process.env;
+	// An explicit override is authoritative, including when it cannot be loaded.
+	const override = env[SOCKET_SECRET_NATIVE_PATH_ENV];
+	if (override) return [override];
+	const host = `${options.platform ?? process.platform}-${options.arch ?? process.arch}`;
+	const relative = join("native", "socket-secret", "prebuilds", host, `senpi_socket_secret.${host}.node`);
+	const packageDir = options.packageDir ?? (env.SENPI_PACKAGE_DIR || getPackageDir());
+	const moduleDir = options.moduleDir ?? dirname(fileURLToPath(import.meta.url));
+	const execPath = options.execPath ?? process.execPath;
+	return [join(packageDir, relative), join(moduleDir, "../../..", relative), join(dirname(execPath), relative)];
+}
+
+/** Loads the bridge or throws; a sentinel mismatch stops at once instead of trying the next candidate. */
+export function loadSocketSecretNative(options: SocketSecretNativeOptions = {}): NativeSocketSecretBinding {
+	const attemptedPaths = socketSecretNativeCandidatePaths(options);
+	const requireBinding = options.requireBinding ?? createRequire(import.meta.url);
+	const causes: string[] = [];
+	for (const modulePath of attemptedPaths) {
+		let binding: unknown;
+		try {
+			binding = requireBinding(modulePath);
+		} catch (error) {
+			causes.push(`${modulePath}: ${error instanceof Error ? error.message : String(error)}`);
+			continue;
+		}
+		assertBinding(binding, modulePath);
+		return binding;
+	}
+	throw new SocketSecretNativeUnavailableError(
+		`${options.platform ?? process.platform}-${options.arch ?? process.arch}`,
+		attemptedPaths,
+		causes,
+	);
+}
+
+function assertBinding(value: unknown, modulePath: string): asserts value is NativeSocketSecretBinding {
+	if (typeof value !== "object" || value === null) throw new SocketSecretNativeAbiMismatchError(modulePath);
+	const exports = value as Record<string, unknown>;
+	const complete = ["__senpiSocketSecretAbi1", "publishNoReplace", "kernelSessionIdentity", "classifyVolume"].every(
+		(name) => typeof exports[name] === "function",
+	);
+	if (!complete || (exports.__senpiSocketSecretAbi1 as () => unknown)() !== NATIVE_SOCKET_SECRET_ABI_VERSION) {
+		throw new SocketSecretNativeAbiMismatchError(modulePath);
+	}
+}
