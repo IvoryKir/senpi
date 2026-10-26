@@ -54,6 +54,10 @@ const CONTAINERS: readonly (readonly [label: string, render: (key: string, value
 	["JSON array value", (key, value) => json({ headers: { [key]: [value] } })],
 	["escaped JSON", (key, value) => json({ message: json({ [key]: value }) })],
 	["doubly escaped JSON", (key, value) => json({ body: json({ message: json({ [key]: value }) }) })],
+	["typographic-quoted JSON", (key, value) => `{\u201C${key}\u201D: \u201C${value}\u201D}`],
+	["full-width colon", (key, value) => `${key}\uFF1A ${value}`],
+	["XML element", (key, value) => `<${key}>${value}</${key}>`],
+	["HTML-escaped JSON", (key, value) => `{&quot;${key}&quot;: &quot;${value}&quot;}`],
 	["Go map", (key, value) => `map[${key}:[${value}] Content-Type:[application/json]]`],
 	["Python repr", (key, value) => `{'${key}': '${value}', 'model': 'faux-1'}`],
 	[
@@ -73,6 +77,11 @@ const PREFIXED_SECRETS: readonly (readonly [label: string, secret: string])[] = 
 	["AKIA", `AKIA${"FIXTURE"}000000010`],
 	["AIza", `AIza${"FIXTURE".repeat(5)}0011`],
 	["JWT", [`eyJ${"hbGciOiJub25lIn0"}`, `eyJ${"zdWIiOiJmaXh0dXJlIn0"}`, `Zml4dHVyZS1zaWc${"x"}`].join(".")],
+	["gsk_", `gsk_${"FIXTURE".repeat(3)}0012`],
+	["xai-", `xai-${"FIXTURE".repeat(3)}0013`],
+	["hf_", `hf_${"FIXTURE".repeat(3)}0014`],
+	["rk_live_", `rk_${"live_"}${"FIXTURE".repeat(3)}0015`],
+	["xoxb-", `xox${"b-"}${"FIXTURE".repeat(2)}-0016`],
 ];
 
 const named: SecretCell[] = KEY_SPELLINGS.flatMap((key, keyIndex) =>
@@ -127,7 +136,51 @@ const REVIEW_CELLS: readonly SecretCell[] = [
 	},
 ];
 
-export const SECRET_CELLS: readonly SecretCell[] = [...REVIEW_CELLS, ...named, ...prefixed];
+// The inputs the delta review of fea33d95c2 saw leak: cookie pairs after a short first value, nested credential
+// objects, URL userinfo and an Azure SAS signature.
+const ROUND_4_CELLS: readonly SecretCell[] = [
+	{ name: "review: second cookie pair", secret: secretFor(9101), text: `Cookie: a=1; __cf_bm=${secretFor(9101)}` },
+	{
+		name: "review: set-cookie array",
+		secret: secretFor(9102),
+		text: json({ "set-cookie": ["a=1", `sid=${secretFor(9102)}`] }),
+	},
+	{
+		name: "review: nested credentials object",
+		secret: secretFor(9103),
+		text: json({ error: { credentials: { value: secretFor(9103) } } }),
+	},
+	{
+		name: "review: escaped nested credentials object",
+		secret: secretFor(9104),
+		text: json({ message: json({ credentials: { type: "service", value: secretFor(9104) } }) }),
+	},
+	{
+		name: "review: URL userinfo",
+		secret: secretFor(9105),
+		text: `https://user:${secretFor(9105)}@gateway.example.test/v1`,
+	},
+	{
+		name: "review: Azure SAS signature",
+		secret: secretFor(9106),
+		text: `https://acct.blob.example.test/c/b?sv=2024-11-04&sr=b&sig=${secretFor(9106)}`,
+	},
+];
+
+export const SECRET_CELLS: readonly SecretCell[] = [...REVIEW_CELLS, ...ROUND_4_CELLS, ...named, ...prefixed];
+
+// Names that merely contain a credential word, with values a name-substring rule would mangle.
+export const READABLE_NAMED_VALUES: readonly string[] = [
+	'"monkey": "abcdefghijklmnopqrstuvwxyz"',
+	"turkey=abcdefghijklmnopqrstuv",
+	'"keyword": "abcdefghijklmnopqrstuvwxyz"',
+	'"tokenizer": "cl100k_base_tokenizer_v2"',
+	"primary_key_column=customer_identifier_column",
+	"max_tokens: 1234567890123456789",
+	"session_id: 0f8fad5b-d9cb-469f-a165-70867728950e",
+	"token_type: bearer_access_token_v2_long",
+	"authorization_endpoint=api.example.com/oauth2/authorize",
+];
 
 // Diagnostic text that must stay readable: model ids, error codes, request ids, token counts.
 export const READABLE_PROVIDER_TEXT =

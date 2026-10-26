@@ -1,78 +1,21 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { fauxAssistantMessage, isModelConfigError } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerFallbackModels } from "../fallback-provider-fixture.ts";
+import { redactSecrets } from "../../../src/core/sensitive-output.ts";
 import { createHarness, type Harness } from "../harness.ts";
+import {
+	chainedHarness,
+	everySink,
+	fallbackLogEvents,
+	lastErrorMessage,
+	modelNotFound,
+	persistedSessionText,
+	primary,
+} from "../model-config-error-harness.ts";
 import { MODEL_NOT_FOUND_ANSWERS, NOT_MODEL_NOT_FOUND_ANSWERS } from "../model-not-found-inventory.ts";
-import { READABLE_PROVIDER_TEXT, SECRET_CELLS } from "../secret-inventory.ts";
+import { READABLE_NAMED_VALUES, READABLE_PROVIDER_TEXT, SECRET_CELLS } from "../secret-inventory.ts";
 
 // A gateway that does not serve a configured model id answers model_not_found. That is a configuration
 // error: walking the fallback chain silently ran the turn on another provider's model.
-const primary = "faux/faux-1";
-const modelNotFound = '400 {"code":"model_not_found","message":"unknown provider for model faux-1"}';
-
-async function chainedHarness(harnesses: Harness[], options: { persistSession?: boolean } = {}): Promise<Harness> {
-	const harness = await createHarness({
-		models: [{ id: "faux-1" }, { id: "faux-2" }, { id: "faux-3" }],
-		persistSession: options.persistSession,
-		settings: {
-			retry: {
-				enabled: true,
-				maxRetries: 3,
-				baseDelayMs: 1,
-				fallbackChains: { [primary]: ["other-faux/faux-2", "third-faux/faux-3"] },
-			},
-		},
-	});
-	harnesses.push(harness);
-	registerFallbackModels(harness, "other-faux", ["faux-2"]);
-	registerFallbackModels(harness, "third-faux", ["faux-3"]);
-	return harness;
-}
-
-function fallbackLogText(harness: Harness): string {
-	return readFileSync(join(harness.tempDir, "agent", "logs", "fallback.log"), "utf8");
-}
-
-function fallbackLogEvents(harness: Harness): readonly Record<string, unknown>[] {
-	return fallbackLogText(harness)
-		.split("\n")
-		.filter((line) => line.length > 0)
-		.map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-function filesText(dir: string): string {
-	return readdirSync(dir, { recursive: true, encoding: "utf8" })
-		.map((name) => join(dir, name))
-		.filter((path) => statSync(path).isFile())
-		.map((path) => readFileSync(path, "utf8"))
-		.join("\n");
-}
-
-// Every place provider error text can reach: the emitted session events (what RPC, --mode json, the UI and
-// extensions receive), every log file under the agent dir, and the persisted session file.
-function everySink(harness: Harness): Record<string, string> {
-	return {
-		events: JSON.stringify(harness.events),
-		logs: filesText(join(harness.tempDir, "agent", "logs")),
-		session: filesText(join(harness.tempDir, "sessions")),
-	};
-}
-
-function persistedSessionText(harness: Harness): string {
-	const dir = join(harness.tempDir, "sessions");
-	return readdirSync(dir, { recursive: true, encoding: "utf8" })
-		.map((name) => join(dir, name))
-		.filter((path) => statSync(path).isFile())
-		.map((path) => readFileSync(path, "utf8"))
-		.join("\n");
-}
-
-function lastErrorMessage(harness: Harness): string | undefined {
-	const last = harness.session.state.messages.at(-1);
-	return last?.role === "assistant" ? last.errorMessage : undefined;
-}
 
 describe("senpi#4282 model_not_found is a configuration error", () => {
 	const harnesses: Harness[] = [];
@@ -234,6 +177,31 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 			await harness.session.prompt("hello");
 
 			expect(harness.eventsOfType("model_config_error")).toMatchObject([{ errorExcerpt: errorMessage }]);
+			expect(lastErrorMessage(harness)).toBe(errorMessage);
+			expect(persistedSessionText(harness)).toContain(JSON.stringify(errorMessage).slice(1, -1));
+		});
+
+		const MB = 1 << 20;
+		for (const unit of ["key", "aaaaakey", "token_", "TOKEN", "A_TOKEN_ ", "key: a "]) {
+			it(`redacts 1 MB of ${JSON.stringify(unit)} repeated in linear time`, () => {
+				const text = unit.repeat(Math.ceil(MB / unit.length));
+				let best = Number.POSITIVE_INFINITY;
+				for (let attempt = 0; attempt < 3; attempt++) {
+					const start = performance.now();
+					redactSecrets(text);
+					best = Math.min(best, performance.now() - start);
+				}
+				expect(best).toBeLessThan(50);
+			});
+		}
+
+		it("keeps names that merely contain a credential word readable", async () => {
+			const harness = await chainedHarness(harnesses, { persistSession: true });
+			const errorMessage = `${modelNotFound} ${READABLE_NAMED_VALUES.join(" ")}`;
+			harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage })]);
+
+			await harness.session.prompt("hello");
+
 			expect(lastErrorMessage(harness)).toBe(errorMessage);
 			expect(persistedSessionText(harness)).toContain(JSON.stringify(errorMessage).slice(1, -1));
 		});
