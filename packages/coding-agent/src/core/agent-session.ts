@@ -29,6 +29,7 @@ import type {
 	AgentToolCallOutcome,
 	AgentToolResult,
 	AgentToolUpdateCallback,
+	InternalAgentChannel,
 	PreparedAgentToolCall,
 	PrepareNextTurnContext,
 	ThinkingLevel,
@@ -324,7 +325,7 @@ import { PROMPT_CACHE_SAFE_WAIT_ENV, resolvePromptCacheSafeWaitSeconds } from ".
 import { PromptCachePrefixBuilds } from "./prompt-cache-prefix-request.ts";
 import type { PromptSizeInventory } from "./prompt-size-startup.ts";
 import { expandPromptTemplateWithMetadata, type PromptTemplate } from "./prompt-templates.ts";
-import { type ProviderFailure, providerFailureOf } from "./provider-failure.ts";
+import { isRequestLevelRefusal, type ProviderFailure, providerFailureOf } from "./provider-failure.ts";
 import { rejectedImageSources } from "./provider-rejected-images.ts";
 import { createProviderTimeoutRetryPlan, runBoundedRetryContinuation } from "./provider-timeout-retry.ts";
 import { QueuedInputAges } from "./queued-input-age.ts";
@@ -384,6 +385,7 @@ import {
 	getSessionContextEntryId,
 	type SessionHeader,
 	SessionManager,
+	type SessionRecoveryCause,
 } from "./session-manager.ts";
 import { SessionThinkingMemory, type ThinkingLevelSource } from "./session-thinking-memory.ts";
 import { restoreMovedState } from "./session-move/extension-state.ts";
@@ -410,6 +412,7 @@ import { BUILTIN_SLASH_COMMANDS } from "./slash-commands.ts";
 import type { Skill } from "./skills.ts";
 import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { stopResumeDirective } from "./stop-resume-directive.ts";
+import { type AgentSessionStructuredRecord, StructuredSessionLane } from "./structured-session-lane.ts";
 import {
 	type ClampedThinkingSelection,
 	clampThinkingSelection,
@@ -567,6 +570,18 @@ export type AgentSessionEvent =
 			tokensBefore: number;
 			tokensAfter: number;
 			droppedEntries: number;
+			notice: string;
+	  }
+	/**
+	 * The session file's tail was torn by an interrupted write (a full disk) and was set aside in `backupPath`; every
+	 * complete record is kept (senpi#4295). Emitted live once, and replayed to each surface that attaches before the
+	 * next prompt, so the person is told once wherever they look.
+	 */
+	| {
+			type: "session_recovered";
+			cause: SessionRecoveryCause;
+			backupPath: string;
+			droppedBytes: number;
 			notice: string;
 	  }
 	| { type: "continuation_error"; errorMessage: string }
@@ -789,6 +804,8 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 
 export interface AgentSessionConfig {
 	agent: Agent;
+	/** @internal Construction channel for senpi's session layer only; absent for externally supplied Agents. */
+	internalChannel?: InternalAgentChannel;
 	/** Explicit service tier for the initial model. */
 	serviceTier?: ServiceTier;
 	sessionManager: SessionManager;
@@ -1322,11 +1339,15 @@ export class AgentSession {
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
+	/** The last repair of the session file, replayed to surfaces that attach before the next prompt (senpi#4295). */
+	private _standingRecovery: Extract<AgentSessionEvent, { type: "session_recovered" }> | undefined;
+	private _unsubscribeRecovery: (() => void) | undefined;
 	readonly securityNotices = new SecurityNoticeSnapshot();
 	private _unsubscribeSecurityNotices?: () => void;
 	private _unsubscribeSettingsSource?: () => void;
 	private _unregisterMemoryReport: () => void = () => {};
 	private _eventListeners: AgentSessionEventListener[] = [];
+	private readonly _structuredLane: StructuredSessionLane;
 	private _agentEventQueue: Promise<void> = Promise.resolve();
 	/**
 	 * Exact message objects whose message_end persistence is still queued.
@@ -1699,7 +1720,15 @@ export class AgentSession {
 		this._promptSurface = config.promptSurface;
 		this._browserEngine = config.browserEngine;
 		this.agent = config.agent;
+		this._structuredLane = new StructuredSessionLane(config.internalChannel, (deliver) => {
+			if (!this._unsubscribeAgent) return;
+			this._agentEventQueue = this._agentEventQueue.then(deliver, deliver);
+		});
 		this.sessionManager = config.sessionManager;
+		this._unsubscribeRecovery = this.sessionManager.onRecovery((recovery) => {
+			this._standingRecovery = { type: "session_recovered", ...recovery };
+			this._emit(this._standingRecovery);
+		});
 		this._sessionThinkingMemory = new SessionThinkingMemory(config.sessionManager);
 		this._thinkingLevelSource = config.initialThinkingLevelSource ?? "default";
 		this._pendingInputs = new SessionPendingInputs({
@@ -2836,7 +2865,7 @@ export class AgentSession {
 		this._emitEntryAppended(entry.id);
 	}
 
-	private _emit(event: AgentSessionEvent): void {
+	private _emit(event: AgentSessionEvent, captureSource: object = event): void {
 		if (
 			event.type === "session_paused" ||
 			event.type === "session_resumed" ||
@@ -2885,6 +2914,7 @@ export class AgentSession {
 		for (const l of [...this._eventListeners]) {
 			l(event);
 		}
+		if (this._structuredLane.active) this._structuredLane.emitEvent(event, captureSource);
 	}
 
 	private async _emitSessionCompactFailed(event: Omit<SessionCompactFailedEvent, "type">): Promise<void> {
@@ -3883,7 +3913,7 @@ export class AgentSession {
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))
 					: event;
-		this._emit(sessionEvent);
+		this._emit(sessionEvent, event);
 		if (event.type === "agent_end") {
 			if (this._abortProvenance.takeLateUserJoin()) await this._emitSessionAbort();
 		}
@@ -4565,6 +4595,7 @@ export class AgentSession {
 		if (this._resumeSlice !== undefined) {
 			listener(this._resumeSliceEvent(this._resumeSlice));
 		}
+		if (this._standingRecovery !== undefined) listener(this._standingRecovery);
 		for (const source of this.settingsManager.getSelectedSettingsSources()) {
 			listener({ type: "settings_source_selected", ...source });
 		}
@@ -4576,6 +4607,15 @@ export class AgentSession {
 				this._eventListeners.splice(index, 1);
 			}
 		};
+	}
+
+	/**
+	 * The internal structured lane (senpi#4272): every session event in `_emit` order with its provider capture, plus
+	 * block controls at their position. Attach before a turn's first provider push; a stream already pushing keeps
+	 * its decision and yields no capture.
+	 */
+	subscribeStructured(listener: (record: AgentSessionStructuredRecord) => void): () => void {
+		return this._structuredLane.subscribe(listener);
 	}
 
 	/**
@@ -4648,7 +4688,10 @@ export class AgentSession {
 		this._unsubscribeWakeSources?.();
 		this._unsubscribeWakeSources = undefined;
 		this._lifecycleBinding.dispose();
+		this._unsubscribeRecovery?.();
+		this._unsubscribeRecovery = undefined;
 		this._eventListeners = [];
+		this._structuredLane.dispose();
 		cleanupSessionResources(this.sessionId);
 		// Nothing reads or writes this manager once its session is gone: it releases
 		// its writer grant and its disposable blob directory here.
@@ -5587,6 +5630,7 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		this._standingRecovery = undefined;
 		const barrierError = options?.toolBarrier === undefined ? undefined : toolBarrierSpecError(options.toolBarrier);
 		if (barrierError !== undefined) throw new Error(barrierError);
 		if (isHumanInput(options) && options?.humanInputReported !== true) this._humanInputAdmitted(promptKind(options));
@@ -12503,7 +12547,7 @@ export class AgentSession {
 			!isCursorZeroTokenResourceExhausted(message) &&
 			!isClassifierRefusal(message) &&
 			!message.content.some((content) => content.type === "toolCall") &&
-			this._retryFallback.canTryFallback()
+			this._retryFallback.canTryFallback(isRequestLevelRefusal(message) ? message.provider : undefined)
 		);
 	}
 
@@ -12774,7 +12818,10 @@ export class AgentSession {
 				// Billing-class failures never recover on this account, so the fallback
 				// switch pins as the session model instead of reverting after the cooldown.
 				const reason = isBillingErrorMessage(errorMessage) ? "billing" : "hard-error";
-				switchedFallback = await tryFallback(reason, { errorMessage });
+				switchedFallback = await tryFallback(reason, {
+					errorMessage,
+					...(isRequestLevelRefusal(message) ? { refusedProvider: message.provider } : {}),
+				});
 				if (!switchedFallback) {
 					const exhaustedChainKey = this._retryFallback.exhaustedChainKey;
 					if (exhaustedChainKey) {
