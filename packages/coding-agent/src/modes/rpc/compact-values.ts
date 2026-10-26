@@ -1,10 +1,12 @@
 import { type CompactContentStore, type LeafId, CompactWriteError } from "./compact-content-store.ts";
 import { CompactReadError } from "./compact-read-lease.ts";
 
-export interface ValueRef {
-	readonly node: LeafId;
-	readonly owner: LeafId;
-}
+export type ValueRef =
+	| {
+			readonly node: LeafId;
+			readonly owner: LeafId;
+	  }
+	| { readonly node: 0; readonly owner: 0; readonly value: string | number | boolean | null };
 type Field = readonly [ValueRef, ValueRef];
 export type ValuePage =
 	| { readonly kind: "scalar"; readonly value: number | boolean | null }
@@ -39,38 +41,81 @@ export class CompactValues {
 	}
 
 	own(value: unknown): ValueRef {
-		if (typeof value === "string") {
-			let next: ValueRef | undefined;
-			for (let end = value.length; end > 0 || next === undefined; end = Math.max(0, end - 4096)) {
-				const ref = this.make({ kind: "string", text: value.slice(Math.max(0, end - 4096), end), next });
-				if (next) this.store.adjust(next.owner, -1, 0);
-				next = ref;
-				if (end <= 4096) break;
-			}
-			return next;
-		}
-		if (value === null || typeof value !== "object") {
-			return this.make({
-				kind: "scalar",
-				value: typeof value === "boolean" || typeof value === "number" ? value : null,
-			});
-		}
-		const array = Array.isArray(value);
-		const entries = array ? value : Object.entries(value);
-		let next: ValueRef | undefined;
-		for (let end = entries.length; end > 0 || next === undefined; end = Math.max(0, end - 128)) {
-			const slice = entries.slice(Math.max(0, end - 128), end);
-			const items = array ? slice.map((item: unknown) => this.own(item)) : [];
-			const fields: Field[] = array
-				? []
-				: slice.map(([key, item]: [string, unknown]) => [this.own(key), this.own(item)]);
-			const ref = this.make(array ? { kind: "array", items, next } : { kind: "object", items: fields, next });
-			for (const child of [...items, ...fields.flat(), ...(next ? [next] : [])])
+		const owned = new Set<LeafId>();
+		const ancestors = new Set<object>();
+		let nodes = 0,
+			bytes = 0;
+		const take = (page: ValuePage, children: readonly ValueRef[] = []): ValueRef => {
+			bytes += Buffer.byteLength(JSON.stringify(page));
+			if (bytes > 16 * 1024 * 1024) throw new CompactWriteError("size_limit");
+			const ref = this.make(page);
+			owned.add(ref.owner);
+			for (const child of children) {
 				this.store.adjust(child.owner, -1, 0);
-			next = ref;
-			if (end <= 128) break;
+				owned.delete(child.owner);
+			}
+			return ref;
+		};
+		const visit = (value: unknown, depth: number): ValueRef => {
+			if (depth > 128) throw new CompactWriteError("depth_limit");
+			if (++nodes > 100_000) throw new CompactWriteError("count_limit");
+			const scalar =
+				value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+			if (
+				!scalar &&
+				typeof value !== "string" &&
+				(typeof value !== "object" ||
+					(!Array.isArray(value) &&
+						Object.getPrototypeOf(value) !== Object.prototype &&
+						Object.getPrototypeOf(value) !== null))
+			)
+				throw new CompactWriteError("unsupported_value");
+			if (typeof value === "string" && value.length * 2 > 16 * 1024 * 1024)
+				throw new CompactWriteError("size_limit");
+			if (scalar || (typeof value === "string" && JSON.stringify(value).length <= 64)) {
+				bytes += Buffer.byteLength(JSON.stringify(value));
+				if (bytes > 16 * 1024 * 1024) throw new CompactWriteError("size_limit");
+				return { node: 0, owner: 0, value: value as string | number | boolean | null };
+			}
+			let next: ValueRef | undefined;
+			if (typeof value === "string") {
+				for (let end = value.length; end > 0; end = Math.max(0, end - 4096)) {
+					next = take(
+						{ kind: "string", text: value.slice(Math.max(0, end - 4096), end), next },
+						next ? [next] : [],
+					);
+				}
+			} else {
+				const object = value as object;
+				if (ancestors.has(object)) throw new CompactWriteError("cycle");
+				ancestors.add(object);
+				const array = Array.isArray(value);
+				const entries = array ? value : Object.entries(object);
+				if (nodes + entries.length > 100_000) throw new CompactWriteError("count_limit");
+				for (let end = entries.length; end > 0 || !next; end = Math.max(0, end - 128)) {
+					const slice = entries.slice(Math.max(0, end - 128), end);
+					const items = array ? Array.from(slice, (item: unknown) => visit(item, depth + 1)) : [];
+					const fields: Field[] = array
+						? []
+						: slice.map(([key, item]: [string, unknown]) => [visit(key, depth + 1), visit(item, depth + 1)]);
+					next = take(array ? { kind: "array", items, next } : { kind: "object", items: fields, next }, [
+						...items,
+						...fields.flat(),
+						...(next ? [next] : []),
+					]);
+					if (end <= 128) break;
+				}
+				ancestors.delete(object);
+			}
+			if (!next) throw new CompactWriteError("unsupported_value");
+			return next;
+		};
+		try {
+			return visit(value, 0);
+		} catch (error) {
+			for (const owner of owned) this.store.adjust(owner, -1, 0);
+			throw error;
 		}
-		return next;
 	}
 
 	async page(ref: ValueRef) {
@@ -95,47 +140,33 @@ export class CompactValues {
 	}
 
 	async read(ref: ValueRef): Promise<unknown> {
-		using held = await this.page(ref);
-		const page = held.value;
-		switch (page.kind) {
-			case "scalar":
-				return page.value;
-			case "string": {
-				let result = page.text;
-				let next = page.next;
-				while (next) {
-					using held = await this.page(next);
-					const part = held.value;
-					if (part.kind !== "string") throw new CompactReadError("ownership");
-					result += part.text;
-					next = part.next;
-				}
-				return result;
-			}
-			case "array": {
-				const result: unknown[] = [];
-				let current: ValueRef | undefined = ref;
-				while (current) {
-					using held = await this.page(current);
-					const part = held.value;
-					if (part.kind !== "array") throw new CompactReadError("ownership");
-					for (const child of part.items) result.push(await this.read(child));
-					current = part.next;
-				}
-				return result;
-			}
-			case "object": {
-				const result: Record<string, unknown> = {};
-				for await (const [key, value] of this.fields(ref)) {
-					Object.defineProperty(result, key, {
+		if ("value" in ref) return ref.value;
+		let next: ValueRef | undefined = ref;
+		let text = "";
+		const array: unknown[] = [],
+			object: Record<string, unknown> = {};
+		let kind: ValuePage["kind"] | undefined;
+		while (next) {
+			using held = await this.page(next);
+			const page = held.value;
+			kind ??= page.kind;
+			if (kind !== page.kind) throw new CompactReadError("ownership");
+			if (page.kind === "scalar") return page.value;
+			if (page.kind === "string") text += page.text;
+			if (page.kind === "array") for (const child of page.items) array.push(await this.read(child));
+			if (page.kind === "object")
+				for (const [key, value] of page.items) {
+					const name = await this.read(key);
+					if (typeof name !== "string") throw new CompactReadError("ownership");
+					Object.defineProperty(object, name, {
 						value: await this.read(value),
 						enumerable: true,
 						configurable: true,
 					});
 				}
-				return result;
-			}
+			next = page.next;
 		}
+		return kind === "string" ? text : kind === "array" ? array : object;
 	}
 
 	async *fields(ref: ValueRef): AsyncGenerator<readonly [string, ValueRef, ValueRef]> {
