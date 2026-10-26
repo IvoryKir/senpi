@@ -325,7 +325,13 @@ import { PROMPT_CACHE_SAFE_WAIT_ENV, resolvePromptCacheSafeWaitSeconds } from ".
 import { PromptCachePrefixBuilds } from "./prompt-cache-prefix-request.ts";
 import type { PromptSizeInventory } from "./prompt-size-startup.ts";
 import { expandPromptTemplateWithMetadata, type PromptTemplate } from "./prompt-templates.ts";
-import { isRequestLevelRefusal, type ProviderFailure, providerFailureOf } from "./provider-failure.ts";
+import {
+	isRequestLevelRefusal,
+	type ProviderFailure,
+	providerFailureOf,
+	type SelectedModel,
+	selectedModelOf,
+} from "./provider-failure.ts";
 import { rejectedImageSources } from "./provider-rejected-images.ts";
 import { createProviderTimeoutRetryPlan, runBoundedRetryContinuation } from "./provider-timeout-retry.ts";
 import { QueuedInputAges } from "./queued-input-age.ts";
@@ -545,8 +551,11 @@ type AgentSessionAgentEndEvent = Extract<AgentEvent, { type: "agent_end" }> & {
 	abortCause?: AgentAbortCause;
 };
 
-function withProviderFailure(event: AgentSessionAgentEndEvent): AgentSessionAgentEndEvent {
-	const failure = providerFailureOf(event.messages);
+function withProviderFailure(
+	event: AgentSessionAgentEndEvent,
+	selected: SelectedModel | undefined,
+): AgentSessionAgentEndEvent {
+	const failure = providerFailureOf(event.messages, selected);
 	return failure === undefined ? event : { ...event, failure };
 }
 
@@ -2463,6 +2472,11 @@ export class AgentSession {
 			this._failedResponse = undefined;
 			const previous = (await previousPrepareRequest?.(request, signal)) ?? undefined;
 			const model = previous?.model ?? this.agent.state.model;
+			this._requestSelectedModel = selectedModelOf(
+				this._retryFallback.activeState?.originalSelector,
+				this._modelRegistry,
+				model,
+			);
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
 			if (!isVirtualModel(model)) {
 				// A request after a routed one in the same run still names the routed model.
@@ -3435,12 +3449,21 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	private _requestSelectedModel: SelectedModel | undefined;
+	private readonly _endSelectedModels = new WeakMap<AgentEvent, SelectedModel>();
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent, signal: AbortSignal): void => {
-		if (event.type === "agent_start") this._lifecycleBinding.startRun();
+		if (event.type === "agent_start") {
+			this._lifecycleBinding.startRun();
+			this._requestSelectedModel = undefined;
+		}
 		// Bound at emission: the core can start the next run before the queue reaches this end (senpi#3864).
-		if (event.type === "agent_end") this._lifecycleBinding.bindTurnEnd(event);
+		if (event.type === "agent_end") {
+			this._lifecycleBinding.bindTurnEnd(event);
+			// Freeze before async delivery or a queued run can replace the dispatched selection.
+			if (this._requestSelectedModel) this._endSelectedModels.set(event, this._requestSelectedModel);
+		}
 		if (event.type === "message_start") {
 			try {
 				const entryId = this._lifecycleBinding.consume(event.message);
@@ -3911,14 +3934,17 @@ export class AgentSession {
 		// Notify all listeners
 		const sessionEvent =
 			event.type === "agent_end"
-				? withProviderFailure({
-						...event,
-						willRetry: agentEndWillRetry,
-						...(this._deadlineTracker.current !== undefined
-							? { aborted: true, abortSource: "system" as const, deadline: this._deadlineTracker.current }
-							: {}),
-						...(abortCause === undefined ? {} : { abortCause }),
-					})
+				? withProviderFailure(
+						{
+							...event,
+							willRetry: agentEndWillRetry,
+							...(this._deadlineTracker.current !== undefined
+								? { aborted: true, abortSource: "system" as const, deadline: this._deadlineTracker.current }
+								: {}),
+							...(abortCause === undefined ? {} : { abortCause }),
+						},
+						this._endSelectedModels.get(event),
+					)
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))
 					: event;
@@ -11930,12 +11956,12 @@ export class AgentSession {
 				getCallableTools: () => this._getCallableTools(),
 			},
 			{
-				registerProvider: (name, config) => {
-					this._modelRuntime.registerProvider(name, config);
+				registerProvider: (name, config, extensionPath) => {
+					this._modelRuntime.registerProvider(name, config, { extensionPath });
 					this._refreshCurrentModelFromRegistry();
 				},
-				registerNativeProvider: (provider) => {
-					this._modelRuntime.registerNativeProvider(provider);
+				registerNativeProvider: (provider, extensionPath) => {
+					this._modelRuntime.registerNativeProvider(provider, { extensionPath });
 					this._refreshCurrentModelFromRegistry();
 				},
 				unregisterProvider: (name) => {
