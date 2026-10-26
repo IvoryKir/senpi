@@ -2,6 +2,8 @@ use napi_derive::napi;
 
 pub mod answers;
 pub mod classify;
+mod owner_dacl;
+pub mod publish;
 pub mod session;
 pub mod volume;
 
@@ -12,6 +14,7 @@ pub use answers::{
 pub use classify::{
     classify, DriverPath, Locality, NotLocalReason, RemoteDevice, RemoteProtocol, VolumeFacts,
 };
+pub use publish::{publish_no_replace, PublishError, PublishOutcome};
 pub use session::{read_kernel_session_identity, SessionIdentity, UnverifiedReason};
 pub use volume::{probe_volume, ProbeError};
 
@@ -90,5 +93,26 @@ const fn reason_code(reason: NotLocalReason) -> &'static str {
         NotLocalReason::UnlistedFileSystem => "unlisted_file_system",
         NotLocalReason::DriverNotInPath => "driver_not_in_path",
         NotLocalReason::QueryFailed => "query_failed",
+    }
+}
+
+/// Publishes `bytes` at `finalPath` without replacing an existing entry, through a private staging file
+/// at `stagingPath` in the same directory. Resolves `"published"` or `"collision"`; any other failure
+/// throws with the failed step and Windows error code, and the final path is never written directly.
+#[napi(js_name = "publishNoReplace")]
+pub fn publish_no_replace_js(
+    staging_path: String,
+    final_path: String,
+    bytes: napi::bindgen_prelude::Buffer,
+) -> napi::Result<String> {
+    match publish_no_replace(&staging_path, &final_path, &bytes) {
+        Ok(PublishOutcome::Published) => Ok("published".to_string()),
+        Ok(PublishOutcome::Collision) => Ok("collision".to_string()),
+        Err(PublishError::UnsupportedPlatform) => {
+            Err(napi::Error::from_reason("publishNoReplace: unsupported platform"))
+        }
+        Err(PublishError::Os { step, code }) => Err(napi::Error::from_reason(format!(
+            "publishNoReplace: {step} failed with Windows error {code}"
+        ))),
     }
 }

@@ -9,6 +9,8 @@ src/answers.rs            Revision 8.2/8.3 raw query answers -> facts; the exact
 src/classify.rs           Pure Revision 8 locality rule over the volume facts (unit-tested with fakes)
 src/session.rs            PID-4 creation FILETIME; `Unverified` never matches anything
 src/volume.rs             Volume facts read from ONE handle that follows reparse points
+src/publish.rs            First publication: CREATE_NEW staging with the owner-only DACL, flush, FileRenameInfo ReplaceIfExists=FALSE
+src/owner_dacl.rs         Protected DACL for the current user, SYSTEM and Administrators
 src/lib.rs                N-API exports and the `__senpiSocketSecretAbi1` ABI sentinel
 tests/native_receipts.rs  Native receipts 27 and 28; real Windows only
 ```
@@ -18,6 +20,7 @@ tests/native_receipts.rs  Native receipts 27 and 28; real Windows only
 - Locality comes from the kernel driver in the volume's I/O path (`FileFsDriverPathInformation`), never from the reported file-system name alone. Local needs the full conjunction (driver in path, `FILE_REMOTE_DEVICE` clear, no remote-protocol information, neither driver query failed). Any query failure, from either driver query included, is `not_local`; only the exact codes in `src/answers.rs` (design Revisions 8.2/8.3) are answers, and a new code joins that list only with a primary-source meaning and a receipt.
 - The classifying handle follows reparse points. Never open it with `FILE_FLAG_OPEN_REPARSE_POINT`.
 - `SessionIdentity` has no `PartialEq` on purpose; compare with `same_session`, under which `Unverified` matches nothing.
+- Publication never writes the final path, never copies or truncates, and a collision is only ERROR_ALREADY_EXISTS/ERROR_FILE_EXISTS; staging is deleted through its own handle.
 - Prebuilds and the loader are not wired yet; this crate ships no artifact until the packaging change lands.
 
 ## VALIDATION
