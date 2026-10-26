@@ -200,15 +200,32 @@ it("keeps host retention per accepted append bounded: entry ids only, no stringi
 		parentId: index === 0 ? null : `e${index - 1}`,
 		message: { role: "toolResult", content },
 	}));
+	const clientMessages = [{ clientMessageId: "c-1" }, { clientMessageId: "c-2", clientTurnId: "t-1" }];
+	const correlation = { clientMessageId: "c-2", clientTurnId: "t-1", clientMessages };
+	lane.accept({ type: "turn_start", ...correlation }, undefined);
+	const before = lane.freeze();
+	lane.release(before);
 	const stringify = vi.spyOn(JSON, "stringify");
-	const refs = entries.map((entry) => lane.accept({ type: "entry_appended", entry }, undefined));
+	const refs = entries.map((entry) => {
+		lane.accept(
+			{
+				type: "message_update",
+				message: { role: "assistant", content },
+				...correlation,
+				clientMessages: clientMessages.map((identity) => ({ ...identity })),
+			},
+			undefined,
+		);
+		return lane.accept({ type: "entry_appended", entry }, undefined);
+	});
 	const calls = stringify.mock.calls.length;
 	stringify.mockRestore();
-	expect(calls, "no serialization per append on the host loop").toBe(0);
+	expect(calls, "no serialization for appends or message_update records while client correlation stands").toBe(0);
 	expect(refs.map((ref) => ref?.historyVersion)).toEqual(entries.map((_, index) => index + 1));
 	// Mirror trimming mutates the manager's entry objects later; the root names entries, it does not alias them.
 	for (const entry of entries) entry.parentId = "trimmed";
 	const root = lane.freeze();
+	expect(root.correlation, "shallow-equal client identities keep the same transition").toBe(before.correlation);
 	expect(root.transcript.count).toBe(appends);
 	expect(root.transcript.leafId).toBe(`e${appends - 1}`);
 	expect(root.transcript.entryIds.slice(0, root.transcript.count)).toEqual(entries.map((entry) => entry.id));

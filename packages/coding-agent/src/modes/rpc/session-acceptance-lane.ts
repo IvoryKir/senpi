@@ -158,20 +158,32 @@ export class SessionAcceptanceLane {
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
 	private acceptCorrelation(record: object): void {
-		// A correlated kind with no identity (a trigger turn, an extension steer) ends a standing correlation.
+		// Identity-less input within a turn keeps its correlation, but gains no client identity of its own.
 		const identified = "clientMessageId" in record || "clientTurnId" in record;
 		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
+		if (!identified && this.turnId !== null && field(record, "type") !== "turn_start") return;
 		const next = {
 			clientMessageId: field(record, "clientMessageId"),
 			clientTurnId: field(record, "clientTurnId"),
 			clientMessages: field(record, "clientMessages"),
 		};
 		const current = this.correlation;
+		const currentMessages = current?.clientMessages;
+		const nextMessages = next.clientMessages;
 		if (
 			current !== null &&
 			current.clientMessageId === next.clientMessageId &&
 			current.clientTurnId === next.clientTurnId &&
-			JSON.stringify(current.clientMessages) === JSON.stringify(next.clientMessages)
+			(currentMessages === nextMessages ||
+				(Array.isArray(currentMessages) &&
+					Array.isArray(nextMessages) &&
+					currentMessages.length === nextMessages.length &&
+					currentMessages.every(
+						(identity: unknown, index: number) =>
+							field(Object(identity), "clientMessageId") ===
+								field(Object(nextMessages[index]), "clientMessageId") &&
+							field(Object(identity), "clientTurnId") === field(Object(nextMessages[index]), "clientTurnId"),
+					)))
 		)
 			return;
 		this.sequence += 1;
