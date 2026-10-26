@@ -4,7 +4,7 @@ import { parseSessionEntryLine, SESSION_READ_BUFFER_SIZE, SessionLineSplitter } 
 import type { FileEntry } from "./session-manager.ts";
 
 /** The file a persisted base was read from. A rewrite through rename, or any other file at that path, differs. */
-interface FileIdentity {
+export interface FileIdentity {
 	readonly path: string;
 	readonly dev: string;
 	readonly ino: string;
@@ -17,7 +17,15 @@ export interface PersistedBase {
 	readonly idFingerprint: string;
 }
 
-export type TranscriptUnavailableReason = "transition_over_worker_frame_limit" | "transcript_tail_trimmed";
+export type TranscriptUnavailableReason =
+	| "transition_over_worker_frame_limit"
+	| "transcript_tail_trimmed"
+	| "transcript_tail_over_byte_limit";
+
+export interface TranscriptPersistence {
+	readonly fileIdentity: FileIdentity;
+	readonly count: number;
+}
 
 /**
  * One committed change of a manager's transcript, recorded after the commit and never before persistence.
@@ -25,7 +33,13 @@ export type TranscriptUnavailableReason = "transition_over_worker_frame_limit" |
  */
 export type TranscriptTransition =
 	| { readonly kind: "replace"; readonly base: PersistedBase | null }
-	| { readonly kind: "append"; readonly id: string; readonly entry: string }
+	| {
+			readonly kind: "append";
+			readonly id: string;
+			readonly entry?: string;
+			readonly persistence?: TranscriptPersistence;
+	  }
+	| { readonly kind: "persisted"; readonly persistence: TranscriptPersistence }
 	| { readonly kind: "leaf"; readonly leafId: string | null }
 	| { readonly kind: "unavailable"; readonly reason: TranscriptUnavailableReason };
 
@@ -80,7 +94,7 @@ export function captureTranscriptBase(
  * Reads `base` through its captured identity only. It stops at `count`, so a legal append after the base is never
  * read, and a replaced, truncated or rewritten file is a typed failure, never a full or current-file read.
  */
-export function readPersistedBase(base: PersistedBase): PersistedBaseRead {
+export function readPersistedBase(base: PersistedBase, acceptedIds: readonly string[] = []): PersistedBaseRead {
 	let fd: number;
 	try {
 		fd = openSync(base.fileIdentity.path, "r");
@@ -94,11 +108,11 @@ export function readPersistedBase(base: PersistedBase): PersistedBaseRead {
 		const entries: FileEntry[] = [];
 		const take = (line: string): void => {
 			const entry = parseSessionEntryLine(line);
-			if (entry && entries.length < base.count) entries.push(entry);
+			if (entry && entries.length < base.count + acceptedIds.length) entries.push(entry);
 		};
 		const splitter = new SessionLineSplitter();
 		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
-		while (entries.length < base.count) {
+		while (entries.length < base.count + acceptedIds.length) {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
 			if (bytesRead === 0) {
 				take(splitter.finish());
@@ -106,8 +120,12 @@ export function readPersistedBase(base: PersistedBase): PersistedBaseRead {
 			}
 			for (const line of splitter.push(buffer.subarray(0, bytesRead))) take(line);
 		}
-		if (entries.length < base.count) return { ok: false, error: "base_file_truncated" };
-		if (fingerprint(entries) !== base.idFingerprint) return { ok: false, error: "base_fingerprint_mismatch" };
+		if (entries.length < base.count + acceptedIds.length) return { ok: false, error: "base_file_truncated" };
+		if (
+			fingerprint(entries.slice(0, base.count)) !== base.idFingerprint ||
+			acceptedIds.some((id, index) => entries[base.count + index]?.id !== id)
+		)
+			return { ok: false, error: "base_fingerprint_mismatch" };
 		return { ok: true, entries };
 	} finally {
 		closeSync(fd);
@@ -123,6 +141,7 @@ export function snapshotTranscript(state: {
 	readonly unpersisted: readonly FileEntry[] | undefined;
 	readonly leafId: string | null;
 	readonly own: (entry: FileEntry) => string;
+	readonly persistence?: TranscriptPersistence;
 }): TranscriptTransition[] {
 	if (state.unpersisted === undefined) return [{ kind: "unavailable", reason: "transcript_tail_trimmed" }];
 	return [
@@ -130,7 +149,7 @@ export function snapshotTranscript(state: {
 		...state.unpersisted.map((entry): TranscriptTransition => ({
 			kind: "append",
 			id: entry.id,
-			entry: state.own(entry),
+			...(state.persistence ? { persistence: state.persistence } : { entry: state.own(entry) }),
 		})),
 		{ kind: "leaf", leafId: state.leafId },
 	];

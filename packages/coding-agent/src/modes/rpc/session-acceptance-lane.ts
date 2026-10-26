@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
+import { correlatedRecord } from "./client-message-events.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
 interface AcceptedRef {
@@ -149,7 +150,9 @@ export class SessionAcceptanceLane {
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
 	private acceptCorrelation(record: object): void {
-		if (!("clientMessageId" in record) && !("clientTurnId" in record)) return;
+		// A correlated kind with no identity (a trigger turn, an extension steer) ends a standing correlation.
+		const identified = "clientMessageId" in record || "clientTurnId" in record;
+		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
 		const next = {
 			clientMessageId: field(record, "clientMessageId"),
 			clientTurnId: field(record, "clientTurnId"),

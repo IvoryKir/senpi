@@ -6,6 +6,7 @@ import { ProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.ts";
 import { recoveryCarrier, SessionRecoveryIdentity } from "../../../src/core/session-recovery-identity.ts";
+import { SessionManager } from "../../../src/core/session-manager.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { createRpcSessionBinding } from "../../../src/modes/rpc/session-binding.ts";
 import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.ts";
@@ -186,6 +187,46 @@ it("mints opaque message and turn ids at their start, at a start-less terminal, 
 		turnId: null,
 		sequence: 5,
 	});
+});
+
+// Part of #4272, review MEDIUM-2: the host keeps each accepted append's id, never a serialized copy of its content.
+it("R21.1 R21.2 keeps persisted host retention per accepted append bounded: entry ids only, no stringify on the host loop", async () => {
+	vi.stubEnv(FLAG, "1");
+	const dir = await mkdtemp(join(tmpdir(), "senpi-4272-ids-"));
+	const manager = SessionManager.create(dir, dir);
+	await manager.persistHeaderNow();
+	const lane = new SessionAcceptanceLane();
+	lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
+	const baseline = lane.freeze();
+	lane.release(baseline);
+	const content = "x".repeat(256 * 1024);
+	const appends = 64;
+	const entries = Array.from({ length: appends }, (_, index) => ({
+		type: "message",
+		id: `e${index}`,
+		parentId: index === 0 ? null : `e${index - 1}`,
+		message: { role: "toolResult", content },
+	}));
+	for (const entry of entries) manager.appendCustomEntry("retention", entry);
+	const transitions = manager.drainTranscript();
+	const stringify = vi.spyOn(JSON, "stringify");
+	lane.applyTranscript(transitions);
+	const refs = entries.map((entry) => lane.accept({ type: "entry_appended", entry }, undefined));
+	const calls = stringify.mock.calls.length;
+	stringify.mockRestore();
+	expect(calls, "no serialization per append on the host loop").toBe(0);
+	expect(refs.every((ref) => ref?.historyVersion === baseline.transcript.historyVersion + appends)).toBe(true);
+	// Mirror trimming mutates the manager's entry objects later; the root names entries, it does not alias them.
+	for (const entry of entries) entry.parentId = "trimmed";
+	const root = lane.freeze();
+	expect(root.transcript.count).toBe(appends + 1);
+	expect(root.transcript.leafId).toBe(manager.getLeafId());
+	expect(root.transcript.tail.retainedBytes).toBe(0);
+	const retained = JSON.stringify(root.transcript).length;
+	expect(retained, "retention is the ids, independent of entry size").toBeLessThan(appends * 16 + 1024);
+	lane.release(root);
+	manager.dispose();
+	await rm(dir, { recursive: true, force: true });
 });
 
 // Part of #4272, ruling 10: the accepted baseline exists before the router admits a connection to the session.

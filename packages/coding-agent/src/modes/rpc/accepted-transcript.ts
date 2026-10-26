@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FileEntry } from "../../core/session-manager.ts";
 import {
 	type PersistedBase,
@@ -5,17 +6,28 @@ import {
 	readPersistedBase,
 	type TranscriptTransition,
 	type TranscriptUnavailableReason,
+	type TranscriptPersistence,
 } from "../../core/session-transcript-journal.ts";
 
+/** One worker frame's worth of unwritten entries; persisted history consumes no content budget. */
+export const DEFAULT_TRANSCRIPT_TAIL_BYTES = 16 * 1024 * 1024;
+
+interface TranscriptTail {
+	readonly entries: Map<number, string>;
+	retainedBytes: number;
+	persistence: TranscriptPersistence | null;
+}
+
 /**
- * One immutable transcript root version: a persisted base plus the host-owned values accepted after it. `entries`
- * is shared append-only storage, read up to `count`, so a root never sees a later transition.
+ * A cut names its base and accepted ids. Its shared tail releases content only once the captured file covers it;
+ * persistence may change the source of those exact entries, never the accepted count.
  */
 export interface TranscriptRoot {
 	readonly historyVersion: number;
 	readonly leafId: string | null;
 	readonly base: PersistedBase | null;
-	readonly entries: readonly string[];
+	readonly entryIds: readonly string[];
+	readonly tail: TranscriptTail;
 	readonly count: number;
 	readonly unavailable: TranscriptUnavailableReason | null;
 }
@@ -29,7 +41,8 @@ export class AcceptedTranscript {
 	private version = 0;
 	private leafId: string | null = null;
 	private base: PersistedBase | null = null;
-	private entries: string[] = [];
+	private entryIds: string[] = [];
+	private tail: TranscriptTail = { entries: new Map(), retainedBytes: 0, persistence: null };
 	private unavailable: TranscriptUnavailableReason | null = null;
 
 	get historyVersion(): number {
@@ -40,20 +53,46 @@ export class AcceptedTranscript {
 		this.version += 1;
 		if (transition.kind === "replace") {
 			this.base = transition.base;
-			this.entries = [];
+			this.entryIds = [];
+			this.tail = {
+				entries: new Map(),
+				retainedBytes: 0,
+				persistence: transition.base,
+			};
 			this.unavailable = null;
 			return;
 		}
 		if (transition.kind === "unavailable") {
-			this.unavailable ??= transition.reason;
-			process.stderr.write(`senpi rpc acceptance: transcript component unavailable: ${transition.reason}\n`);
+			this.markUnavailable(transition.reason);
+			return;
+		}
+		if (transition.kind === "persisted") {
+			this.persisted(transition.persistence);
 			return;
 		}
 		if (this.unavailable !== null) return;
 		if (transition.kind === "append") {
-			this.entries.push(transition.entry);
+			const index = this.entryIds.length;
+			this.entryIds.push(transition.id);
+			if (transition.persistence) this.persisted(transition.persistence);
+			if (index + (this.base?.count ?? 0) >= (this.tail.persistence?.count ?? 0)) {
+				const bytes = Buffer.byteLength(transition.entry ?? "");
+				if (this.tail.retainedBytes + bytes > DEFAULT_TRANSCRIPT_TAIL_BYTES) {
+					this.markUnavailable("transcript_tail_over_byte_limit");
+					return;
+				}
+				if (transition.entry !== undefined) {
+					this.tail.entries.set(index, transition.entry);
+					this.tail.retainedBytes += bytes;
+				}
+			}
 			this.leafId = transition.id;
 		} else this.leafId = transition.leafId;
+	}
+
+	private markUnavailable(reason: TranscriptUnavailableReason): void {
+		this.unavailable ??= reason;
+		process.stderr.write(`senpi rpc acceptance: transcript component unavailable: ${reason}\n`);
 	}
 
 	freeze(): TranscriptRoot {
@@ -61,18 +100,44 @@ export class AcceptedTranscript {
 			historyVersion: this.version,
 			leafId: this.leafId,
 			base: this.base,
-			entries: this.entries,
-			count: this.entries.length,
+			entryIds: this.entryIds,
+			tail: this.tail,
+			count: this.entryIds.length,
 			unavailable: this.unavailable,
 		});
+	}
+
+	private persisted(persistence: TranscriptPersistence): void {
+		this.tail.persistence = persistence;
+		for (const [index, entry] of this.tail.entries) {
+			if (index + (this.base?.count ?? 0) >= persistence.count) break;
+			this.tail.retainedBytes -= Buffer.byteLength(entry);
+			this.tail.entries.delete(index);
+		}
 	}
 }
 
 /** The root's entries: its base read only through the captured identity, then its own accepted values. */
 export function readTranscriptRoot(root: TranscriptRoot): TranscriptRead {
 	if (root.unavailable !== null) return { ok: false, error: root.unavailable };
-	const base = root.base ? readPersistedBase(root.base) : { ok: true as const, entries: [] };
-	if (!base.ok) return base;
-	const accepted = root.entries.slice(0, root.count).map((entry): FileEntry => JSON.parse(entry));
-	return { ok: true, entries: [...base.entries, ...accepted] };
+	const persistence = root.tail.persistence;
+	const persistedCount = Math.min(root.count, Math.max(0, (persistence?.count ?? 0) - (root.base?.count ?? 0)));
+	const base =
+		root.base ??
+		(persistence && {
+			fileIdentity: persistence.fileIdentity,
+			count: 0,
+			idFingerprint: createHash("sha256").digest("hex"),
+		});
+	const persisted = base
+		? readPersistedBase(base, root.entryIds.slice(0, persistedCount))
+		: { ok: true as const, entries: [] };
+	if (!persisted.ok) return persisted;
+	const entries = [...persisted.entries];
+	for (let index = persistedCount; index < root.count; index++) {
+		const entry = root.tail.entries.get(index);
+		if (entry === undefined) return { ok: false, error: "transcript_tail_trimmed" };
+		entries.push(JSON.parse(entry) as FileEntry);
+	}
+	return { ok: true, entries };
 }
