@@ -1,3 +1,5 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -9,8 +11,18 @@ import {
 	overrideAuthLaneBoundary,
 	resetAuthLaneBoundary,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/auth-lane.ts";
+import {
+	getSdkBoundary,
+	overrideSdkBoundary,
+	resetSdkBoundary,
+	type SdkQuery,
+} from "../../../src/core/extensions/builtin/anthropic-subscription/sdk-boundary.ts";
 import { forgetBinding } from "../../../src/core/extensions/builtin/anthropic-subscription/session-reattach.ts";
-import { closeSession } from "../../../src/core/extensions/builtin/anthropic-subscription/session-registry.ts";
+import {
+	closeSession,
+	overrideSessionRegistryBoundary,
+	resetSessionRegistryBoundary,
+} from "../../../src/core/extensions/builtin/anthropic-subscription/session-registry.ts";
 import { streamAnthropicSubscription } from "../../../src/core/extensions/builtin/anthropic-subscription/stream.ts";
 
 /**
@@ -147,6 +159,12 @@ async function startProvider(script: Reply[]) {
 }
 
 const cleanup: Array<() => Promise<void>> = [];
+const claudeCodeProcesses: ChildProcess[] = [];
+
+async function exited(child: ChildProcess): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	await once(child, "exit");
+}
 
 async function hermeticClaudeCode(baseUrl: string): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "senpi-10304-"));
@@ -163,6 +181,22 @@ async function hermeticClaudeCode(baseUrl: string): Promise<string> {
 		CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
 	};
 	overrideAuthLaneBoundary({ env: () => env });
+	// Each Claude Code process is spawned here so cleanup can wait for it to exit before removing its files.
+	const realQuery = getSdkBoundary().query;
+	const trackedQuery: SdkQuery = (input) =>
+		realQuery({
+			...input,
+			options: {
+				...input.options,
+				spawnClaudeCodeProcess: ({ command, args, cwd, env: childEnv, signal }) => {
+					const child = spawn(command, args, { cwd, env: childEnv, signal, stdio: ["pipe", "pipe", "ignore"] });
+					claudeCodeProcesses.push(child);
+					return child;
+				},
+			},
+		});
+	overrideSdkBoundary({ query: trackedQuery });
+	overrideSessionRegistryBoundary({ queryFactory: trackedQuery });
 	return dir;
 }
 
@@ -205,9 +239,13 @@ function cacheKey({ body, betas }: ProviderRequest): Record<string, unknown> {
 afterEach(async () => {
 	closeSession(SESSION_ID, "test_cleanup");
 	forgetBinding(SESSION_ID);
+	// Claude Code writes its transcript until it exits, so its directory is removed only after that.
+	await Promise.all(claudeCodeProcesses.splice(0).map(exited));
+	resetSessionRegistryBoundary();
+	resetSdkBoundary();
 	resetAuthLaneBoundary();
 	for (const step of cleanup.splice(0).reverse()) await step();
-});
+}, 60_000);
 
 describe("oh-my-openagent#10304: a same-turn retry reuses the prompt cache", () => {
 	it.each([
