@@ -1626,9 +1626,9 @@ export class SessionManager {
 			if (persistence) {
 				this.transcriptJournal?.record({ kind: "persisted", persistence });
 				if (entries) this._journalReplace();
-				this.transcriptBytes = new WeakMap();
 			} else if (this.transcriptFile.unavailable)
 				this.transcriptJournal?.record({ kind: "unavailable", reason: this.transcriptFile.unavailable });
+			this.transcriptBytes = new WeakMap();
 		});
 	}
 
@@ -1674,7 +1674,12 @@ export class SessionManager {
 		const cached = this.transcriptBytes.get(entry);
 		if (cached !== undefined) return cached;
 		const bytes = JSON.stringify(this.residentStore.materialize(entry));
-		if (this.persist && this.capturesTranscriptBase && (!this.flushed || !this.transcriptFile.identity))
+		if (
+			this.persist &&
+			this.capturesTranscriptBase &&
+			!this.transcriptFile.unavailable &&
+			(!this.flushed || !this.transcriptFile.identity)
+		)
 			this.transcriptBytes.set(entry, bytes);
 		return bytes;
 	}
@@ -1682,7 +1687,7 @@ export class SessionManager {
 	private *_serializedFileEntries(): Generator<string> {
 		for (const entry of this.fileEntries) {
 			const bytes = this._transcriptEntryBytes(entry);
-			if (this.capturesTranscriptBase) this.transcriptBytes.set(entry, bytes);
+			if (this.capturesTranscriptBase && !this.transcriptFile.unavailable) this.transcriptBytes.set(entry, bytes);
 			yield `${bytes}\n`;
 		}
 	}
@@ -1881,7 +1886,7 @@ export class SessionManager {
 		this._commitEntry(committed);
 		if (this.transcriptJournal) {
 			const serialized = bytes ?? this._transcriptEntryBytes(residentEntry);
-			if (this.persist && (!this.flushed || !this.transcriptFile.identity))
+			if (this.persist && !this.transcriptFile.unavailable && (!this.flushed || !this.transcriptFile.identity))
 				this.transcriptBytes.set(committed, serialized);
 			this.transcriptJournal.record({
 				kind: "append",

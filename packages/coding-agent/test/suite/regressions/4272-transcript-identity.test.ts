@@ -15,6 +15,8 @@ vi.mock("node:fs", async (importOriginal) => {
 let dir = "";
 const managers: SessionManager[] = [];
 beforeEach(async () => {
+	const actual = await vi.importActual<typeof fs>("node:fs");
+	vi.mocked(fs.fstat).mockReset().mockImplementation(actual.fstat);
 	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
 	dir = await mkdtemp(join(tmpdir(), "senpi-4272-identity-"));
 });
@@ -36,6 +38,79 @@ function snapshot(manager: SessionManager) {
 	lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
 	return lane;
 }
+
+// #4347 LOW-1: failed descriptor capture must not retain writer bytes or adopt the current pathname.
+it("releases and disarms byte caches after identity capture fails, including rewrites", async () => {
+	vi.mocked(fs.fstat).mockImplementation((...args) => {
+		const callback = args.at(-1) as (error: NodeJS.ErrnoException) => void;
+		callback(new Error("injected fstat failure"));
+	});
+	const manager = create();
+	const lane = snapshot(manager);
+	manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+	await manager.persistHeaderNow();
+	const retainedBytes = () =>
+		manager["fileEntries"].reduce(
+			(total, entry) => total + Buffer.byteLength(manager["transcriptBytes"].get(entry) ?? ""),
+			0,
+		);
+	expect(retainedBytes(), "failed first-flush capture releases cached writer bytes").toBe(0);
+	for (let index = 0; index < 16; index++) {
+		manager.appendMessage({ role: "user", content: `next ${index}`, timestamp: index + 2 });
+		manager.appendCustomEntry("next", { index });
+		expect(retainedBytes(), "later appends cannot rearm the failed lifecycle").toBe(0);
+	}
+	for (let index = 0; index < 3; index++) {
+		manager["_rewriteFile"]();
+		expect(retainedBytes(), "a rewrite cannot cache the known-unavailable transcript").toBe(0);
+		await manager.persistHeaderNow();
+		manager.appendCustomEntry("after rewrite", { index });
+		expect(retainedBytes(), "failed replacement capture also disarms caching").toBe(0);
+	}
+	lane.applyTranscript(manager.drainTranscript());
+	for (const current of [lane, snapshot(manager)]) {
+		expect(readTranscriptRoot(current.freeze().transcript)).toEqual({
+			ok: false,
+			error: "transcript_file_identity_unavailable",
+		});
+	}
+});
+
+// #4347 LOW-2: a late first-flush fstat cannot publish into a newer session lifecycle.
+it("ignores a superseded first-flush capture after newSession has flushed", async () => {
+	const realStat = vi.mocked(fs.fstat).getMockImplementation();
+	if (!realStat) throw new Error("real fstat implementation is installed");
+	let releaseOld: (() => void) | undefined;
+	vi.mocked(fs.fstat).mockImplementationOnce((...args) => {
+		releaseOld = () => realStat(...args);
+	});
+	const manager = create();
+	manager.beginTranscriptJournal();
+	manager.appendMessage({ role: "user", content: "old lifecycle", timestamp: 1 });
+	const oldFile = manager.getSessionFile();
+	const oldReady = manager["transcriptFile"].ready;
+	manager.newSession();
+	manager.appendMessage({ role: "user", content: "new lifecycle", timestamp: 2 });
+	await manager.persistHeaderNow();
+	const lane = snapshot(manager);
+	const before = lane.freeze().transcript;
+	const beforeRead = readTranscriptRoot(before);
+	expect(beforeRead.ok && beforeRead.entries.at(-1)).toMatchObject({
+		message: { content: "new lifecycle" },
+	});
+	expect(before.tail.persistence?.fileIdentity.path).toBe(manager.getSessionFile());
+	if (!releaseOld) throw new Error("old descriptor capture was deferred");
+	releaseOld();
+	await oldReady;
+	const transitions = manager.drainTranscript();
+	for (const transition of transitions) {
+		if (transition.kind === "persisted") expect(transition.persistence.fileIdentity.path).not.toBe(oldFile);
+		if (transition.kind === "replace") expect(transition.base?.fileIdentity.path).not.toBe(oldFile);
+	}
+	lane.applyTranscript(transitions);
+	expect(readTranscriptRoot(lane.freeze().transcript)).toEqual(beforeRead);
+	expect(readTranscriptRoot(snapshot(manager).freeze().transcript)).toEqual(beforeRead);
+});
 
 // #4347 / RULING-31(2): the first publication must name the descriptor we wrote, not a later pathname.
 it("R31.2 replacement between create and first publish fails instead of adopting the replacement", async () => {
