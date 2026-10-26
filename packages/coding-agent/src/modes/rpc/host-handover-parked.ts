@@ -14,7 +14,6 @@
  * session file is gone is dropped, never retried.
  */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionRetryFallbackProfile } from "../../core/agent-session-runtime.ts";
@@ -70,12 +69,29 @@ export interface HandoverParkedEntry {
 	 * transfer, and the cleanup of an earlier one removes only its own. Absent on entries older generations wrote.
 	 */
 	readonly transferId?: string;
+	/**
+	 * The successor's last failed reopen of this transfer (code-yeongyu/oh-my-openagent#10091). The record stays: the
+	 * reopen is tried again when a claim or a generation changes, and a client may open the path itself meanwhile.
+	 */
+	readonly failedTransfer?: HandoverParkedFailure;
 }
 
-const recordDir = (daemonDir: string): string => join(daemonDir, "handover-parked");
+export interface HandoverParkedFailure {
+	readonly reason: string;
+	readonly at: string;
+	readonly attempts: number;
+}
+
+/** One file per parked session; the successor's reopen watches this directory. */
+export function handoverParkedRecordDir(daemonDir: string): string {
+	return join(daemonDir, "handover-parked");
+}
 
 const entryFile = (daemonDir: string, sessionPath: string): string =>
-	join(recordDir(daemonDir), `${createHash("sha256").update(sessionPath, "utf8").digest("hex").slice(0, 16)}.json`);
+	join(
+		handoverParkedRecordDir(daemonDir),
+		`${createHash("sha256").update(sessionPath, "utf8").digest("hex").slice(0, 16)}.json`,
+	);
 
 let mutationChain: Promise<void> = Promise.resolve();
 
@@ -95,6 +111,7 @@ function isEntry(value: unknown): value is HandoverParkedEntry {
 		(record.cwd === undefined || typeof record.cwd === "string") &&
 		(record.parkedBy === undefined || typeof record.parkedBy === "string") &&
 		(record.transferId === undefined || typeof record.transferId === "string") &&
+		(record.failedTransfer === undefined || isFailure(record.failedTransfer)) &&
 		(record.thinkingLevel === undefined || typeof record.thinkingLevel === "string") &&
 		(record.permissionPreset === undefined ||
 			(typeof record.permissionPreset === "string" &&
@@ -114,8 +131,20 @@ function isEntry(value: unknown): value is HandoverParkedEntry {
 	);
 }
 
+function isFailure(value: unknown): value is HandoverParkedFailure {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const attempts: unknown = Reflect.get(value, "attempts");
+	return (
+		typeof Reflect.get(value, "reason") === "string" &&
+		typeof Reflect.get(value, "at") === "string" &&
+		typeof attempts === "number" &&
+		Number.isSafeInteger(attempts) &&
+		attempts > 0
+	);
+}
+
 async function writeEntryFile(daemonDir: string, entry: HandoverParkedEntry): Promise<void> {
-	await mkdir(recordDir(daemonDir), { recursive: true, mode: 0o700 });
+	await mkdir(handoverParkedRecordDir(daemonDir), { recursive: true, mode: 0o700 });
 	await writeFileDurably(entryFile(daemonDir, entry.sessionPath), `${JSON.stringify(entry, null, 2)}\n`);
 }
 
@@ -127,13 +156,13 @@ export function recordHandoverParkedSession(daemonDir: string, entry: HandoverPa
 export async function readHandoverParkedSessions(daemonDir: string): Promise<readonly HandoverParkedEntry[]> {
 	let names: string[];
 	try {
-		names = (await readdir(recordDir(daemonDir))).filter((name) => name.endsWith(".json"));
+		names = (await readdir(handoverParkedRecordDir(daemonDir))).filter((name) => name.endsWith(".json"));
 	} catch {
 		return [];
 	}
 	const entries: HandoverParkedEntry[] = [];
 	for (const name of names) {
-		const file = join(recordDir(daemonDir), name);
+		const file = join(handoverParkedRecordDir(daemonDir), name);
 		try {
 			const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
 			if (isEntry(parsed)) entries.push(parsed);
@@ -161,23 +190,31 @@ export async function readHandoverParkedSessions(daemonDir: string): Promise<rea
 export function clearHandoverParkedSession(daemonDir: string, sessionPath: string, transferId?: string): Promise<void> {
 	return enqueueMutation(async () => {
 		const file = entryFile(daemonDir, sessionPath);
-		if (transferId !== undefined && (await readTransferId(file)) !== transferId) return;
+		if (transferId !== undefined && (await readEntry(file))?.transferId !== transferId) return;
 		await rm(file, { force: true });
-		await syncDirectory(recordDir(daemonDir)).catch(() => undefined);
+		await syncDirectory(handoverParkedRecordDir(daemonDir)).catch(() => undefined);
 	});
 }
 
-async function readTransferId(file: string): Promise<string | undefined> {
-	try {
-		const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-		return isEntry(parsed) ? parsed.transferId : undefined;
-	} catch {
-		// Absent or unreadable: it is not the transfer being cleaned up, so it stays.
-		return undefined;
-	}
+/** Records why the successor could not reopen `entry`, only while the record still holds that transfer. */
+export function recordHandoverParkedFailure(
+	daemonDir: string,
+	entry: HandoverParkedEntry,
+	failure: HandoverParkedFailure,
+): Promise<void> {
+	return enqueueMutation(async () => {
+		const current = await readEntry(entryFile(daemonDir, entry.sessionPath));
+		if (current === undefined || current.transferId !== entry.transferId) return;
+		await writeEntryFile(daemonDir, { ...current, failedTransfer: failure });
+	});
 }
 
-export function dropHandoverParkedSessionIfFileGone(daemonDir: string, sessionPath: string): Promise<void> {
-	if (existsSync(sessionPath)) return Promise.resolve();
-	return clearHandoverParkedSession(daemonDir, sessionPath);
+async function readEntry(file: string): Promise<HandoverParkedEntry | undefined> {
+	try {
+		const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
+		return isEntry(parsed) ? parsed : undefined;
+	} catch {
+		// Absent or unreadable: nothing to compare against, so nothing changes.
+		return undefined;
+	}
 }

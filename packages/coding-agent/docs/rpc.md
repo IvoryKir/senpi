@@ -2166,7 +2166,11 @@ What the host does enforce are lifecycle windows, and they only ever return memo
   parks it (or the completed-detached-worker rule above parks it sooner) — announced as
   `session_parked { sessionId, sessionPath }`, after which the file reopens by path like any
   evicted session, and the parked session counts as gone for the empty-host exit below. The park is also recorded
-  for the NEXT generation, which reopens it on startup; the host that parked it never reopens it on its own, so a
+  for the NEXT generation, which reopens it from its startup for as long as a predecessor generation runs or an
+  inherited park remains (code-yeongyu/oh-my-openagent#10091: a session that transfers hours after the handoff still
+  reopens; a reopen that fails for another reason than a held claim keeps the record, with
+  `failedTransfer { reason, at, attempts }`, and is tried again when a claim or a generation changes); the host that
+  parked it never reopens it on its own, so a
   client reopening the session right after `session_parked` is the only open of that path (senpi#3485). It is also bounded by the empty-host exit
   and the supervisor's idle-exit window below: retention survives a client, not the host. Any attach may turn retention
   on for a live session; no attach turns it off for clients that already rely on it. Omitting the flag is byte-identical
