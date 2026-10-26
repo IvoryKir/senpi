@@ -97,6 +97,29 @@ describe("4351 resolution-chain review fold", () => {
 		expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe("deny");
 	});
 
+	// senpi#4351: dot components in link targets must not hide intermediate denies.
+	it.each([
+		["tmp", "../proj"],
+		[".", "./proj"],
+		["tmp/nested", "../../proj"],
+	])("denies an intermediate spelling through %s/link -> %s", async (directory, target) => {
+		const project = join(root, "proj");
+		const parent = join(root, directory);
+		mkdirSync(join(project, "x"), { recursive: true });
+		mkdirSync(parent, { recursive: true });
+		symlinkSync(outside, join(project, "x", "secret"), linkType);
+		symlinkSync(target, join(parent, "link"), "dir");
+		const input = join(parent, "link", "x", "secret", "f.txt");
+		const request = external(input);
+		const service = new PermissionService([rule("*", "allow"), rule(`${project}/*/secret/*`, "deny")], []);
+
+		expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe("deny");
+		await expect(service.ask({ ...request, sessionID: "dots", metadata: {} }, request)).rejects.toMatchObject({
+			_tag: "PermissionDeniedError",
+		});
+		await expect(fence(input, service)).rejects.toMatchObject({ _tag: "PermissionDeniedError" });
+	});
+
 	it.each([
 		["loop", 2],
 		["hop-limit", 41],

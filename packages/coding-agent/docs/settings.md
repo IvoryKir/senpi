@@ -45,6 +45,8 @@ For `external_directory`, this order applies separately to each path spelling: t
 
 "Allow always" scopes remain tied to the resolved directory and cannot override a deny. An explicit allow for only the resolved directory can still leave an unmatched alias at `ask`; a remembered "Always" approval covers that same resolved target across its aliases.
 
+Followed link targets are normalized against the directory containing the link, so `.` and `..` do not create extra unnormalized spellings. A genuine intermediate spelling can still match only a blanket deny even when specific rules allow both the original path and the final destination. For example, if `entry` links to `proj` and `proj/x/secret` links to `outside`, allowing `entry/*` and `outside/*` does not override a blanket deny on the intermediate `proj/x/secret/file.txt`. Allow that intermediate route explicitly if it should be accessible.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `permissionPreset` | string | `"full-access"` | Permission preset: `"full-access"`, `"workspace"`, `"accept-edits"`, `"auto"`, `"read-only"`, or `"ask"` |

@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, readlinkSync } from "node:fs";
-import { isAbsolute, parse, sep } from "node:path";
+import { isAbsolute, join, normalize, parse, resolve as resolvePath, sep } from "node:path";
 import { realpathWithoutOpenStrict } from "../../../../utils/paths.ts";
 import { canonicalPathCase, sameLexicalPath } from "./external-pattern.ts";
 import type { Rule } from "./types.ts";
@@ -46,6 +46,7 @@ export function decideExternalPaths(
 	};
 	const spellings = new Map<string, string>();
 	const add = (spelling: string, resolved: string): boolean => {
+		if (!spellings.has(spelling) && spellings.size >= 16) return false;
 		spellings.set(spelling, resolved);
 		spellings.set(canonicalCase(spelling), resolved);
 		return spellings.size <= 16;
@@ -58,14 +59,12 @@ export function decideExternalPaths(
 			// A multi-path request's aliases belong only to their own resolved target.
 			if (!resolvedTargets.some((candidate) => sameLexicalPath(candidate, resolved))) continue;
 			if (!add(resolved, resolved)) return { action: "ask", rules: [] };
-			const pending = new Set([value]);
+			const pending = new Set([resolvePath(value)]);
 			for (const spelling of pending) {
 				if (!add(spelling, resolved)) return { action: "ask", rules: [] };
-				if (!isAbsolute(spelling)) continue;
 				const { root } = parse(spelling);
 				const parts = spelling.slice(root.length).split(sep).filter(Boolean);
 				for (let index = 0; index < parts.length; index++) {
-					// Do not normalize "..": a preceding symlink changes what its parent means.
 					const candidate = root + parts.slice(0, index + 1).join(sep);
 					let link: string;
 					try {
@@ -82,9 +81,10 @@ export function decideExternalPaths(
 						throw error;
 					}
 					const parent = root + parts.slice(0, index).join(sep);
-					const followed = isAbsolute(link) ? link : `${parent}${parent.endsWith(sep) ? "" : sep}${link}`;
-					const tail = parts.slice(index + 1);
-					const next = tail.length ? `${followed}${followed.endsWith(sep) ? "" : sep}${tail.join(sep)}` : followed;
+					// Normalize each followed target against its containing directory before
+					// storing or walking it, so dot components cannot hide an intermediate rule.
+					const followed = isAbsolute(link) ? normalize(link) : join(parent, link);
+					const next = join(followed, ...parts.slice(index + 1));
 					if (!add(next, resolved)) return { action: "ask", rules: [] };
 					pending.add(next);
 				}
