@@ -18,6 +18,7 @@ import {
 	runAgentLoopContinue,
 } from "./agent-loop.ts";
 import { ProviderRetryWatchdogAbortError } from "./assistant-terminal-state.ts";
+import { dispatchInternalAgent, type InternalLoopConfig, internalLoopSink } from "./internal-events.ts";
 import { isLocalFailure, localFailurePort } from "./local-failure.ts";
 import { getDefaultStreamFn } from "./stream-fn.ts";
 import type {
@@ -740,7 +741,7 @@ export class Agent {
 			initialRequestTimeoutMs?: number;
 			initialRequestStreamStartTimeoutMs?: number;
 		} = {},
-	): AgentLoopConfig {
+	): InternalLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
 		let steeringQueueGeneration = this.steeringQueue.getClearGeneration();
 		let followUpQueueGeneration = this.followUpQueue.getClearGeneration();
@@ -750,6 +751,7 @@ export class Agent {
 			this.giveBack(queue, messages, queue === "steering" ? steeringQueueGeneration : followUpQueueGeneration);
 		const reasoning = (this._state.reasoningBaseline as ThinkingLevel | undefined) ?? this._state.thinkingLevel;
 		return {
+			...internalLoopSink(this),
 			model: this._state.model,
 			reasoning: reasoning === "off" ? undefined : reasoning,
 			thinkingSelection: this._state.thinkingSelection,
@@ -979,6 +981,8 @@ export class Agent {
 		if (!signal) {
 			throw new Error("Agent listener invoked outside active run");
 		}
+		const internal = dispatchInternalAgent(this, { event });
+		if (internal) await internal;
 		for (const listener of this.listeners) {
 			await listener(event, signal);
 		}

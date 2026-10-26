@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
+import { assistantRecords, getAssistantCapture } from "../src/utils/assistant-capture.ts";
+import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 import { redactSecrets, sanitizeProviderErrorMessage } from "../src/utils/provider-error.ts";
 import { redactCredentialShapes } from "../src/utils/secret-redaction.ts";
 
@@ -315,6 +317,48 @@ describe("redactSecrets", () => {
 
 describe("sanitizeProviderErrorMessage", () => {
 	const modelNotFound = `400 {"code":"model_not_found","message":"unknown provider for model faux-1"} x-api-key: ${secret}`;
+
+	// senpi#4283: capture freezes metadata at push time, so later sanitization cannot repair leaked records.
+	it("redacts streamed provider errors before capture freezes their persisted bytes", async () => {
+		const stream = new AssistantMessageEventStream({ captureBlocks: true });
+		const records = assistantRecords(stream);
+		const partial = failedMessage(modelNotFound);
+		const start = { type: "start", partial } as const;
+		stream.push(start);
+		const terminal = { type: "error", reason: "error", error: partial } as const;
+		stream.push(terminal);
+		stream.end();
+		const captured = [];
+		for await (const event of records) {
+			const capture = getAssistantCapture(event);
+			expect(capture).toBeDefined();
+			expect(capture?.message?.errorMessage).toContain("[REDACTED]");
+			expect(capture?.message?.errorCause).toEqual({ type: "model_config", model: "faux/faux-1" });
+			captured.push({ event, capture });
+		}
+		expect(captured).toHaveLength(2);
+		const persisted = JSON.stringify(captured);
+		expect(persisted).toContain("[REDACTED]");
+		expect(persisted).not.toContain(secret);
+	});
+
+	it("rejects post-done pushes before capture or message mutation", async () => {
+		const stream = new AssistantMessageEventStream({ captureBlocks: true });
+		const records = assistantRecords(stream);
+		const message = failedMessage("finished", "stop");
+		const done = { type: "done", reason: "stop", message } as const;
+		stream.push(done);
+		const partial = failedMessage(modelNotFound);
+		const late = { type: "start", partial } as const;
+		stream.push(late);
+		expect(getAssistantCapture(late)).toBeUndefined();
+		expect(partial.errorMessage).toBe(modelNotFound);
+		expect(partial.errorCause).toBeUndefined();
+		expect(await stream.result()).toBe(message);
+		const observed = [];
+		for await (const event of records) observed.push(event);
+		expect(observed).toEqual([done]);
+	});
 
 	it("classifies a model configuration error on the raw text, then keeps only the redacted text", () => {
 		const message = failedMessage(modelNotFound);
