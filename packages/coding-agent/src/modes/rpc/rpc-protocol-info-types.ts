@@ -1,6 +1,7 @@
 import type { SessionRuntimeKind } from "../../cli/args.ts";
 
 import type { EngineOrdinal } from "../../core/engine-build-identity.ts";
+import type { RpcMethodClassesAdvertisement } from "./rpc-method-class.ts";
 
 // ============================================================================
 // RPC Responses (stdout)
@@ -55,6 +56,11 @@ export interface RpcProtocolInfo extends RpcProtocolIdentity {
 	/** Informational engine version. Never compare it for compatibility - use the fields above. */
 	readonly serverVersion: string;
 	readonly capabilities: string[];
+	/**
+	 * With the `rpc_method_classes` capability: the version and digest of the engine's method-class table
+	 * (`get_rpc_method_classes`), so a client can tell whether its copy is current (senpi#4319).
+	 */
+	readonly rpc_method_classes?: RpcMethodClassesAdvertisement;
 	readonly mode: "classic" | "multi";
 	/**
 	 * Multi-session hosts only: whether this host's memory sampler currently reads its memory footprint above

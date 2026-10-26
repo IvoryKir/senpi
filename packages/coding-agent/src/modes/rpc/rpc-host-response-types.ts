@@ -1,5 +1,6 @@
 import type { RpcUnloadAnswer } from "./rpc-effect-answer-types.ts";
 import type { RpcSubscriptionLimitsEvent } from "./rpc-host-lifecycle-types.ts";
+import type { RpcMethodClassesAnswer } from "./rpc-method-class.ts";
 import type { RpcProtocolInfo } from "./rpc-protocol-info-types.ts";
 import type { RpcSessionState } from "./rpc-session-state-types.ts";
 import type { SessionStatusRecord } from "./session-status.ts";
@@ -71,6 +72,13 @@ export type RpcHostCommandResponse =
 			success: true;
 			/** An account nothing has reported for is absent: unknown, never 0%. */
 			data: { accounts: ReadonlyArray<Omit<RpcSubscriptionLimitsEvent, "type">> };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_rpc_method_classes";
+			success: true;
+			data: RpcMethodClassesAnswer;
 	  }
 	| {
 			id?: string;

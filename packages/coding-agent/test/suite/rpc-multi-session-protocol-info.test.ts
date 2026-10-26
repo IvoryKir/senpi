@@ -39,6 +39,7 @@ describe("multi-session RPC protocol info", () => {
 					"effect_ledger",
 					"subscription_limits",
 					"resolve_path",
+					"rpc_method_classes",
 					"steer_when_idle",
 					"continue_from_leaf",
 					"eval_cells",
@@ -72,6 +73,7 @@ describe("multi-session RPC protocol info", () => {
 					"tool_runtime:in-process",
 					"offload_api",
 				],
+				rpc_method_classes: { version: 1, digest: expect.stringMatching(/^[0-9a-f]{64}$/) },
 				mode: "multi",
 				// Host identity (`protocol-identity.ts`): the instance is this process, the
 				// engine ordinal is built from this tree's VERSION by an independent builder,

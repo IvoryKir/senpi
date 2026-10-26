@@ -38,6 +38,7 @@ const OBSERVING_COMMANDS: ReadonlySet<unknown> = new Set([
 	"get_effect_status",
 	"get_pending_inputs",
 	"get_subscription_limits",
+	"get_rpc_method_classes",
 	"get_state",
 	"get_entries",
 ]);

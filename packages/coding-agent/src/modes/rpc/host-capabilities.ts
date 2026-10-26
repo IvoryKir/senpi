@@ -37,6 +37,7 @@ import {
 	WARM_CAPABILITY,
 } from "./custom-capability.ts";
 import { EFFECT_LEDGER_CAPABILITY } from "./effect-record.ts";
+import { RPC_METHOD_CLASSES_CAPABILITY } from "./rpc-method-class.ts";
 import { STEER_WHEN_IDLE_CAPABILITY, USER_ACTIVITY_CAPABILITY } from "./rpc-types.ts";
 import { MOVE_SESSION_CAPABILITY, MOVE_SESSION_REVOKE_CAPABILITY } from "./session-move-wire.ts";
 
@@ -79,6 +80,7 @@ export function multiSessionHostCapabilities(options: {
 			EFFECT_LEDGER_CAPABILITY,
 			SUBSCRIPTION_LIMITS_CAPABILITY,
 			RESOLVE_PATH_CAPABILITY,
+			RPC_METHOD_CLASSES_CAPABILITY,
 			STEER_WHEN_IDLE_CAPABILITY,
 			CONTINUE_FROM_LEAF_CAPABILITY,
 			EVAL_CELLS_CAPABILITY,

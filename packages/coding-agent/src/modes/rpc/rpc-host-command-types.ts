@@ -169,6 +169,13 @@ export type RpcCommand =
 	  }
 	| {
 			id?: string;
+			/** The engine's class of every inbound record type (senpi#4319); capability `rpc_method_classes`. */
+			type: "get_rpc_method_classes";
+			/** An observing read, as on `get_protocol_info`. */
+			observe?: boolean;
+	  }
+	| {
+			id?: string;
 			type: "list_sessions";
 			/**
 			 * Include `kind: "worker"` rows, each with its `context` (default false). A

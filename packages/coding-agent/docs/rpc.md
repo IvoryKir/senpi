@@ -1960,7 +1960,7 @@ The host exits only after the window elapses with NO attached client connections
 Any attached connection or agent turn resets the window, so a busy host never exits. A connection attaches with its
 first request line, unless that line is an OBSERVING read: a side-effect-free read carrying `"observe": true` -
 `get_protocol_info`, `list_sessions`, `subscribe_sessions`, `unsubscribe_sessions`, `get_effect_status`,
-`get_pending_inputs`, `get_subscription_limits`, and the session reads `get_state` and `get_entries` (capability
+`get_pending_inputs`, `get_subscription_limits`, `get_rpc_method_classes`, and the session reads `get_state` and `get_entries` (capability
 `observe_reads`) - or a `warm` (marked or not - see "Warming a host"). A connection that only ever sends observing reads never counts and never resets the window, so a
 poller (`senpi host status [--all]`, which marks both of its reads, a doctor loop, a runtime panel) can look at every
 endpoint as often as it likes without keeping any of them alive; the first request that is anything else attaches the
@@ -3503,6 +3503,34 @@ stable within the account (`<limit>:<slot>`, for example `codex:primary` or `cla
 response headers (one family per metered limit); Claude subscriptions in `anthropic-ratelimit-unified-*`
 headers, and through the Claude SDK lane in its `rate_limit_event` messages. A window the latest response did not mention keeps its last value. A poll answers with the account's whole window set and replaces it. `plan` is the plan the usage endpoint names (ChatGPT), when it names one; `error` says why the last poll failed (`auth stale - run /login`, `rate limited`, `HTTP <status>`, `timed out`, `unreachable`), and the windows beside it are the last ones reported. The next successful report clears it. Every connection also hears a
 `subscription_limits` record (below) when an account's windows change.
+
+#### get_rpc_method_classes
+
+The engine's class for every inbound record type it accepts (capability `rpc_method_classes`). A client that
+relays requests for someone other than the local user can use the table to decide which requests to accept from
+them and to hide what they cannot do; the engine itself does not gate its local connections with it. The command
+only reads and may be sent with `observe: true`.
+
+```json
+{"type": "get_rpc_method_classes"}
+{"type": "response", "command": "get_rpc_method_classes", "success": true, "data": {"version": 1, "digest": "<64 hex>", "classes": {"get_state": "observe", "prompt": "drive", "export_html": "dynamic", "bash": "device_admin", "set_client_info": "connection_local"}}}
+```
+
+`classes` names every inbound record type (the example shows five). `dynamic` marks a type whose class depends on
+the record: `export_html` and `export_jsonl` are `observe` without `outputPath` and `device_admin` with it (the
+engine writes that path on its own filesystem), and `append_session_entry` is `drive` for a user-authored message
+entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_admin` for any other entry. The classes, least to most dangerous:
+`observe` (side-effect-free reads), `drive` (runs, steers or edits a session), `answer` (`extension_ui_response`,
+`extension_ui_progress`), `thread` (creates, opens, attaches, switches, forks or closes sessions), `device_admin`
+(acts on the device outside the agent's permission flow: direct shell, path probes and writes, credentials,
+device-wide model settings, reloads, forged session entries; a relaying client should unlock it only with an
+explicit `admin` grant) and `connection_local` (configures or tears down the sender's own connection or host ownership,
+so it is meaningful only to the connection that sends it). A type missing from `classes` is unclassified: treat it
+as more dangerous than every class and refuse it. `connection_local` is never accepted on someone else's behalf.
+
+`get_protocol_info` advertises the table as `rpc_method_classes: { version, digest }`. `digest` is the lowercase hex
+sha256 of the `<type>=<class>\n` lines of `classes` (`<type>=dynamic` for a record-dependent type), sorted, so a client that kept a copy can tell whether it is
+current without fetching it; `version` changes only when the meaning of a class does.
 
 #### get_effect_status
 

@@ -10,6 +10,7 @@ import { multiSessionHostCapabilities } from "./host-capabilities.ts";
 
 import { answerWarm } from "./host-warm.ts";
 import { protocolIdentity } from "./protocol-identity.ts";
+import { RPC_METHOD_CLASSES_ADVERTISEMENT, rpcMethodClassesAnswer } from "./rpc-method-class.ts";
 
 import type { RpcCommand, RpcResponse } from "./rpc-types.ts";
 import { RPC_ERROR_MISSING_SESSION_ID } from "./rpc-types.ts";
@@ -91,6 +92,7 @@ export async function dispatch(
 				protocolVersion: 1,
 				serverVersion: VERSION,
 				capabilities,
+				rpc_method_classes: RPC_METHOD_CLASSES_ADVERTISEMENT,
 				mode: "multi",
 				...protocolIdentity(host.defaults.agentDir),
 				memory_pressure: host.memoryPressure,
@@ -104,6 +106,15 @@ export async function dispatch(
 			command: "get_subscription_limits",
 			success: true,
 			data: { accounts: subscriptionLimits.snapshot() },
+		};
+	}
+	if (command.type === "get_rpc_method_classes") {
+		return {
+			id: command.id,
+			type: "response",
+			command: "get_rpc_method_classes",
+			success: true,
+			data: rpcMethodClassesAnswer(),
 		};
 	}
 	if (command.type === "list_sessions") {

@@ -108,6 +108,11 @@ import { HostSessionControl } from "./host-session-control.ts";
 import { createRpcLoginPromptCallbacks } from "./login-prompts.ts";
 import { answerMemoryReport } from "./memory-report-command.ts";
 import { protocolIdentity } from "./protocol-identity.ts";
+import {
+	RPC_METHOD_CLASSES_ADVERTISEMENT,
+	RPC_METHOD_CLASSES_CAPABILITY,
+	rpcMethodClassesAnswer,
+} from "./rpc-method-class.ts";
 import { buildRpcCommandsForSession, createCommandsChangedEvent, rpcCommandListDigest } from "./rpc-command-surface.ts";
 import {
 	rpcCommandPayloadError,
@@ -1155,6 +1160,7 @@ export function createRpcConnectionHandler(
 								MEDIA_PLACEHOLDERS_CAPABILITY,
 								DURABLE_CLIENT_MESSAGE_ID_CAPABILITY,
 								EFFECT_LEDGER_CAPABILITY,
+								RPC_METHOD_CLASSES_CAPABILITY,
 								STEER_WHEN_IDLE_CAPABILITY,
 								CONTINUE_FROM_LEAF_CAPABILITY,
 								EVAL_CELLS_CAPABILITY,
@@ -1173,6 +1179,7 @@ export function createRpcConnectionHandler(
 								),
 							]),
 						],
+						rpc_method_classes: RPC_METHOD_CLASSES_ADVERTISEMENT,
 						mode: "classic",
 						...protocolIdentity(),
 					},
@@ -1935,6 +1942,10 @@ export function createRpcConnectionHandler(
 
 			case "get_subscription_limits": {
 				return success(id, "get_subscription_limits", { accounts: subscriptionLimits.snapshot() });
+			}
+
+			case "get_rpc_method_classes": {
+				return success(id, "get_rpc_method_classes", rpcMethodClassesAnswer());
 			}
 
 			case "get_messages": {
