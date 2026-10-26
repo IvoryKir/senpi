@@ -36,7 +36,9 @@ type RpcInboundRecordOf<K extends RpcMethodType> = Extract<RpcInboundRecord, { t
 /**
  * A record-dependent entry: a pure function of the record plus the version of its rule. The digest hashes the entry
  * as `type=dynamic@<version>`, so changing what `classify` decides REQUIRES bumping `version`; otherwise a client
- * holding the old digest never learns the rule moved.
+ * holding the old digest never learns the rule moved. The outputs of each version are pinned by a fixture keyed
+ * `<type>@<version>` in `test/suite/regressions/4319-rpc-method-class.test.ts`: a classify change without a version
+ * bump fails that test.
  */
 interface RpcMethodClassRule<K extends RpcMethodType> {
 	readonly classify: (record: RpcInboundRecordOf<K>) => RpcMethodClass;

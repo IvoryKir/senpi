@@ -140,6 +140,52 @@ describe("RPC method classes (senpi#4319)", () => {
 		expect(classifyRpcMethod({ type: "append_session_entry" })).toBe("device_admin");
 	});
 
+	// Each dynamic rule's OUTPUTS, pinned with its version: a classify change without a version bump fails here, and a
+	// bump fails the key match until the fixture is re-recorded under the new version on purpose.
+	it("pins every dynamic rule's outputs under <type>@<version>, so classify cannot change without a version bump", () => {
+		const entry = (fields: Record<string, unknown>) => ({ id: "e", parentId: null, timestamp: "t", ...fields });
+		const message = (fields: Record<string, unknown>) =>
+			entry({ type: "message", message: { timestamp: 0, ...fields } });
+		const fixtures: Record<string, ReadonlyArray<readonly [string, unknown, RpcMethodClass]>> = {
+			"append_session_entry@1": [
+				["user message", message({ role: "user", content: "hi" }), "drive"],
+				["assistant message", message({ role: "assistant", content: [] }), "device_admin"],
+				[
+					"tool result",
+					message({ role: "toolResult", toolCallId: "t", toolName: "bash", content: [] }),
+					"device_admin",
+				],
+				["message without a role", message({ content: "hi" }), "device_admin"],
+				["message without a message", entry({ type: "message" }), "device_admin"],
+				["custom entry", entry({ type: "custom", customType: "x", data: {} }), "device_admin"],
+				[
+					"custom message",
+					entry({ type: "custom_message", customType: "x", content: "hi", display: true }),
+					"device_admin",
+				],
+				["label", entry({ type: "label", targetId: "e", label: "x" }), "device_admin"],
+				[
+					"compaction",
+					entry({ type: "compaction", summary: "s", firstKeptEntryId: "e", tokensBefore: 1 }),
+					"device_admin",
+				],
+				["model change", entry({ type: "model_change", provider: "p", modelId: "m" }), "device_admin"],
+				["unknown entry type", entry({ type: "zz_unknown" }), "device_admin"],
+				["entry not an object", "message", "device_admin"],
+				["no entry", undefined, "device_admin"],
+			],
+		};
+		const rules = Object.entries(RPC_METHOD_CLASS).flatMap(([type, value]) =>
+			typeof value === "string" ? [] : [`${type}@${value.version}`],
+		);
+		expect(Object.keys(fixtures).sort()).toEqual(rules.sort());
+		for (const [key, cases] of Object.entries(fixtures)) {
+			const type = key.slice(0, key.indexOf("@"));
+			const outputs = cases.map(([name, entryValue]) => [name, classifyRpcMethod({ type, entry: entryValue })]);
+			expect(outputs).toEqual(cases.map(([name, , expected]) => [name, expected]));
+		}
+	});
+
 	// A changed rule must bump its version deliberately: this snapshot makes the change visible.
 	it("versions every record-dependent entry", () => {
 		const { classes, dynamic_versions } = rpcMethodClassesAnswer();
