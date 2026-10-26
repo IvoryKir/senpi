@@ -135,6 +135,8 @@ fixture_receipt!(
     "RECEIPT_JUNCTION_WINFSP",
     Locality::NotLocal(NotLocalReason::DriverNotInPath)
 );
+// The control for the junction above: source and target are both kernel NTFS volumes, so `Local`
+// prints whether or not the handle follows the junction. `junction_winfsp` is the proof.
 fixture_receipt!(
     receipt_28_junction_to_the_vhdx_ntfs_volume_is_local,
     "junction_vhdx",
@@ -159,6 +161,7 @@ fn receipt_28_refs_vhdx_volume_is_local() {
             probe_volume(&path).unwrap_or_else(|error| panic!("refs_vhdx: cannot open {path}: {error:?}"));
         assert_eq!(receipt_volume("refs_vhdx", &path), Locality::Local);
         assert_eq!(facts.refs_driver, senpi_socket_secret::DriverPath::InPath);
+        assert_eq!(facts.reported_file_system.as_deref(), Some("ReFS"));
     }
 }
 
