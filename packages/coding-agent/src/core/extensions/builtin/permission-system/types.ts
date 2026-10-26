@@ -29,7 +29,7 @@ export type Request = {
 	permission: string;
 	patterns: string[];
 	always: string[];
-	/** Lexical path spellings for display only; patterns and always carry the resolved targets. */
+	/** Lexical path spellings for display and deny checks; allows use only the resolved targets. */
 	originalPaths?: readonly string[];
 	/** A wider "Allow always" scope the prompt may offer (tools without a parser, senpi#3403). */
 	widerAlways?: { readonly label: string; readonly patterns: string[] };

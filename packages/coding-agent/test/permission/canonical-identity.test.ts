@@ -93,11 +93,13 @@ describe("canonical external-directory identity", () => {
 		expect(reloaded.dispatchDecision("external_directory", changed?.patterns ?? []).action).toBe("ask");
 	});
 
-	it("displays the resolved literal target alongside its lexical spelling", async () => {
+	it.each([1, 2])("displays all %s resolved literal targets alongside their lexical spellings", async (count) => {
 		const aliased = join(alias, "legal*name.txt");
 		const target = join(outside, "legal*name.txt");
+		const aliases = [aliased, join(alias, "second.txt")].slice(0, count);
+		const targets = [target, join(outside, "second.txt")].slice(0, count);
 		const external = registry
-			.parse("write", { path: aliased }, cwd)
+			.parse("bash", { command: `cat ${aliases.map((path) => `"${path}"`).join(" ")}` }, cwd)
 			.find((r) => r.permission === "external_directory");
 		expect(external).toBeDefined();
 		if (!external) throw new Error("Missing external-directory request");
@@ -113,10 +115,10 @@ describe("canonical external-directory identity", () => {
 		expect(
 			message
 				.split("\n")
-				.find((line) => line.startsWith("Directory: "))
-				?.slice("Directory: ".length),
-		).toBe(target);
-		expect(message).toContain(aliased);
+				.filter((line) => line.startsWith("Directory: "))
+				.map((line) => line.slice("Directory: ".length)),
+		).toEqual(targets);
+		for (const path of aliases) expect(message).toContain(path);
 	});
 
 	it("keeps existing and missing case aliases inside the same directory", (context) => {

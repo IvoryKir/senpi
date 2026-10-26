@@ -6,6 +6,7 @@ import { BashArity } from "../permission-system/arity.ts";
 import { analyzeBashCommand, bestEffortCommandLines } from "../permission-system/bash-command-segments.ts";
 import {
 	type AlwaysScope,
+	expandHome,
 	extractExternalPaths,
 	resolveExternalPath,
 	toParentDirectoryPattern,
@@ -21,6 +22,7 @@ export type PermissionRequest = Pick<
 	"permission" | "patterns" | "always" | "widerAlways" | "originalPaths"
 > & {
 	readonly autoApproveAsk?: true;
+	/** External-directory aliases are deny-only; other permissions use them for all rules. */
 	readonly ruleAliases?: readonly string[];
 };
 
@@ -100,6 +102,10 @@ function withExternalDirectoryRequests(
 	if (externalPaths.length === 0) {
 		return requests;
 	}
+	const ruleAliases = externalPaths.flatMap(({ inputPath, target }) => {
+		const lexical = resolve(cwd, expandHome(inputPath));
+		return lexical === target ? [] : [lexical];
+	});
 
 	return [
 		...requests,
@@ -107,6 +113,7 @@ function withExternalDirectoryRequests(
 			permission: "external_directory",
 			patterns: externalPaths.map(({ target }) => target),
 			always: externalPaths.map(({ inputPath, target }) => toParentDirectoryPattern(target, scope, inputPath)),
+			...(ruleAliases.length ? { ruleAliases } : {}),
 			...(externalPaths.some(({ inputPath, target }) => inputPath !== target)
 				? { originalPaths: externalPaths.map(({ inputPath }) => inputPath) }
 				: {}),

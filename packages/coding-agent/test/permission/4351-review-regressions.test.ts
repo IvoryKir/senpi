@@ -1,11 +1,14 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLocalEventEmitter } from "../../src/core/extensions/builtin/permission-system/events.ts";
+import { createDispatchAuthorizer } from "../../src/core/extensions/builtin/permission-system/dispatch-policy.ts";
 import { createBuiltinParserRegistry } from "../../src/core/extensions/builtin/permission-system/parsers.ts";
 import { PermissionService } from "../../src/core/extensions/builtin/permission-system/service.ts";
 import { appendApproved, loadApproved } from "../../src/core/extensions/builtin/permission-system/storage.ts";
+import type { Ruleset } from "../../src/core/extensions/builtin/permission-system/types.ts";
+import type { ExtensionContext } from "../../src/core/extensions/types.ts";
 
 describe("4351 binding review regressions", () => {
 	let root: string;
@@ -29,6 +32,109 @@ describe("4351 binding review regressions", () => {
 		if (!request) throw new Error("Missing external-directory request");
 		return request;
 	};
+
+	// senpi#4351: a wildcard before a symlink must not erase a lexical deny.
+	for (const tool of [
+		"read",
+		"write",
+		"edit",
+		"multiedit",
+		"apply_patch",
+		"grep",
+		"ls",
+		"find",
+		"glob",
+		"monitor",
+		"bash",
+		"bash_input",
+	]) {
+		for (const allowTarget of [false, true]) {
+			it(`${tool} preserves a wildcard-before-symlink deny with target allow=${allowTarget}`, async () => {
+				const data = join(root, "data");
+				mkdirSync(join(data, "a"), { recursive: true });
+				symlinkSync(outside, join(data, "a", "secret"), process.platform === "win32" ? "junction" : "dir");
+				const lexical = join(data, "a", "secret", "File.txt");
+				const rules: Ruleset = [
+					{ permission: "*", pattern: "*", action: "allow" },
+					{ permission: "external_directory", pattern: "*", action: "ask" },
+					{ permission: "external_directory", pattern: `${data}/*/secret/*`, action: "deny" },
+					...(allowTarget
+						? [{ permission: "external_directory", pattern: `${outside}/*`, action: "allow" as const }]
+						: []),
+				];
+				for (const path of [lexical, relative(cwd, lexical)]) {
+					const input =
+						tool === "bash"
+							? { command: `cat "${path}"` }
+							: tool === "bash_input"
+								? { input: `cat "${path}"` }
+								: { path };
+					const request = external(tool, input, cwd);
+					const emitter = createLocalEventEmitter();
+					const service = new PermissionService(rules, [], emitter);
+					// A missed deny resolves instead of leaving this regression waiting for a prompt.
+					emitter.onAsked((pending) => service.reply({ requestID: pending.id, reply: "once" }));
+					await expect(
+						service.ask(
+							{ ...request, sessionID: "wildcard-symlink", metadata: {} },
+							{ ruleAliases: request.ruleAliases },
+						),
+					).rejects.toMatchObject({ _tag: "PermissionDeniedError" });
+					const authorizer = createDispatchAuthorizer(
+						{ getAllTools: () => [] },
+						() => ({ service, parsers: registry, preset: "workspace", setupError: null }),
+						async () => undefined,
+					);
+					const ctx = { cwd, sessionManager: { getSessionId: () => "wildcard-symlink" } } as ExtensionContext;
+					expect(
+						authorizer.policy(
+							{
+								toolName: tool,
+								toolCallId: "wildcard",
+								input,
+								identity: { owner: registry, metadata: "wildcard" },
+							},
+							ctx,
+						).action,
+					).toBe("deny");
+				}
+			});
+		}
+	}
+
+	it("does not widen a wildcard lexical allow to the symlink target", async () => {
+		const data = join(root, "data");
+		mkdirSync(join(data, "a"), { recursive: true });
+		symlinkSync(outside, join(data, "a", "secret"), process.platform === "win32" ? "junction" : "dir");
+		const request = external("read", { path: join(data, "a", "secret", "File.txt") }, cwd);
+		const emitter = createLocalEventEmitter();
+		const service = new PermissionService(
+			[{ permission: "external_directory", pattern: `${data}/*/secret/*`, action: "allow" }],
+			[],
+			emitter,
+		);
+		let prompted = false;
+		emitter.onAsked((pending) => {
+			prompted = true;
+			service.reply({ requestID: pending.id, reply: "once" });
+		});
+		await service.ask({ ...request, sessionID: "lexical-allow", metadata: {} }, { ruleAliases: request.ruleAliases });
+		expect(prompted).toBe(true);
+	});
+
+	it("refreshes filesystem identity between evaluations after a rule symlink changes", () => {
+		const alias = join(root, "alias");
+		symlinkSync(outside, alias, process.platform === "win32" ? "junction" : "dir");
+		const service = new PermissionService(
+			[{ permission: "external_directory", pattern: `${alias}/*`, action: "allow" }],
+			[],
+		);
+		const target = join(outside, "File.txt");
+		expect(service.dispatchDecision("external_directory", target).action).toBe("allow");
+		rmSync(alias);
+		symlinkSync(cwd, alias, process.platform === "win32" ? "junction" : "dir");
+		expect(service.dispatchDecision("external_directory", target).action).toBe("ask");
+	});
 
 	for (const suffix of ["File.txt", "missing/nested/file.txt"]) {
 		it(`H1: denies both spellings of an external case alias: ${suffix}`, (context) => {

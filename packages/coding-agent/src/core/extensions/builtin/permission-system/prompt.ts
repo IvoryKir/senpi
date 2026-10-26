@@ -77,7 +77,9 @@ function formatRequestForDisplay(request: Request): string {
 			parts.push(`Query: ${meta.query || "Unknown"}`);
 			break;
 		case "external_directory": {
-			parts.push(`Directory: ${request.patterns[0] ?? "Unknown"}`);
+			for (const target of request.patterns.length ? request.patterns : ["Unknown"]) {
+				parts.push(`Directory: ${target}`);
+			}
 			if (request.originalPaths?.length) {
 				parts.push(`Requested paths:\n${request.originalPaths.map((p) => `  - ${p}`).join("\n")}`);
 			}

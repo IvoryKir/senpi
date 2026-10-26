@@ -22,6 +22,7 @@ interface DecisionOptions {
 	readonly approveBlanketAsk?: boolean;
 	readonly presetBound?: boolean;
 	readonly ruleAliases?: readonly string[] | undefined;
+	readonly originalPaths?: readonly string[] | undefined;
 }
 
 /** Core service for managing permission requests and rule evaluation */
@@ -101,6 +102,19 @@ export class PermissionService {
 		options: DecisionOptions = {},
 	): { readonly action: Rule["action"]; readonly rules: readonly Rule[] } {
 		this.refreshApproved();
+		if (permission === "external_directory") {
+			// Lexical spellings may only restrict access. A wildcard before a symlink
+			// cannot be resolved in the rule's literal prefix, but its deny must still win.
+			const targets = typeof target === "string" ? [target] : target;
+			const denied = evaluate(
+				permission,
+				[...targets, ...(options.originalPaths ?? []), ...(options.ruleAliases ?? [])],
+				this.staticRuleset.filter((rule) => rule.action === "deny"),
+			);
+			if (denied.action === "deny") return { action: "deny", rules: [{ ...denied }] };
+		} else {
+			target = options.ruleAliases ?? target;
+		}
 		// Defence in depth (HIGH 1): the agent's own tools never touch the approvals store, whatever
 		// rules say. The target's real path is compared against the store's real path.
 		if (this.protectedStorePath !== undefined && this.targetIsProtectedStore(target)) {
@@ -209,9 +223,14 @@ export class PermissionService {
 		const deniedPatterns: string[] = [];
 		let needsAsk = false;
 
-		const options: DecisionOptions = { approveBlanketAsk, presetBound, ruleAliases };
+		const options: DecisionOptions = {
+			approveBlanketAsk,
+			presetBound,
+			ruleAliases,
+			originalPaths: info.originalPaths,
+		};
 		for (const pattern of info.patterns) {
-			const action = this.decide(info.permission, ruleAliases ?? pattern, options);
+			const action = this.decide(info.permission, pattern, options);
 			if (action === "deny") {
 				deniedPatterns.push(pattern);
 				continue;
@@ -339,7 +358,7 @@ export class PermissionService {
 
 			const options = this.pendingOptions.get(requestID) ?? {};
 			const isAllowed = entry.info.patterns.every(
-				(pattern) => this.decide(entry.info.permission, options.ruleAliases ?? pattern, options) === "allow",
+				(pattern) => this.decide(entry.info.permission, pattern, options) === "allow",
 			);
 
 			if (!isAllowed) {
