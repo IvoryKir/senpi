@@ -54,6 +54,7 @@ export function handoverTermsDigest(request: IdleHandoverRequest): string {
 		request.hostArgs,
 		environment,
 		request.policy ?? null,
+		request.mcpPresenterEnforcement === true,
 	]);
 	return `sha256:${createHash("sha256").update(terms, "utf8").digest("hex")}`;
 }

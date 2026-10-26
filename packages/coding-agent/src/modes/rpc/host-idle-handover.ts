@@ -32,6 +32,8 @@ export interface HandoverLaunch {
 }
 
 export interface IdleHandoverRequest {
+	/** Successor deployment policy only; never enrollment authority. */
+	readonly mcpPresenterEnforcement?: boolean;
 	readonly operationId: string;
 	readonly ifInstanceId: string;
 	readonly ifGeneration: number;

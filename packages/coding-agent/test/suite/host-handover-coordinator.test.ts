@@ -281,6 +281,22 @@ describe("repeated and competing requests", () => {
 		expect(h.publications).toHaveLength(1);
 	});
 
+	// senpi#4247: the successor's presenter deployment policy is one of the terms an operation is asked with.
+	it("treats the presenter policy as part of an operation's terms", async () => {
+		const h = harness();
+		const first = h.coordinator.begin(request());
+		const publication = await h.publication();
+
+		const enforcing = await h.coordinator.begin(request({ operationId: "op-2", mcpPresenterEnforcement: true }));
+		const conflicting = await h.coordinator.begin(request({ mcpPresenterEnforcement: true }));
+		publication.settle(h.published);
+		await first;
+
+		expect(enforcing).toMatchObject({ kind: "refused", reason: "handover_in_progress", detail: "op-1" });
+		expect(conflicting).toMatchObject({ kind: "refused", reason: "operation_conflict" });
+		expect(h.publications).toHaveLength(1);
+	});
+
 	it("refuses a new operation once its successor serves: this generation no longer serves the endpoint", async () => {
 		const h = harness();
 		const first = h.coordinator.begin(request());

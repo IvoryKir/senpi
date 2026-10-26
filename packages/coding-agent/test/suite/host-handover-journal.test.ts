@@ -52,9 +52,10 @@ describe("the handover journal", () => {
 		if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
 	});
 
-	it("gives other terms another digest, the environment's values included", () => {
+	it("gives other terms another digest, the environment's values and the presenter policy included", () => {
 		expect(handoverTermsDigest({ ...request, env: { SENPI_TEST_TOKEN: "other" } })).not.toBe(
 			handoverTermsDigest(request),
 		);
+		expect(handoverTermsDigest({ ...request, mcpPresenterEnforcement: true })).not.toBe(handoverTermsDigest(request));
 	});
 });

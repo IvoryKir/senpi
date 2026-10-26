@@ -103,7 +103,8 @@ export class HandoverCoordinator {
 			return refused("stale_generation", "this generation no longer serves the endpoint; its successor does");
 		}
 		if (latest !== undefined && (this.publishing || !isSettledOrRecovering(latest.view.phase))) {
-			return latest.request.targetRuntimeBuildId === request.targetRuntimeBuildId
+			return latest.request.targetRuntimeBuildId === request.targetRuntimeBuildId &&
+				samePresenterPolicy(latest.request, request)
 				? this.answer(latest)
 				: refused("handover_in_progress", latest.view.operationId);
 		}
@@ -249,9 +250,15 @@ function isSettledOrRecovering(phase: HandoverPhase): boolean {
 function sameTerms(a: IdleHandoverRequest, b: IdleHandoverRequest): boolean {
 	return (
 		a.targetRuntimeBuildId === b.targetRuntimeBuildId &&
+		samePresenterPolicy(a, b) &&
 		a.ifInstanceId === b.ifInstanceId &&
 		a.ifGeneration === b.ifGeneration
 	);
+}
+
+/** The successor's presenter deployment policy is part of what an operation asks for (senpi#4247). */
+function samePresenterPolicy(a: IdleHandoverRequest, b: IdleHandoverRequest): boolean {
+	return Boolean(a.mcpPresenterEnforcement) === Boolean(b.mcpPresenterEnforcement);
 }
 
 function refused(reason: string, detail?: string): HandoverAnswer {
