@@ -5,6 +5,9 @@ export class CompactStartIdentity {
 	private current: string | undefined;
 	private highWater = -1;
 	/** Exactly the last 64 retirements, not an unbounded historical nonce catalog. */
+	// After 64 newer epochs an evicted epoch is indistinguishable from a new one;
+	// safety relies on terminated-worker channels being closed. S03b-2/3 replaces
+	// this with current-epoch-only acceptance against the S05 registry.
 	private readonly retired = new Set<string>();
 
 	validate(epoch: string, ordinal: number): void {
