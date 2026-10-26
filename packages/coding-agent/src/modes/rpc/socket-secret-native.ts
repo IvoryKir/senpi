@@ -25,9 +25,32 @@ export interface NativeVolumeLocality {
 	readonly reportedFileSystem: string | null;
 }
 
+/** A staging file whose delete disposition failed; it is still at `path` and the caller removes it. */
+export interface NativeLeftBehindStaging {
+	readonly path: string;
+	readonly windowsError: number;
+}
+
+/** `publishNoReplace` result. napi-rs leaves an absent optional field `undefined`. */
+export interface NativePublishResult {
+	readonly outcome: "published" | "collision" | "failed";
+	readonly failure?: { readonly step: string; readonly code: number } | null;
+	readonly stagingLeftBehind?: NativeLeftBehindStaging | null;
+}
+
+export interface LeftBehindStaging extends NativeLeftBehindStaging {
+	/** What the caller must do; names the path, never the secret. */
+	readonly action: string;
+}
+
+export interface SocketSecretPublication {
+	readonly outcome: "published" | "collision";
+	readonly stagingLeftBehind: LeftBehindStaging | null;
+}
+
 export interface NativeSocketSecretBinding {
 	__senpiSocketSecretAbi1(): string;
-	publishNoReplace(stagingPath: string, finalPath: string, bytes: Buffer): "published" | "collision";
+	publishNoReplace(stagingPath: string, finalPath: string, bytes: Buffer): NativePublishResult;
 	kernelSessionIdentity(): NativeKernelSessionIdentity;
 	classifyVolume(path: string): NativeVolumeLocality;
 }
@@ -51,6 +74,52 @@ export class SocketSecretNativeUnavailableError extends Error {
 		this.name = "SocketSecretNativeUnavailableError";
 		this.attemptedPaths = attemptedPaths;
 	}
+}
+
+/** The bridge could not publish; `stagingLeftBehind` is set when its staging file also survived. */
+export class SocketSecretPublishError extends Error {
+	readonly code = "socket-secret-publish-failed";
+	readonly step: string;
+	readonly windowsError: number | null;
+	readonly stagingLeftBehind: LeftBehindStaging | null;
+
+	constructor(step: string, windowsError: number | null, stagingLeftBehind: LeftBehindStaging | null) {
+		const cause = windowsError === null ? step : `${step} failed with Windows error ${windowsError}`;
+		const leftover = stagingLeftBehind ? `; ${stagingLeftBehind.action}` : "";
+		super(`Publishing the socket secret failed: ${cause}${leftover}`);
+		this.name = "SocketSecretPublishError";
+		this.step = step;
+		this.windowsError = windowsError;
+		this.stagingLeftBehind = stagingLeftBehind;
+	}
+}
+
+/**
+ * First publication through the bridge (design 4.3): resolves `published` or `collision` (read the winner), throws
+ * `SocketSecretPublishError` otherwise. Either way a staging file the bridge could not delete is returned typed.
+ */
+export function publishSocketSecretNoReplace(
+	binding: Pick<NativeSocketSecretBinding, "publishNoReplace">,
+	stagingPath: string,
+	finalPath: string,
+	bytes: Buffer,
+): SocketSecretPublication {
+	const result = binding.publishNoReplace(stagingPath, finalPath, bytes);
+	const native = result.stagingLeftBehind;
+	const stagingLeftBehind = native
+		? {
+				path: native.path,
+				windowsError: native.windowsError,
+				action: `Delete the leftover socket-secret staging file ${native.path}`,
+			}
+		: null;
+	if (result.outcome === "published" || result.outcome === "collision") {
+		return { outcome: result.outcome, stagingLeftBehind };
+	}
+	if (result.outcome === "failed" && result.failure) {
+		throw new SocketSecretPublishError(result.failure.step, result.failure.code, stagingLeftBehind);
+	}
+	throw new SocketSecretPublishError(`unexpected bridge outcome ${String(result.outcome)}`, null, stagingLeftBehind);
 }
 
 export class SocketSecretNativeAbiMismatchError extends Error {
