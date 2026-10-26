@@ -4,7 +4,7 @@ export interface CellRule {
 	readonly layer: string;
 }
 export type CellOperation = {
-	readonly tool: "bash" | "write";
+	readonly tool: "bash" | "write" | "read" | "ls";
 	readonly input: { readonly command?: string; readonly path?: string };
 	readonly cwd?: string;
 };
