@@ -174,7 +174,9 @@ mod windows {
             .split(")(")
             .collect();
         found.sort_unstable();
-        let owner = format!("A;;FA;;;{user}");
+        // Windows prints a well-known account SID by its SDDL alias (the built-in Administrator, RID 500, is
+        // `LA`), so the expected owner ACE is canonicalized through the same conversion as the file's DACL.
+        let owner = canonical_owner_ace(&user);
         let mut expected = vec![owner.as_str(), "A;;FA;;;BA", "A;;FA;;;SY"];
         expected.sort_unstable();
         assert_eq!(
@@ -195,13 +197,46 @@ mod windows {
         sid.to_string()
     }
 
+    /// `A;;FA;;;<sid>` as Windows itself prints that ACE: the round trip through a descriptor turns a
+    /// well-known SID into its alias and leaves any other SID literal.
+    fn canonical_owner_ace(sid: &str) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+
+        let source: Vec<u16> = format!("D:(A;;FA;;;{sid})")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `source` is NUL-terminated; only the descriptor out-pointer is requested.
+        let ok = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                source.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(
+            ok, 0,
+            "ConvertStringSecurityDescriptorToSecurityDescriptorW failed for {sid}"
+        );
+        let sddl = descriptor_dacl_sddl(descriptor);
+        // SAFETY: `descriptor` came from the conversion above and is freed exactly once.
+        unsafe { LocalFree(descriptor.cast()) };
+        sddl.strip_prefix("D:(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("unexpected canonical SDDL: {sddl}"))
+            .to_string()
+    }
+
     /// The file's DACL as SDDL, read with `GetNamedSecurityInfoW` (no localized account names).
     fn dacl_sddl(path: &Path) -> String {
         use windows_sys::Win32::Foundation::LocalFree;
-        use windows_sys::Win32::Security::Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
-            SE_FILE_OBJECT,
-        };
+        use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
         use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
 
         let wide: Vec<u16> = s(path).encode_utf16().chain(std::iter::once(0)).collect();
@@ -220,8 +255,22 @@ mod windows {
             )
         };
         assert_eq!(status, 0, "GetNamedSecurityInfoW failed");
+        let sddl = descriptor_dacl_sddl(descriptor);
+        // SAFETY: `descriptor` came from GetNamedSecurityInfoW and is freed exactly once.
+        unsafe { LocalFree(descriptor.cast()) };
+        sddl
+    }
+
+    /// The DACL of `descriptor` as SDDL; the caller keeps ownership of `descriptor`.
+    fn descriptor_dacl_sddl(descriptor: windows_sys::Win32::Security::PSECURITY_DESCRIPTOR) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, SDDL_REVISION_1,
+        };
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+
         let mut text: *mut u16 = std::ptr::null_mut();
-        // SAFETY: `descriptor` came from GetNamedSecurityInfoW; `text` receives a LocalAlloc string.
+        // SAFETY: `descriptor` is a valid security descriptor; `text` receives a LocalAlloc string.
         let ok = unsafe {
             ConvertSecurityDescriptorToStringSecurityDescriptorW(
                 descriptor,
@@ -241,11 +290,8 @@ mod windows {
             .count();
         // SAFETY: `text` holds `length` readable units before its terminator.
         let sddl = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-        // SAFETY: both allocations came from the calls above and are freed exactly once.
-        unsafe {
-            LocalFree(text.cast());
-            LocalFree(descriptor.cast());
-        }
+        // SAFETY: `text` came from the conversion above and is freed exactly once.
+        unsafe { LocalFree(text.cast()) };
         sddl
     }
 }
