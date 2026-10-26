@@ -15,14 +15,12 @@ for (const transport of ["in-process", "worker frame"] as const) {
 			const lane = new SessionAcceptanceLane();
 			lane.bootstrap({ transcript: [] });
 			const record = terminal();
-			const producer = new SessionRecoveryIdentity();
+			const producer = new SessionRecoveryIdentity(kind === "previous epoch" ? lane.recoveryEpoch : undefined);
 			producer.observe(record);
 			let frame = {
 				record,
 				recovery:
-					kind === "unminted id"
-						? { messageId: randomUUID(), epoch: randomUUID() }
-						: recoveryCarrier(record),
+					kind === "unminted id" ? { messageId: randomUUID(), epoch: randomUUID() } : recoveryCarrier(record),
 			};
 			if (kind === "previous epoch") lane.bootstrap({ transcript: [] });
 			if (transport === "worker frame") {
