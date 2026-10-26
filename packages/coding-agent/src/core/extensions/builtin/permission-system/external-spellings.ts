@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, readlinkSync } from "node:fs";
-import { isAbsolute, join, normalize, parse, resolve as resolvePath, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, sep } from "node:path";
 import { realpathWithoutOpenStrict } from "../../../../utils/paths.ts";
 import { canonicalPathCase, sameLexicalPath } from "./external-pattern.ts";
 import type { Rule } from "./types.ts";
@@ -7,10 +7,11 @@ import type { Rule } from "./types.ts";
 type Decision = { readonly action: Rule["action"]; readonly rules: readonly Rule[] };
 
 /**
- * Evaluate every partial symlink resolution, not just the lexical and resolved endpoints.
- * Keeping a link continues the component walk; following it queues a new spelling. Repeating
- * this for each queued spelling covers every subset, including keeping an earlier link while
- * following a later one. Discovery uses only lstat/readlink; case recovery is separate.
+ * Walk a component queue like the kernel: the position is always physical, and link targets
+ * are prepended without normalizing away dots. A .. moves to the physical parent's directory.
+ * Keep the absolute request, the physical prefix plus unresolved suffix at each followed link,
+ * and the final physical path, with proven case forms. Never combine a relative target with
+ * an unresolved lexical parent. Discovery uses only lstat/readlink; case recovery is separate.
  */
 export function decideExternalPaths(
 	target: string | readonly string[],
@@ -39,7 +40,7 @@ export function decideExternalPaths(
 	const resolve = (value: string): string => {
 		let result = resolvedPaths.get(value);
 		if (result === undefined) {
-			result = realpathWithoutOpenStrict(value);
+			result = realpathWithoutOpenStrict(isAbsolute(value) ? value : `${process.cwd()}${sep}${value}`);
 			resolvedPaths.set(value, result);
 		}
 		return result;
@@ -48,8 +49,10 @@ export function decideExternalPaths(
 	const add = (spelling: string, resolved: string): boolean => {
 		if (!spellings.has(spelling) && spellings.size >= 16) return false;
 		spellings.set(spelling, resolved);
-		spellings.set(canonicalCase(spelling), resolved);
-		return spellings.size <= 16;
+		const canonical = canonicalCase(spelling);
+		if (!spellings.has(canonical) && spellings.size >= 16) return false;
+		spellings.set(canonical, resolved);
+		return true;
 	};
 	let hops = 0;
 	try {
@@ -59,36 +62,47 @@ export function decideExternalPaths(
 			// A multi-path request's aliases belong only to their own resolved target.
 			if (!resolvedTargets.some((candidate) => sameLexicalPath(candidate, resolved))) continue;
 			if (!add(resolved, resolved)) return { action: "ask", rules: [] };
-			const pending = new Set([resolvePath(value)]);
-			for (const spelling of pending) {
-				if (!add(spelling, resolved)) return { action: "ask", rules: [] };
-				const { root } = parse(spelling);
-				const parts = spelling.slice(root.length).split(sep).filter(Boolean);
-				for (let index = 0; index < parts.length; index++) {
-					const candidate = root + parts.slice(0, index + 1).join(sep);
-					let link: string;
-					try {
-						if (!lstatSync(candidate).isSymbolicLink()) continue;
-						if (++hops > 40) return { action: "ask", rules: [] };
-						link = readlinkSync(candidate);
-					} catch (error) {
-						if (
-							error instanceof Error &&
-							"code" in error &&
-							(error.code === "ENOENT" || error.code === "ENOTDIR")
-						)
-							break;
-						throw error;
+			const spelling = isAbsolute(value) ? value : `${process.cwd()}${sep}${value}`;
+			if (!add(spelling, resolved)) return { action: "ask", rules: [] };
+			let physical = parse(spelling).root;
+			const pending = spelling.slice(physical.length).split(sep).filter(Boolean);
+			while (pending.length > 0) {
+				const part = pending.shift();
+				if (part === undefined) break;
+				if (part === ".") continue;
+				if (part === "..") {
+					physical = dirname(physical);
+					continue;
+				}
+				const candidate = join(physical, part);
+				let link: string;
+				try {
+					if (!lstatSync(candidate).isSymbolicLink()) {
+						physical = candidate;
+						continue;
 					}
-					const parent = root + parts.slice(0, index).join(sep);
-					// Normalize each followed target against its containing directory before
-					// storing or walking it, so dot components cannot hide an intermediate rule.
-					const followed = isAbsolute(link) ? normalize(link) : join(parent, link);
-					const next = join(followed, ...parts.slice(index + 1));
-					if (!add(next, resolved)) return { action: "ask", rules: [] };
-					pending.add(next);
+					if (++hops > 40) return { action: "ask", rules: [] };
+					// Concatenate the unresolved suffix verbatim: join would collapse S/..
+					// before S was followed and could erase a genuine intermediate deny.
+					const intermediate = [candidate, ...pending].join(sep);
+					if (!add(intermediate, resolved)) return { action: "ask", rules: [] };
+					link = readlinkSync(candidate);
+				} catch (error) {
+					if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+						// No links can be followed inside a missing tail.
+						physical = join(candidate, ...pending);
+						break;
+					}
+					throw error;
+				}
+				if (isAbsolute(link)) {
+					physical = parse(link).root;
+					pending.unshift(...link.slice(physical.length).split(sep).filter(Boolean));
+				} else {
+					pending.unshift(...link.split(sep).filter(Boolean));
 				}
 			}
+			if (!add(physical, resolved)) return { action: "ask", rules: [] };
 		}
 	} catch (error) {
 		// Missing tails are supported by the strict resolver; loops, hop exhaustion and

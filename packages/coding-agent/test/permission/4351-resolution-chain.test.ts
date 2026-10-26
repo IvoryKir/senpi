@@ -136,7 +136,9 @@ describe("4351 resolution-chain review fold", () => {
 
 	it.each([
 		[4, "allow"],
-		[5, "ask"],
+		[5, "allow"],
+		[15, "allow"],
+		[16, "ask"],
 	] as const)("bounds %i independent links at sixteen spellings", (count, expected) => {
 		let parent = root;
 		const input: string[] = [];

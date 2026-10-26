@@ -87,7 +87,7 @@ export class PermissionService {
 	/**
 	 * The one decision for a call, used when it is asked and again whenever an "Always" reply re-checks
 	 * the requests still pending. External paths use last-match-wins separately for the absolute
-	 * lexical path, every partial symlink resolution and their proven on-disk case; the most restrictive
+	 * lexical path, physical-prefix spellings from the component walk and their proven on-disk case; the most restrictive
 	 * decision wins (deny > ask > allow). More than 16 spellings or 40 hops asks instead.
 	 * Raw originalPaths are display-only. Remembered approvals
 	 * match the resolved target and cannot override a deny from any spelling.
