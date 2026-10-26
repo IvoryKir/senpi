@@ -169,6 +169,14 @@ describe("endpoint reservation store", () => {
 		expect(s.reservation(generation)).toMatchObject({ state: "serving" });
 	});
 
+	it("refuses serving while the host role was never offered, even with the supervisor granted", async () => {
+		const { store: s, generation, locator, nonce } = await offered();
+		s.claim(locator, nonce, SUPERVISOR);
+		s.grant(generation, "supervisor", OWNER, SUPERVISOR, COMMITMENT);
+		expect(rejection(() => s.markServing(generation))).toBe("roles_not_granted");
+		expect(s.reservation(generation)).not.toMatchObject({ state: "serving" });
+	});
+
 	it("bumps the revision on every transition", async () => {
 		const { store: s, generation, locator, nonce } = await offered();
 		const before = s.reservation(generation).revision;

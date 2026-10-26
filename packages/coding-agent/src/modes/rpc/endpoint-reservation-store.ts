@@ -308,10 +308,13 @@ export class EndpointReservationStore {
 	markServing(generation: string): void {
 		this.#transaction(() => {
 			this.#pending(generation);
-			const statuses = this.#database.prepare("SELECT status FROM roles WHERE generation = ?").all(generation) as {
+			const rows = this.#database.prepare("SELECT role, status FROM roles WHERE generation = ?").all(generation) as {
+				role: ReservationRole;
 				status: RoleStatus;
 			}[];
-			if (statuses.length === 0 || statuses.some(({ status }) => status !== "granted")) {
+			// Serving needs BOTH hops granted: a generation whose host role was never offered has no admitted listener.
+			const granted = new Set(rows.filter(({ status }) => status === "granted").map(({ role }) => role));
+			if (rows.some(({ status }) => status !== "granted") || !granted.has("supervisor") || !granted.has("host")) {
 				throw new EndpointReservationError("roles_not_granted", generation);
 			}
 			this.#database.prepare("UPDATE reservations SET state = 'serving' WHERE generation = ?").run(generation);
