@@ -204,6 +204,28 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 			});
 		}
 
+		for (const cell of SECRET_CELLS) {
+			it(`${cell.name} in an ordinary 401`, async () => {
+				const harness = await createHarness({
+					models: [{ id: "faux-1" }],
+					persistSession: true,
+					settings: { retry: { enabled: false } },
+				});
+				harnesses.push(harness);
+				const errorMessage = `401 Unauthorized: invalid credentials ${cell.text}`;
+				harness.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage })]);
+
+				await harness.session.prompt("hello");
+
+				expect(harness.eventsOfType("model_config_error")).toEqual([]);
+				expect(lastErrorMessage(harness)).toContain("[REDACTED]");
+				expect(lastErrorMessage(harness)).toContain("401 Unauthorized");
+				for (const [sink, text] of Object.entries(everySink(harness))) {
+					expect({ sink, leaked: text.includes(cell.secret) }).toEqual({ sink, leaked: false });
+				}
+			});
+		}
+
 		it("keeps model ids, error codes and request ids readable", async () => {
 			const harness = await chainedHarness(harnesses, { persistSession: true });
 			const errorMessage = `${modelNotFound} ${READABLE_PROVIDER_TEXT}`;

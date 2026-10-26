@@ -39,7 +39,8 @@ const BUDGETS = {
 			// +1 (senpi#3378): model-cost.ts, the type-only leaf that picks the cost card in force for a request.
 			// +1 (senpi#3858): auth/credential-read.ts, the credential-store read auth/resolve.ts wraps in ModelsError.
 			// +1 (senpi#3858): utils/config-reference-error.ts, the typebox-free error a slot read raises for an unresolved reference.
-			maxFiles: 26,
+			// +1 (senpi#4282): utils/provider-error.ts, the redaction every provider stream applies at its boundary.
+			maxFiles: 27,
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
 		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },

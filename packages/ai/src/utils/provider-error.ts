@@ -52,9 +52,9 @@ export function redactSecrets(text: string, replacement = "[REDACTED]"): string 
 }
 
 /**
- * The single point where a provider error body enters a message: classify on the RAW text first, then keep only
- * the redacted text, with the classification carried as `errorCause`. Idempotent; called for every message a
- * provider stream publishes, so no partial, event or final result carries the raw body.
+ * The single point where a provider error body enters a message: classify a model configuration error on the RAW
+ * text first (carried as `errorCause`), then keep only the redacted text for every provider error. Idempotent;
+ * called for every message a provider stream publishes, so no partial, event or final result carries a raw body.
  */
 export function sanitizeProviderErrorMessage(message: AssistantMessage): void {
 	const raw = message.errorMessage;
@@ -62,5 +62,6 @@ export function sanitizeProviderErrorMessage(message: AssistantMessage): void {
 	if (message.errorCause?.type !== "model_config" && isModelConfigError(raw)) {
 		message.errorCause = { type: "model_config", model: `${message.provider}/${message.model}` };
 	}
-	if (message.errorCause?.type === "model_config") message.errorMessage = redactSecrets(raw);
+	const redacted = redactSecrets(raw);
+	if (redacted !== raw) message.errorMessage = redacted;
 }
