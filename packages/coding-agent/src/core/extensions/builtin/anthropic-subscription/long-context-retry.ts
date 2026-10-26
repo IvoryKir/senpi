@@ -3,6 +3,9 @@ import { markLongContextRefused } from "./long-context.ts";
 import { refusalError } from "./refusal.ts";
 import type { SDKMessage } from "./sdk-boundary.ts";
 
+/** Diagnostic on the assistant message of a request that was retried at the 200k window (senpi#4065). */
+export const LONG_CONTEXT_FALLBACK_DIAGNOSTIC = "claude_sdk_oauth_long_context_fallback";
+
 export function sdkFailure(message: SDKMessage): unknown | undefined {
 	const refusal = refusalError(message);
 	if (refusal) return refusal;
@@ -37,6 +40,7 @@ export function classifyForRequest(error: unknown, askedLegacyLongContext: boole
 export async function* retryAtStandardWindowOnce(
 	attempt: () => Promise<AsyncIterable<SDKMessage>>,
 	askedLegacyLongContext: () => boolean,
+	onFallback?: () => void,
 ): AsyncGenerator<SDKMessage> {
 	const first = (await attempt())[Symbol.asyncIterator]();
 	let refused = false;
@@ -72,5 +76,6 @@ export async function* retryAtStandardWindowOnce(
 	}
 	if (!refused) return;
 	markLongContextRefused();
+	onFallback?.();
 	yield* await attempt();
 }

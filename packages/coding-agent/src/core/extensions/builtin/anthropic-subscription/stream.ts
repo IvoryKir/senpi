@@ -10,6 +10,7 @@ import {
 import { getSessionClaudeAccountPin } from "./account-command.ts";
 import { queryWithAuthLane } from "./auth-lane.ts";
 import { markColdSeedOverflow } from "./cold-seed-budget.ts";
+import { CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW } from "./context-window.ts";
 import { buildCustomToolServers } from "./custom-tools.ts";
 import { sdkAssistantFailure, sdkResultFailure, sdkResultFailureUsage } from "./errors.ts";
 import { type ClaudeCodeRun, defaultExecutableDeps, resolveClaudeCodeRun } from "./executable.ts";
@@ -17,6 +18,7 @@ import { buildAnthropicSubscriptionQueryOptions } from "./options.ts";
 import { buildDeferredPromptStream, buildPromptBlocks } from "./prompt-bridge.ts";
 import { type PromptCacheTtl, pinOneShotPromptCacheTtl } from "./prompt-cache-ttl.ts";
 import { dedupeUltraworkBlocks } from "./prompt-directive-dedupe.ts";
+import { LONG_CONTEXT_FALLBACK_DIAGNOSTIC } from "./long-context-retry.ts";
 import { refusalError } from "./refusal.ts";
 import { getSdkBoundary, loadClaudeAgentSdk, type SdkQueryHandle } from "./sdk-boundary.ts";
 import { type ContinuityObservation, emitContinuityObservation } from "./session-observability.ts";
@@ -131,6 +133,17 @@ export function streamAnthropicSubscription(
 					},
 				];
 			};
+			// The request keeps its model; only its window fell back, and the turn says so (senpi#4065).
+			const recordLongContextFallback = (): void => {
+				output.diagnostics = [
+					...(output.diagnostics ?? []),
+					{
+						type: LONG_CONTEXT_FALLBACK_DIAGNOSTIC,
+						timestamp: Date.now(),
+						details: { contextWindow: CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW },
+					},
+				];
+			};
 			const useResidentSession =
 				options?.streamKind === "main" && providerSettings.resumeMode !== "off" && options.sessionId !== undefined;
 			if (options?.streamKind === "main" && !useResidentSession) {
@@ -160,6 +173,7 @@ export function streamAnthropicSubscription(
 						customToolNameToSdk: resolvedTools.customToolNameToSdk,
 						toolWatchNote,
 						onContinuityDecision: recordContinuity,
+						onLongContextFallback: recordLongContextFallback,
 						onDispatchShape: (coldSeed, estimatedTokens) => {
 							coldSeedAttempt = coldSeed;
 							coldSeedEstimate = estimatedTokens;
@@ -195,6 +209,7 @@ export function streamAnthropicSubscription(
 							if (wasAborted) requestAbort();
 						},
 						buildOptions,
+						onLongContextFallback: recordLongContextFallback,
 					});
 
 			for await (const message of messages) {

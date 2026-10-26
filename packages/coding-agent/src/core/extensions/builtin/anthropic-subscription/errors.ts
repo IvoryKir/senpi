@@ -34,6 +34,10 @@ const SDK_ERROR_CLASSIFICATIONS: Partial<Record<SDKAssistantMessageError, SdkErr
 
 const OTHER_ERROR: SdkErrorClassification = { kind: "other", retryable: false };
 
+// Claude Code's own "You're out of extra usage" prefix (USAGE_LIMIT_ERROR_PREFIXES in the Agent SDK), matched on the raw
+// SDK text. It names no window, so only the request's own [1m] flag makes it a long-context refusal (senpi#4065).
+const EXTRA_USAGE_EXHAUSTED = /\byou(?:'|\u2019)re out of extra usage\b/;
+
 function record(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -113,13 +117,8 @@ export function classifySdkError(error: unknown, askedLegacyLongContext = false)
 
 function classifyErrorKind(error: unknown, askedLegacyLongContext: boolean): SdkErrorClassification {
 	const text = errorText(error).toLowerCase();
-	// This billing response can refuse the legacy [1m] tier, but says nothing about the window
-	// unless this attempt requested it. A standard-window request must not retry (senpi#4065).
-	if (/\b400 you're out of extra usage\. add more at claude\.ai\/settings\/usage and keep going\./.test(text)) {
-		return {
-			kind: askedLegacyLongContext ? "long_context_unavailable" : "billing",
-			retryable: askedLegacyLongContext,
-		};
+	if (askedLegacyLongContext && EXTRA_USAGE_EXHAUSTED.test(text)) {
+		return { kind: "long_context_unavailable", retryable: true };
 	}
 	// Claude Code reports an account without the 1M window under the rate_limit code. It is a window
 	// entitlement, not a limit: retry at the standard window instead of blocking the account (senpi#3408).
@@ -166,5 +165,7 @@ function classifyErrorKind(error: unknown, askedLegacyLongContext: boolean): Sdk
 	if (/\brequires usage credits\b|\/usage-credits\b|\bcredits_required\b/.test(text)) {
 		return { kind: "entitlement", retryable: false };
 	}
+	// A standard-window request was refused by billing itself: no 200k retry, Claude's reason kept as written.
+	if (EXTRA_USAGE_EXHAUSTED.test(text)) return { kind: "billing", retryable: false };
 	return OTHER_ERROR;
 }

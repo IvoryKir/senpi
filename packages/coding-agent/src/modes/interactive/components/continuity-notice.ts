@@ -3,6 +3,7 @@ import { theme } from "../theme/theme.ts";
 
 export const CONTINUITY_DIAGNOSTIC_TYPE = "claude_sdk_oauth_session_continuity";
 export const RESUME_FALLBACK_DIAGNOSTIC_TYPE = "claude_sdk_oauth_resume_fallback";
+export const LONG_CONTEXT_FALLBACK_DIAGNOSTIC_TYPE = "claude_sdk_oauth_long_context_fallback";
 
 /** Only degradation kinds reach the transcript; healthy kinds stay in session.log and RPC. */
 const DEGRADATION_KINDS = new Set(["flatten", "disabled"]);
@@ -13,6 +14,8 @@ const KIND_LABELS: Readonly<Record<string, string>> = {
 };
 
 const RESUME_FALLBACK_LABEL = "Session continuity lost - resume failed, resent the full conversation";
+const LONG_CONTEXT_FALLBACK_LABEL =
+	"Claude refused the 1M context window - this request was retried on the same model at 200k";
 
 type ContinuityDetails = {
 	kind: string;
@@ -83,6 +86,7 @@ export class ContinuityNoticeTracker {
 	noticeFor(message: AssistantMessage): string | undefined {
 		for (const diagnostic of message.diagnostics ?? []) {
 			if (diagnostic.type === RESUME_FALLBACK_DIAGNOSTIC_TYPE) return this.format(RESUME_FALLBACK_LABEL);
+			if (diagnostic.type === LONG_CONTEXT_FALLBACK_DIAGNOSTIC_TYPE) return this.format(LONG_CONTEXT_FALLBACK_LABEL);
 			const details = continuityDetails(diagnostic);
 			if (!details || !DEGRADATION_KINDS.has(details.kind)) continue;
 			if (details.kind === "disabled") {

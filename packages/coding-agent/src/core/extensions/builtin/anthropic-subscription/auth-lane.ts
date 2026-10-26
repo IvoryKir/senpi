@@ -91,6 +91,8 @@ export type AuthenticatedQueryInput = {
 	/** The account this session's SDK transcript lives under; preferred while it can serve (senpi#2891). */
 	preferredAccount?: string;
 	onQuery?: (query: ReturnType<SdkQuery>) => void;
+	/** Called once when a refused [1m] request is retried at the 200k window, so the turn can say so. */
+	onLongContextFallback?: () => void;
 	createAttempt?: (
 		input: AuthenticatedAttemptInput,
 	) => RetainableAttempt<SDKMessage> | Promise<RetainableAttempt<SDKMessage>>;
@@ -234,7 +236,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 			options.env = { ...ambientEnvironment, ...options.env };
 			return createAttemptMessages(input, { accountName: "ambient", accounts: [], authLane: "ambient", options });
 		};
-		yield* retryAtStandardWindowOnce(ambientAttempt, () => askedLegacyLongContext);
+		yield* retryAtStandardWindowOnce(ambientAttempt, () => askedLegacyLongContext, input.onLongContextFallback);
 		return;
 	}
 	pool.accounts = await recoverAuthBlockedSlots({
@@ -284,7 +286,10 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 		},
 		classify: (error) => classifyForRequest(error, askedLegacyLongContext),
 		...(input.sessionId === undefined ? {} : { sessionKey: input.sessionId }),
-		onLongContextRefused: () => markLongContextRefused(),
+		onLongContextRefused: () => {
+			markLongContextRefused();
+			input.onLongContextFallback?.();
+		},
 		store: pool.store,
 		providerId: ANTHROPIC_SUBSCRIPTION_PROVIDER_ID,
 		...(input.model === undefined ? {} : { model: input.model }),

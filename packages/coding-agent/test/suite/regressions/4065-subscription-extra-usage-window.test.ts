@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Api, InMemoryCredentialStore, type Model } from "@earendil-works/pi-ai";
 import { getModels } from "@earendil-works/pi-ai/compat";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { addAccount, emptyCredential } from "../../../src/core/extensions/builtin/anthropic-subscription/accounts.ts";
 import {
 	overrideAuthLaneBoundary,
@@ -11,8 +11,10 @@ import {
 	resetAuthLaneBoundary,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/auth-lane.ts";
 import { classifySdkError } from "../../../src/core/extensions/builtin/anthropic-subscription/errors.ts";
+import { anthropicSubscriptionModels } from "../../../src/core/extensions/builtin/anthropic-subscription/index.ts";
 import {
 	classifyForRequest,
+	LONG_CONTEXT_FALLBACK_DIAGNOSTIC,
 	sdkFailure,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/long-context-retry.ts";
 import {
@@ -20,11 +22,16 @@ import {
 	longContextAvailable,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/long-context.ts";
 import { buildAnthropicSubscriptionQueryOptions } from "../../../src/core/extensions/builtin/anthropic-subscription/options.ts";
-import type {
-	Options,
-	SDKMessage,
-	SdkQuery,
+import {
+	type Options,
+	overrideSdkBoundary,
+	resetSdkBoundary,
+	type SDKMessage,
+	type SdkQuery,
 } from "../../../src/core/extensions/builtin/anthropic-subscription/sdk-boundary.ts";
+import { streamAnthropicSubscription } from "../../../src/core/extensions/builtin/anthropic-subscription/stream.ts";
+import { ContinuityNoticeTracker } from "../../../src/modes/interactive/components/continuity-notice.ts";
+import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 
 const EXHAUSTED = "API Error: 400 You're out of extra usage. Add more at claude.ai/settings/usage and keep going.";
 const REQUIRED =
@@ -34,6 +41,10 @@ const NATIVE = "claude-opus-5";
 let directory: string;
 let statePath: string;
 
+beforeAll(() => {
+	initTheme("dark");
+});
+
 beforeEach(() => {
 	directory = mkdtempSync(join(tmpdir(), "senpi-4065-"));
 	statePath = join(directory, "long-context.json");
@@ -42,35 +53,21 @@ beforeEach(() => {
 
 afterEach(() => {
 	resetAuthLaneBoundary();
+	resetSdkBoundary();
 	_resetLongContextForTesting();
 	rmSync(directory, { recursive: true, force: true });
 });
 
-async function runTurn(
-	lane: "ambient" | "oauth-slots",
-	id: string,
-	body = EXHAUSTED,
-	visible = false,
-	alwaysRefuse = false,
-	standardWindow = false,
-) {
-	const store = new InMemoryCredentialStore();
-	await store.modify("anthropic-subscription", async () =>
-		addAccount(emptyCredential(), {
-			name: "main",
-			access: "fake-access",
-			refresh: "fake-refresh",
-			expires: Date.now() + 60 * 60_000,
-			source: "login",
-		}),
-	);
-	overrideAuthLaneBoundary({
-		createStore: () => store,
-		env: () => ({ PATH: "/usr/bin" }),
-		getAgentDir: () => directory,
-	});
+type FakeTurn = { body?: string; visible?: boolean; alwaysRefuse?: boolean };
+
+function catalogModel(id: string): Model<Api> {
 	const model = getModels("anthropic").find((candidate) => candidate.id === id) as Model<Api> | undefined;
 	if (!model) throw new Error(`Missing fixture model: ${id}`);
+	return model;
+}
+
+/** An SDK fake whose first query (every query with `alwaysRefuse`) fails with `body`; later ones succeed. */
+function refusingQuery({ body = EXHAUSTED, visible = false, alwaysRefuse = false }: FakeTurn) {
 	const attempts: Options[] = [];
 	const closed: number[] = [];
 	const query: SdkQuery = (input) => {
@@ -96,7 +93,29 @@ async function runTurn(
 			},
 		};
 	};
+	return { attempts, query };
+}
+
+async function runTurn(lane: "ambient" | "oauth-slots", id: string, turn: FakeTurn = {}, standardWindow = false) {
+	const store = new InMemoryCredentialStore();
+	await store.modify("anthropic-subscription", async () =>
+		addAccount(emptyCredential(), {
+			name: "main",
+			access: "fake-access",
+			refresh: "fake-refresh",
+			expires: Date.now() + 60 * 60_000,
+			source: "login",
+		}),
+	);
+	overrideAuthLaneBoundary({
+		createStore: () => store,
+		env: () => ({ PATH: "/usr/bin" }),
+		getAgentDir: () => directory,
+	});
+	const model = catalogModel(id);
+	const { attempts, query } = refusingQuery(turn);
 	const messages: SDKMessage[] = [];
+	let fallbacks = 0;
 	let failure: unknown;
 	try {
 		for await (const message of queryWithAuthLane({
@@ -112,6 +131,9 @@ async function runTurn(
 				}),
 			providerSettings: { tokenInjection: lane },
 			model: id,
+			onLongContextFallback: () => {
+				fallbacks++;
+			},
 		})) {
 			messages.push(message);
 			failure = sdkFailure(message) ?? failure;
@@ -119,13 +141,13 @@ async function runTurn(
 	} catch (error) {
 		failure = error;
 	}
-	return { attempts, messages, failure, credential: await store.read("anthropic-subscription") };
+	return { attempts, messages, failure, fallbacks, credential: await store.read("anthropic-subscription") };
 }
 
 // senpi#4065: the billing text alone does not prove that the request asked for [1m].
 describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion", (lane) => {
-	it.each([EXHAUSTED, REQUIRED])("retries a refused [1m] request at 200k: %s", async (body) => {
-		const result = await runTurn(lane, LEGACY, body);
+	it.each([EXHAUSTED, REQUIRED])("retries a refused [1m] request once at 200k: %s", async (body) => {
+		const result = await runTurn(lane, LEGACY, { body });
 
 		expect(result.attempts.map((options) => options.model)).toEqual([`${LEGACY}[1m]`, LEGACY]);
 		expect(result.attempts.map((options) => options.env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS)).toEqual([
@@ -134,37 +156,89 @@ describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion",
 		]);
 		expect(result.failure).toBeUndefined();
 		expect(result.messages).toEqual([{ type: "result", subtype: "success", result: "ok" }]);
+		expect(result.fallbacks).toBe(1);
 		expect(longContextAvailable()).toBe(false);
 		expect(existsSync(statePath)).toBe(true);
 		expect(result.credential).not.toHaveProperty("accounts.0.blockReason");
+		expect(anthropicSubscriptionModels().find((model) => model.id === LEGACY)?.contextWindow).toBe(200_000);
 	});
 
 	it.each([NATIVE, LEGACY])("does not retry exhaustion on a plain %s request", async (id) => {
-		const result = await runTurn(lane, id, EXHAUSTED, false, false, true);
+		const result = await runTurn(lane, id, {}, true);
 
 		expect(result.attempts.map((options) => options.model)).toEqual([id]);
 		expect(String(result.failure)).toContain(EXHAUSTED);
 		expect(classifyForRequest(result.failure, false)).toEqual({ kind: "billing", retryable: false });
+		expect(result.fallbacks).toBe(0);
 		expect(longContextAvailable()).toBe(true);
 		expect(existsSync(statePath)).toBe(false);
 	});
 
 	it("does not downgrade after visible content", async () => {
-		const result = await runTurn(lane, LEGACY, EXHAUSTED, true);
+		const result = await runTurn(lane, LEGACY, { visible: true });
 
 		expect(result.attempts).toHaveLength(1);
 		expect(String(result.failure)).toContain(EXHAUSTED);
+		expect(result.fallbacks).toBe(0);
 		expect(longContextAvailable()).toBe(true);
 	});
 
 	it("does not repeat the standard-window retry when billing still fails", async () => {
-		const result = await runTurn(lane, LEGACY, EXHAUSTED, false, true);
+		const result = await runTurn(lane, LEGACY, { alwaysRefuse: true });
 
 		expect(result.attempts.map((options) => options.model)).toEqual([`${LEGACY}[1m]`, LEGACY]);
 		expect(String(result.failure)).toContain(EXHAUSTED);
+		expect(result.fallbacks).toBe(1);
 	});
 });
 
-it("classifies the exact 400 as billing without request context", () => {
+describe("the turn a refused [1m] request produces", () => {
+	async function streamTurn(model: Model<Api>) {
+		overrideAuthLaneBoundary({
+			createStore: () => new InMemoryCredentialStore(),
+			env: () => ({ PATH: "/usr/bin" }),
+			getAgentDir: () => directory,
+		});
+		const fake = refusingQuery({});
+		overrideSdkBoundary({ query: fake.query });
+		const message = await streamAnthropicSubscription(
+			model,
+			{ messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+			{ cwd: directory },
+		).result();
+		return { message, attempts: fake.attempts };
+	}
+
+	it("answers on the same model and carries a visible 200k notice", async () => {
+		const { message, attempts } = await streamTurn(catalogModel(LEGACY));
+
+		expect(attempts.map((options) => options.model)).toEqual([`${LEGACY}[1m]`, LEGACY]);
+		expect(message.stopReason).toBe("stop");
+		expect(message.model).toBe(LEGACY);
+		expect(message.diagnostics?.map((diagnostic) => diagnostic.type)).toContain(LONG_CONTEXT_FALLBACK_DIAGNOSTIC);
+		expect(new ContinuityNoticeTracker().noticeFor(message)).toBeDefined();
+	});
+
+	it("fails a plain request with Claude's own reason and no 200k notice", async () => {
+		const { message, attempts } = await streamTurn({ ...catalogModel(LEGACY), contextWindow: 200_000 });
+
+		expect(attempts.map((options) => options.model)).toEqual([LEGACY]);
+		expect(message.stopReason).toBe("error");
+		expect(message.errorMessage).toContain("claude.ai/settings/usage");
+		expect(message.diagnostics?.map((diagnostic) => diagnostic.type) ?? []).not.toContain(
+			LONG_CONTEXT_FALLBACK_DIAGNOSTIC,
+		);
+		expect(new ContinuityNoticeTracker().noticeFor(message)).toBeUndefined();
+	});
+});
+
+it("classifies the exhaustion as billing without request context", () => {
 	expect(classifySdkError(new Error(EXHAUSTED))).toEqual({ kind: "billing", retryable: false });
+});
+
+it("reads the exhaustion from Claude's assistant error shape too, keeping the SDK's account verdict without [1m]", () => {
+	const failure = new Error(`${EXHAUSTED} (billing_error)`);
+
+	expect(classifyForRequest(failure, true)).toEqual({ kind: "long_context_unavailable", retryable: true });
+	expect(classifyForRequest(failure, false)).toEqual({ kind: "billing", retryable: true });
 });
