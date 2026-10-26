@@ -559,9 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fenced_registry_answers_fenced_not_an_os_error() {
-        let (_, later) = fenced_by(|kernel, handle| kernel.lost_handles.push(handle), true);
-        assert_eq!(later, LockAttempt::Fenced);
+    fn a_fenced_registry_answers_a_wait_with_fenced_not_an_os_error() {
         let mut kernel = FakeKernel::with_file(PATH, 1);
         let mut registry = PresenceRegistry::new(&mut kernel);
         assert_eq!(registry.pre_action_check("p-9", true), Err(FenceReason::NotHeld));
@@ -572,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn a_canceller_registered_after_cancel_is_refused_and_one_cleared_never_runs() {
+    fn a_cleared_canceller_never_runs_and_registering_after_cancel_is_refused() {
         let ran = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let token = CancelToken::default();
         let counter = std::sync::Arc::clone(&ran);

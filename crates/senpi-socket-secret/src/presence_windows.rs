@@ -126,6 +126,9 @@ impl PresenceBackend for WindowsPresenceBackend {
         // SAFETY: OVERLAPPED is plain data; the event is set below.
         let mut overlapped: Box<OVERLAPPED> = Box::new(unsafe { std::mem::zeroed() });
         overlapped.hEvent = event.0;
+        if cancel.is_cancelled() {
+            return WaitOutcome::Cancelled;
+        }
         let outcome = if lock(handle.0, LOCKFILE_EXCLUSIVE_LOCK, &mut overlapped) {
             WaitOutcome::Acquired
         } else {
