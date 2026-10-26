@@ -146,33 +146,58 @@ describe("RPC method classes (senpi#4319)", () => {
 		const entry = (fields: Record<string, unknown>) => ({ id: "e", parentId: null, timestamp: "t", ...fields });
 		const message = (fields: Record<string, unknown>) =>
 			entry({ type: "message", message: { timestamp: 0, ...fields } });
-		const fixtures: Record<string, ReadonlyArray<readonly [string, unknown, RpcMethodClass]>> = {
-			"append_session_entry@1": [
-				["user message", message({ role: "user", content: "hi" }), "drive"],
-				["assistant message", message({ role: "assistant", content: [] }), "device_admin"],
-				[
-					"tool result",
-					message({ role: "toolResult", toolCallId: "t", toolName: "bash", content: [] }),
-					"device_admin",
-				],
-				["message without a role", message({ content: "hi" }), "device_admin"],
-				["message without a message", entry({ type: "message" }), "device_admin"],
-				["custom entry", entry({ type: "custom", customType: "x", data: {} }), "device_admin"],
-				[
-					"custom message",
-					entry({ type: "custom_message", customType: "x", content: "hi", display: true }),
-					"device_admin",
-				],
-				["label", entry({ type: "label", targetId: "e", label: "x" }), "device_admin"],
-				[
-					"compaction",
-					entry({ type: "compaction", summary: "s", firstKeptEntryId: "e", tokensBefore: 1 }),
-					"device_admin",
-				],
-				["model change", entry({ type: "model_change", provider: "p", modelId: "m" }), "device_admin"],
-				["unknown entry type", entry({ type: "zz_unknown" }), "device_admin"],
-				["entry not an object", "message", "device_admin"],
-				["no entry", undefined, "device_admin"],
+		const appendCases: ReadonlyArray<readonly [string, unknown, RpcMethodClass]> = [
+			["user message", message({ role: "user", content: "hi" }), "drive"],
+			["assistant message", message({ role: "assistant", content: [] }), "device_admin"],
+			[
+				"tool result",
+				message({ role: "toolResult", toolCallId: "t", toolName: "bash", content: [] }),
+				"device_admin",
+			],
+			["message without a role", message({ content: "hi" }), "device_admin"],
+			["message without a message", entry({ type: "message" }), "device_admin"],
+			["custom entry", entry({ type: "custom", customType: "x", data: {} }), "device_admin"],
+			[
+				"custom message",
+				entry({ type: "custom_message", customType: "x", content: "hi", display: true }),
+				"device_admin",
+			],
+			["label", entry({ type: "label", targetId: "e", label: "x" }), "device_admin"],
+			[
+				"compaction",
+				entry({ type: "compaction", summary: "s", firstKeptEntryId: "e", tokensBefore: 1 }),
+				"device_admin",
+			],
+			["model change", entry({ type: "model_change", provider: "p", modelId: "m" }), "device_admin"],
+			["unknown entry type", entry({ type: "zz_unknown" }), "device_admin"],
+			["entry not an object", "message", "device_admin"],
+			["no entry", undefined, "device_admin"],
+		];
+		const fixtures: Record<string, ReadonlyArray<readonly [string, Record<string, unknown>, RpcMethodClass]>> = {
+			"append_session_entry@1": appendCases.map(([name, value, expected]) => [name, { entry: value }, expected]),
+			"open_session@1": [
+				["by id only", { sessionId: "s" }, "thread"],
+				["expected host instance", { expectedHostInstance: "h" }, "thread"],
+				["provider and model", { provider: "p", modelId: "m" }, "thread"],
+				["session file", { sessionPath: "/x/s.jsonl" }, "device_admin"],
+				["cwd", { cwd: "/x" }, "device_admin"],
+				["permission preset", { permissionPreset: "full-access" }, "device_admin"],
+				["browser engine", { browserEngine: "connected" }, "device_admin"],
+				["a null path still names one", { sessionPath: null }, "device_admin"],
+				["an explicitly undefined field is absent", { cwd: undefined }, "thread"],
+			],
+			"get_effect_status@1": [
+				["by session id", { sessionId: "s", effectId: "e" }, "observe"],
+				["in a named session file", { sessionPath: "/x/s.jsonl", effectId: "e" }, "device_admin"],
+			],
+			"set_thinking_level@1": [
+				["this turn only", { level: "high", scope: "turn" }, "drive"],
+				["remembered for the model", { level: "high" }, "device_admin"],
+				["another scope", { level: "high", scope: "session" }, "device_admin"],
+			],
+			"new_session@1": [
+				["plain", {}, "thread"],
+				["parent session file", { parentSession: "/x/p.jsonl" }, "device_admin"],
 			],
 		};
 		const rules = Object.entries(RPC_METHOD_CLASS).flatMap(([type, value]) =>
@@ -181,18 +206,63 @@ describe("RPC method classes (senpi#4319)", () => {
 		expect(Object.keys(fixtures).sort()).toEqual(rules.sort());
 		for (const [key, cases] of Object.entries(fixtures)) {
 			const type = key.slice(0, key.indexOf("@"));
-			const outputs = cases.map(([name, entryValue]) => [name, classifyRpcMethod({ type, entry: entryValue })]);
+			const outputs = cases.map(([name, fields]) => [name, classifyRpcMethod({ type, ...fields })]);
 			expect(outputs).toEqual(cases.map(([name, , expected]) => [name, expected]));
 		}
+	});
+
+	// senpi#4325 review: records that name a host path or write device-wide settings are device_admin.
+	it("classes host-path and global-settings records as device_admin", () => {
+		for (const record of [
+			{ type: "switch_session", sessionPath: "/x/s.jsonl" },
+			{ type: "import_jsonl", inputPath: "/etc/hosts" },
+			{ type: "set_steering_mode", mode: "all" },
+			{ type: "set_follow_up_mode", mode: "all" },
+			{ type: "set_auto_retry", enabled: true },
+			{ type: "set_model", provider: "p", modelId: "m" },
+			{ type: "cycle_model" },
+			{ type: "cycle_thinking_level" },
+			{ type: "set_thinking_level", level: "high" },
+			{ type: "set_fast_mode", enabled: true },
+		])
+			expect([record.type, classifyRpcMethod(record)]).toEqual([record.type, "device_admin"]);
+		expect(classifyRpcMethod({ type: "set_auto_compaction", enabled: true })).toBe("drive");
+		const threadOnly = new Set<RpcMethodClass>(["thread", "drive"]);
+		expect(rpcMethodPermitted({ type: "open_session", permissionPreset: "full-access" }, threadOnly)).toBe(false);
+		expect(rpcMethodPermitted({ type: "open_session", sessionId: "s" }, threadOnly)).toBe(true);
+	});
+
+	it("refuses a record whose rule throws instead of crashing", () => {
+		const hostile = new Proxy(
+			{ type: "open_session" },
+			{
+				get: (target, key) => {
+					if (key === "type") return target.type;
+					throw new Error("hostile getter");
+				},
+				has: () => true,
+				getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true, value: 1 }),
+			},
+		);
+		expect(classifyRpcMethod(hostile)).toBeUndefined();
+		expect(rpcMethodPermitted(hostile, new Set<RpcMethodClass>(["thread", "device_admin"]))).toBe(false);
 	});
 
 	// A changed rule must bump its version deliberately: this snapshot makes the change visible.
 	it("versions every record-dependent entry", () => {
 		const { classes, dynamic_versions } = rpcMethodClassesAnswer();
-		expect(dynamic_versions).toEqual({ append_session_entry: 1 });
-		expect(Object.keys(classes).filter((type) => classes[type as "prompt"] === "dynamic")).toEqual([
-			"append_session_entry",
-		]);
+		expect(dynamic_versions).toEqual({
+			append_session_entry: 1,
+			get_effect_status: 1,
+			new_session: 1,
+			open_session: 1,
+			set_thinking_level: 1,
+		});
+		expect(
+			Object.keys(classes)
+				.filter((type) => classes[type as "prompt"] === "dynamic")
+				.sort(),
+		).toEqual(["append_session_entry", "get_effect_status", "new_session", "open_session", "set_thinking_level"]);
 	});
 
 	it("digests the sorted type=class lines, dynamic entries as type=dynamic@<version>, and changes with one reassignment", () => {
@@ -231,7 +301,6 @@ describe("RPC method classes (senpi#4319)", () => {
 			data: rpcMethodClassesAnswer(),
 		});
 		expect(rpcMethodClassesAnswer()).toMatchObject({ version: 1, digest: RPC_METHOD_CLASSES_DIGEST });
-		expect(await router.handle({ id: "classes", type: "get_rpc_method_classes" })).toMatchObject({});
 	});
 
 	it("serves get_rpc_method_classes as an observing read", () => {
