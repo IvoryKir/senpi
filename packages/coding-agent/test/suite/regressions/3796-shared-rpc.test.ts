@@ -180,6 +180,96 @@ it("answers a grant response from a connection that may not answer it with a typ
 	expect(await decision).toBe(false);
 });
 
+// Grant answer correlation: a response names the request it answers by `uiRequestId` (long form) or
+// `id` (short form); the sender and capability rules apply to the request it answers either way.
+function answer(connection: string, frame: Record<string, unknown>): Promise<void> | undefined {
+	return writer?.withConnection(connection, () =>
+		handler?.handleInputLine(JSON.stringify({ type: "extension_ui_response", ...frame })),
+	);
+}
+
+function refusal(id: string) {
+	return expect.objectContaining({
+		type: "response",
+		command: "extension_ui_response",
+		id,
+		success: false,
+		error: "grant_answer_refused",
+	});
+}
+
+it("grant answer correlation: refuses a long-form answer from a connection without grant_select", async () => {
+	const current = await setup();
+	const delivered = nextSelect();
+	const decision = selectMcpGrant(getMcpGrantPresentation(current.session.sessionId), "synthetic grant");
+	const frame = await delivered;
+	let settled = false;
+	void decision.then(() => {
+		settled = true;
+	});
+	await answer("question-only", { id: "answer-frame-a", uiRequestId: frame.id, value: "Grant and save permanently" });
+	await writer?.flushConnection("question-only");
+	expect(frames.get("question-only")).toContainEqual(refusal("answer-frame-a"));
+	expect(settled).toBe(false);
+	await answer("grant-client", { id: frame.id, value: "Deny" });
+	expect(await decision).toBe(false);
+});
+
+it("grant answer correlation: refuses a long-form answer from a grant_select connection that did not receive the grant", async () => {
+	const current = await setup();
+	connect("grant-other", ["grant_select"]);
+	const delivered = nextSelect();
+	const decision = selectMcpGrant(getMcpGrantPresentation(current.session.sessionId), "synthetic grant");
+	const frame = await delivered;
+	const [receiver, ...alsoReceived] = [...frames]
+		.filter(([, records]) => records.some((record) => record.id === frame.id))
+		.map(([id]) => id);
+	expect(alsoReceived).toEqual([]);
+	if (receiver === undefined) throw new Error("no connection received the grant");
+	const other = receiver === "grant-client" ? "grant-other" : "grant-client";
+	let settled = false;
+	void decision.then(() => {
+		settled = true;
+	});
+	await answer(other, { id: "answer-frame-b", uiRequestId: frame.id, value: "Grant and save permanently" });
+	await writer?.flushConnection(other);
+	expect(frames.get(other)).toContainEqual(refusal("answer-frame-b"));
+	expect(settled).toBe(false);
+	await answer(receiver, { id: frame.id, value: "Deny" });
+	expect(await decision).toBe(false);
+});
+
+it("grant answer correlation: settles a short-form answer from the capable sender", async () => {
+	const current = await setup();
+	const delivered = nextSelect();
+	const decision = selectMcpGrant(getMcpGrantPresentation(current.session.sessionId), "synthetic grant");
+	const frame = await delivered;
+	await answer("grant-client", { id: frame.id, value: "Deny" });
+	expect(await decision).toBe(false);
+	await writer?.flushConnection("grant-client");
+	expect(frames.get("grant-client")).toContainEqual(
+		expect.objectContaining({ type: "response", command: "extension_ui_response", id: frame.id, success: true }),
+	);
+});
+
+it("grant answer correlation: settles a long-form answer from the capable sender", async () => {
+	const current = await setup();
+	const delivered = nextSelect();
+	const decision = selectMcpGrant(getMcpGrantPresentation(current.session.sessionId), "synthetic grant");
+	const frame = await delivered;
+	await answer("grant-client", { id: "answer-frame-d", uiRequestId: frame.id, value: "Deny" });
+	expect(await decision).toBe(false);
+	await writer?.flushConnection("grant-client");
+	expect(frames.get("grant-client")).toContainEqual(
+		expect.objectContaining({
+			type: "response",
+			command: "extension_ui_response",
+			id: "answer-frame-d",
+			success: true,
+		}),
+	);
+});
+
 it("expires a capable client that never answers at 120 seconds", async () => {
 	const current = await setup();
 	vi.useFakeTimers();

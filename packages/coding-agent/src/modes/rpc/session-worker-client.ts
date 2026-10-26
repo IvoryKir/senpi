@@ -9,6 +9,8 @@ import { createWebViewBroker } from "../../core/webview/webview-broker.ts";
 import type { CliRuntimeConfiguration } from "../../main.ts";
 import type { RpcConnectionOptions } from "./connection-handler.ts";
 import { roleConnection } from "./connection-roles.ts";
+import { answeredUiRequestId } from "./extension-ui-response.ts";
+import type { RpcExtensionUIResponse } from "./rpc-types.ts";
 import type { RpcSessionBinding } from "./session-binding.ts";
 import type { SessionEventWriter } from "./session-event-writer.ts";
 import type { RpcSessionLaunchProfile } from "./session-registry.ts";
@@ -178,13 +180,13 @@ export class SessionWorkerClient {
 			handle: async (command) => {
 				if (writer.handleMcpForm(command)) return;
 				const connection = writer.currentConnection();
-				if (
-					"type" in command &&
-					command.type === "extension_ui_response" &&
-					"id" in command &&
-					typeof command.id === "string" &&
-					writer.acceptWorkerGrantResponse(sessionId, command.id, connection) === false
-				)
+				// The grant rules apply to the request this response answers (`uiRequestId`, or `id` in the
+				// short form), the same request the worker settles.
+				const answered =
+					"type" in command && command.type === "extension_ui_response"
+						? answeredUiRequestId(command as RpcExtensionUIResponse)
+						: undefined;
+				if (answered !== undefined && writer.acceptWorkerGrantResponse(sessionId, answered, connection) === false)
 					return;
 				await this.request({
 					type: "command",
