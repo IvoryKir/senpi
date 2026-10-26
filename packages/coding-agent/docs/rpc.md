@@ -5396,17 +5396,16 @@ through this event.
 ```
 
 A full disk (`ENOSPC`) or a spent quota (`EDQUOT`) is reported as `errorCause: "disk_full"`, with `diskFull` naming the
-session file (`path`), the bytes the failed write needed (`neededBytes`) and, when the filesystem reports it, the space
-left (`availableBytes`). `errorMessage` is then the actionable text to show the person. A prompt rejected before it was
+session file (`path`) and the bytes the failed write needed (`neededBytes`). `errorMessage` is then the actionable text to show the person. A prompt rejected before it was
 accepted carries the same information as `errorCode: "disk_full"` and `errorData`.
 
 ```json
 {
   "type": "transcript_write_failed",
   "role": "assistant",
-  "errorMessage": "Disk full: the session could not be saved because the disk is full (/path/to/session.jsonl needed 1.2 KB, 0 bytes free). Free disk space, then continue this session.",
+  "errorMessage": "Disk full: the session could not be saved because the disk is full (/path/to/session.jsonl needed 1.2 KB). Free disk space, then continue this session.",
   "errorCause": "disk_full",
-  "diskFull": { "path": "/path/to/session.jsonl", "neededBytes": 1229, "availableBytes": 0 }
+  "diskFull": { "path": "/path/to/session.jsonl", "neededBytes": 1229 }
 }
 ```
 
