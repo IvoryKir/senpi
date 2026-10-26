@@ -192,6 +192,24 @@ describe("endpoint reservation store", () => {
 		raw.close();
 		await expect(openEndpointReservationStore(path)).rejects.toMatchObject({ reason: "schema_unsupported" });
 	});
+	it.each(["reservation", "roleRow", "readOffer"] as const)(
+		"answers %s blocked by an exclusive writer as store_busy",
+		async (method) => {
+			const { path, store: s, generation, locator } = await offered();
+			const writer = new DatabaseSync(path);
+			try {
+				writer.exec("BEGIN EXCLUSIVE; UPDATE reservations SET revision = revision + 1;");
+				expect(rejection(() => (method === "reservation" ? s.reservation(generation) : s[method](locator)))).toBe(
+					"store_busy",
+				);
+			} finally {
+				writer.exec("ROLLBACK;");
+				writer.close();
+				s.close();
+			}
+		},
+	);
+
 	it("answers a commit blocked by another connection's read as store_busy and writes nothing", async () => {
 		const { path, store: s } = await store();
 		const generation = s.reserve(ENDPOINT, OWNER);
