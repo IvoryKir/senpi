@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { canonicalizePath, canonicalizePathStrict, resolvePath } from "../utils/paths.ts";
@@ -100,8 +100,83 @@ function normalizeCwd(cwd: string): string {
 	}
 }
 
+const GITDIR_POINTER = /^gitdir:\s*(.+)$/;
+
+function readFirstLine(path: string): string | undefined {
+	try {
+		return readFileSync(path, "utf-8").split(/\r?\n/, 1)[0]?.trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function realPathOf(path: string): string | undefined {
+	try {
+		return realpathSync(path);
+	} catch {
+		return undefined;
+	}
+}
+
+function isDirectory(path: string): boolean {
+	try {
+		return statSync(path).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The folder of the repository's main checkout that matches `dir` inside a linked git worktree, or
+ * undefined when `dir` is not inside one. A linked worktree is the same repository as its main
+ * checkout, but tools that run one agent per worktree (Orca's `~/orca/workspaces/<repo>/<name>`)
+ * put it outside the main checkout, where the ancestor walk finds no decision. Reads the files
+ * `git worktree add` writes and never spawns git. Accepted only when the worktree's admin dir points
+ * back at this `.git` file and the common dir is the main checkout's own `.git` directory; bare
+ * repositories, `--separate-git-dir` clones and submodules have no main checkout to inherit from.
+ */
+function linkedWorktreeMainCheckoutPath(dir: string): string | undefined {
+	let checkoutRoot = dir;
+	while (!existsSync(join(checkoutRoot, ".git"))) {
+		const parentDir = dirname(checkoutRoot);
+		if (parentDir === checkoutRoot) return undefined;
+		checkoutRoot = parentDir;
+	}
+	const marker = join(checkoutRoot, ".git");
+	if (isDirectory(marker)) return undefined;
+	const adminTarget = GITDIR_POINTER.exec(readFirstLine(marker) ?? "")?.[1]?.trim();
+	if (!adminTarget) return undefined;
+	const adminDir = resolve(checkoutRoot, adminTarget);
+	const commonDirPointer = readFirstLine(join(adminDir, "commondir"));
+	const backPointer = readFirstLine(join(adminDir, "gitdir"));
+	if (commonDirPointer === undefined || backPointer === undefined) return undefined;
+	const markerRealPath = realPathOf(marker);
+	if (markerRealPath === undefined || realPathOf(resolve(adminDir, backPointer)) !== markerRealPath) {
+		return undefined;
+	}
+	const commonDir = realPathOf(resolve(adminDir, commonDirPointer));
+	if (commonDir === undefined || basename(commonDir) !== ".git") return undefined;
+	const mainCheckout = dirname(commonDir);
+	const mainMarker = join(mainCheckout, ".git");
+	if (!isDirectory(mainMarker) || realPathOf(mainMarker) !== commonDir) return undefined;
+	return join(mainCheckout, relative(checkoutRoot, dir));
+}
+
+/**
+ * The nearest saved decision for `cwd`: its own folder and every folder above it first, and only
+ * when none of them has one, the matching folder of the main checkout when `cwd` is inside a linked
+ * git worktree. A decision saved for the worktree or above it always wins over the main checkout's.
+ */
 function findNearestTrustEntry(data: TrustFile, cwd: string): ProjectTrustStoreEntry | null {
-	let currentDir = normalizeCwd(cwd);
+	const dir = normalizeCwd(cwd);
+	const own = findNearestTrustEntryFrom(data, dir);
+	if (own !== null) return own;
+	const mainCheckoutDir = linkedWorktreeMainCheckoutPath(dir);
+	return mainCheckoutDir === undefined ? null : findNearestTrustEntryFrom(data, mainCheckoutDir);
+}
+
+function findNearestTrustEntryFrom(data: TrustFile, dir: string): ProjectTrustStoreEntry | null {
+	let currentDir = dir;
 	while (true) {
 		const value = data[currentDir];
 		if (value === true || value === false) {
