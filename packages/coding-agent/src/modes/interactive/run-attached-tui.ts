@@ -51,13 +51,23 @@ export async function runAttachedTui(options: {
 		interrupt = () => resolve("interrupted");
 	});
 	const view = new AttachedTui(ui, finish);
-	// A signal ends the presentation at once, also while connect() still waits on the endpoint.
-	const stop = () => {
+	// A signal ends the presentation at once, also while connect() still waits on the endpoint. Once it
+	// is leaving, the release can wait on a silent endpoint: a further signal restores the terminal
+	// (idempotently) and exits at once, non-zero.
+	let leaving = false;
+	const stop = (exitCode: number) => {
+		if (leaving) {
+			restore();
+			process.exit(exitCode);
+		}
+		leaving = true;
 		finish();
 		interrupt();
 	};
-	process.once("SIGTERM", stop);
-	process.once("SIGINT", stop);
+	const onSigterm = () => stop(143);
+	const onSigint = () => stop(130);
+	process.on("SIGTERM", onSigterm);
+	process.on("SIGINT", onSigint);
 	ui.addChild(view);
 	if (ui instanceof TuiAltScreen) ui.setLayoutRoot(view.layoutRoot);
 	ui.setFocus(view);
@@ -69,12 +79,14 @@ export async function runAttachedTui(options: {
 		]);
 		if (outcome === "connected") await done;
 	} finally {
+		leaving = true;
+		// The terminal comes back first: the release below can wait out its whole deadline.
+		restore();
 		try {
 			await view.close();
 		} finally {
-			process.off("SIGTERM", stop);
-			process.off("SIGINT", stop);
-			restore();
+			process.off("SIGTERM", onSigterm);
+			process.off("SIGINT", onSigint);
 			process.off("uncaughtException", crash);
 			process.off("unhandledRejection", crash);
 		}

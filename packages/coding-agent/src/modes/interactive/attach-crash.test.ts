@@ -92,6 +92,26 @@ describe.skipIf(process.platform === "win32")("attached TUI crash safety", { tim
 		expectRestored(result.output);
 	});
 
+	it("restores the terminal and exits non-zero on a second signal while the release waits on a silent endpoint", () => {
+		const started = Date.now();
+		const result = attachOnTerminal({
+			hold: ["release_attachment"],
+			trigger: "get_entries",
+			action: [
+				'process.kill(process.pid, "SIGTERM");',
+				'await host.command("release_attachment");',
+				'process.kill(process.pid, "SIGTERM");',
+				"await run;",
+				"process.stdout.write('ATTACH_RETURNED\\n');",
+				"process.exit(0);",
+			],
+		});
+		expect(Date.now() - started, "left before the release deadline").toBeLessThan(25_000);
+		expect(result.output).not.toContain("ATTACH_RETURNED");
+		expect(result.status).not.toBe(0);
+		expectRestored(result.output);
+	});
+
 	it("leaves promptly when interrupted while the endpoint has not answered", () => {
 		const result = attachOnTerminal({
 			hold: ["set_client_info"],
