@@ -37,6 +37,7 @@ describe.skipIf(process.platform === "win32")("session_service tool", () => {
 					],
 				});
 				const pid = pidOf(result);
+				expect(Reflect.get(result.details ?? {}, "client_env")).toEqual({});
 				await ready;
 				expect(() => process.kill(pid, 0)).not.toThrow();
 				await harness.session.executeTool("bash", { command: "printf raw-call" });
@@ -89,7 +90,7 @@ describe.skipIf(process.platform === "win32")("session_service tool", () => {
 		}
 	}, 30_000);
 
-	it("reuses a live external endpoint with client auto-start disabled and leaves it running", async () => {
+	it("reuses a live external endpoint with the caller's client settings and leaves it running", async () => {
 		const harness = await createHarness({ extensionFactories: [registerTerminalExtension] });
 		await harness.session.bindExtensions({ mode: "rpc" });
 		const external = createServer((socket) => socket.end());
@@ -103,6 +104,7 @@ describe.skipIf(process.platform === "win32")("session_service tool", () => {
 				action: "ensure",
 				key: `external-${address.port}`,
 				command: "must-not-be-started",
+				client_env: { BSK_AUTO_START: "0" },
 				probe: {
 					command: process.execPath,
 					args: [

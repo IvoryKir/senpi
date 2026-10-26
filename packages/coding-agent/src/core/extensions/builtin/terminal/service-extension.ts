@@ -26,6 +26,12 @@ const serviceSchema = Type.Object({
 		Type.String({ description: "Stable working directory for this service; defaults to the session directory." }),
 	),
 	env: Type.Optional(Type.Record(Type.String(), Type.String())),
+	client_env: Type.Optional(
+		Type.Record(Type.String(), Type.String(), {
+			description:
+				"The caller's client settings: applied to the service and the probe, and returned for subsequent client calls.",
+		}),
+	),
 	probe: Type.Optional(
 		Type.Object({
 			command: Type.String({ minLength: 1 }),
@@ -86,9 +92,9 @@ export function registerSessionServiceTool(pi: ExtensionAPI): void {
 			"Ensure a foreground daemon as a session-owned service, or reuse an external daemon without adopting it. " +
 			"An optional probe reuses on success and starts only on its documented absent_message; every other error stops. " +
 			"Returns started, not ready: verify readiness separately. stop releases only this session's lease; " +
-			"external daemons are never killed. For bsk use daemon start --foreground, the same BSK_HOME, " +
-			"and a status --json probe with absent_message 'automatic daemon startup is disabled (BSK_AUTO_START=0)'. " +
-			"BSK_AUTO_START=0 is applied to service and probe; apply the returned client_env in subsequent calls too.",
+			"external daemons are never killed. A key names one daemon per home: a different environment is another daemon. " +
+			"client_env is applied to service and probe; apply the returned client_env in subsequent calls too. " +
+			"If ensure reports exited, stop then ensure again.",
 		parameters: serviceSchema,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			signal?.throwIfAborted();
@@ -105,7 +111,8 @@ export function registerSessionServiceTool(pi: ExtensionAPI): void {
 			}
 			if (params.command === undefined)
 				throw new ManagedLaunchError("managed_service_parameters", "ensure requires a foreground command");
-			const env: NodeJS.ProcessEnv = { ...getShellEnv(), ...params.env, BSK_AUTO_START: "0" };
+			const clientEnv = params.client_env ?? {};
+			const env: NodeJS.ProcessEnv = { ...getShellEnv(), ...params.env, ...clientEnv };
 			const cwd = resolve(ctx.cwd, params.cwd ?? ".");
 			const logPath = join(session.dir, `${createHash("sha256").update(key).digest("hex")}.log`);
 			const probe = params.probe;
@@ -128,13 +135,7 @@ export function registerSessionServiceTool(pi: ExtensionAPI): void {
 								),
 						}),
 			});
-			const details = {
-				...result,
-				client_env: {
-					BSK_AUTO_START: "0",
-					...(env.BSK_HOME === undefined ? {} : { BSK_HOME: env.BSK_HOME }),
-				},
-			};
+			const details = { ...result, client_env: clientEnv };
 			return {
 				content: [{ type: "text", text: JSON.stringify(details) }],
 				details,

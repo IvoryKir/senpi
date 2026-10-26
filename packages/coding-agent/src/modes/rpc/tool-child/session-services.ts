@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { userInfo } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import type { ManagedCommand } from "./managed-launch-process.ts";
 import { ManagedLaunchError, type SessionLaunchSupervisor } from "./session-launch-supervisor.ts";
@@ -39,12 +40,28 @@ interface ServiceEntry {
 	exitCode?: number;
 }
 
+/**
+ * The daemon a request names: its OS user, key, executable, arguments and environment (its home included). Only the
+ * working directory may differ between two leases of one daemon; anything else is another daemon.
+ */
+function serviceIdentity(user: string, key: string, { command, args, env }: ManagedCommand): string {
+	const variables = Object.entries(env)
+		.filter((entry): entry is [string, string] => entry[1] !== undefined)
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	return JSON.stringify([user, key, command, args, variables]);
+}
+
+function currentUser(): string {
+	const { uid, username } = userInfo();
+	return `${uid}:${username}`;
+}
+
 /** Leases across sessions in this host. A daemon owned by another host remains external and is never adopted. */
 export class SessionServicePool {
 	readonly #entries = new Map<string, ServiceEntry>();
 
-	async acquire(owner: ServiceOwner, key: string, request: ServiceRequest): Promise<ServiceView> {
-		let entry = this.#entries.get(key);
+	async acquire(owner: ServiceOwner, identity: string, key: string, request: ServiceRequest): Promise<ServiceView> {
+		let entry = this.#entries.get(identity);
 		const reused = entry !== undefined;
 		if (entry !== undefined) {
 			if (entry.retiring)
@@ -56,7 +73,7 @@ export class SessionServicePool {
 				await entry.ready;
 				if ((await request.probe?.()) !== "available")
 					throw new ManagedLaunchError("managed_service_conflict", `${key} is registered with another command`);
-				if (this.#entries.get(key) !== entry || entry.retiring)
+				if (this.#entries.get(identity) !== entry || entry.retiring)
 					throw new ManagedLaunchError("managed_service_stopping", `${key} is releasing its final lease`);
 			}
 			entry.leases.add(owner);
@@ -72,7 +89,7 @@ export class SessionServicePool {
 				retiring: false,
 			};
 			owner.entries += 1;
-			this.#entries.set(key, entry);
+			this.#entries.set(identity, entry);
 			void this.#start(entry, request).then(ready.resolve, ready.reject);
 		}
 		try {
@@ -82,7 +99,7 @@ export class SessionServicePool {
 				throw new ManagedLaunchError("managed_external_service_unavailable", `${key} is no longer available`);
 			return this.#view(entry, record);
 		} catch (error) {
-			await this.release(owner, key);
+			await this.release(owner, identity);
 			throw error;
 		}
 	}
@@ -114,13 +131,17 @@ export class SessionServicePool {
 		}
 	}
 
+	holds(owner: ServiceOwner, identity: string): boolean {
+		return this.#entries.get(identity)?.leases.has(owner) === true;
+	}
+
 	async list(owner: ServiceOwner): Promise<ServiceView[]> {
 		const entries = [...this.#entries.values()].filter((entry) => entry.leases.has(owner));
 		return Promise.all(entries.map(async (entry) => this.#view(entry, await entry.ready)));
 	}
 
-	async release(owner: ServiceOwner, key: string): Promise<void> {
-		const entry = this.#entries.get(key);
+	async release(owner: ServiceOwner, identity: string): Promise<void> {
+		const entry = this.#entries.get(identity);
 		if (entry === undefined || !entry.leases.delete(owner) || entry.leases.size > 0) return;
 		entry.retiring = true;
 		// Cancel admission before joining the start, rather than letting an abandoned probe start user code later.
@@ -131,8 +152,8 @@ export class SessionServicePool {
 			},
 			() => undefined, // A rejected start already reaped its own partial launch.
 		);
-		if (this.#entries.get(key) === entry) {
-			this.#entries.delete(key);
+		if (this.#entries.get(identity) === entry) {
+			this.#entries.delete(identity);
 			entry.creator.entries -= 1;
 		}
 		await this.retire(entry.creator);
@@ -149,23 +170,44 @@ const sharedServices = new SessionServicePool();
 export class SessionServices {
 	readonly #owner: ServiceOwner;
 	readonly #pool: SessionServicePool;
-	readonly #keys = new Set<string>();
+	readonly #user: string;
+	/** This session's key -> the identity of the daemon it leases under that key. */
+	readonly #keys = new Map<string, string>();
 	#closing: Promise<void> | undefined;
 
-	constructor(supervisor: SessionLaunchSupervisor, pool: SessionServicePool = sharedServices) {
+	constructor(
+		supervisor: SessionLaunchSupervisor,
+		pool: SessionServicePool = sharedServices,
+		options: { readonly user?: string } = {},
+	) {
 		this.#owner = { supervisor, entries: 0, closed: false };
 		this.#pool = pool;
+		this.#user = options.user ?? currentUser();
 	}
 
 	async ensure(key: string, request: ServiceRequest): Promise<ServiceView> {
 		if (this.#owner.closed) throw new ManagedLaunchError("managed_session_closed", "the session has ended");
-		this.#keys.add(key);
-		return this.#pool.acquire(this.#owner, key, request);
+		const identity = serviceIdentity(this.#user, key, request.command);
+		const leased = this.#keys.get(key);
+		if (leased !== undefined && leased !== identity)
+			throw new ManagedLaunchError(
+				"managed_service_conflict",
+				`${key} already names another daemon in this session`,
+			);
+		this.#keys.set(key, identity);
+		try {
+			return await this.#pool.acquire(this.#owner, identity, key, request);
+		} catch (error) {
+			if (!this.#pool.holds(this.#owner, identity) && this.#keys.get(key) === identity) this.#keys.delete(key);
+			throw error;
+		}
 	}
 
 	async release(key: string): Promise<void> {
+		const identity = this.#keys.get(key);
+		if (identity === undefined) return;
 		this.#keys.delete(key);
-		await this.#pool.release(this.#owner, key);
+		await this.#pool.release(this.#owner, identity);
 	}
 
 	list(): Promise<ServiceView[]> {
@@ -175,7 +217,7 @@ export class SessionServices {
 	close(): Promise<void> {
 		this.#owner.closed = true;
 		this.#closing ??= (async () => {
-			await Promise.all([...this.#keys].map((key) => this.release(key)));
+			await Promise.all([...this.#keys.keys()].map((key) => this.release(key)));
 			await this.#pool.retire(this.#owner);
 		})();
 		return this.#closing;
