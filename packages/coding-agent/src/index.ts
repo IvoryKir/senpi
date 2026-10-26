@@ -585,6 +585,13 @@ export {
 	stopHost,
 	TUI_PROBE_TIMEOUT_MS,
 } from "./modes/index.ts";
+// A forwarder validates records it accepts on someone else's behalf (senpi#4324)
+export {
+	RPC_INBOUND_LIMITS,
+	RPC_QUESTION_ANSWER_LIMITS,
+	type RpcInboundValidation,
+	validateRpcInboundRecord,
+} from "./modes/rpc/rpc-inbound-schema.ts";
 // UI components for extensions
 export {
 	ArminComponent,

@@ -25,7 +25,7 @@
  */
 
 import { HOST_INSTANCE_ID_ENV } from "./host-identity-env.ts";
-import { RPC_OBSERVING_METHODS } from "./rpc-method-class.ts";
+import { hasRpcMethod, RPC_OBSERVING_METHODS } from "./rpc-method-class.ts";
 
 export const OBSERVE_REQUEST_FIELD = "observe";
 export const ORIGIN_HOST_INSTANCE_FIELD = "origin_host_instance";
@@ -40,7 +40,7 @@ export function isObservingRequest(line: string): boolean {
 	if (typeof request !== "object" || request === null || Array.isArray(request)) return false;
 	const record = request as Readonly<Record<string, unknown>>;
 	if (record.type === "warm" || record.type === "authenticate") return true;
-	return record[OBSERVE_REQUEST_FIELD] === true && (RPC_OBSERVING_METHODS as ReadonlySet<unknown>).has(record.type);
+	return record[OBSERVE_REQUEST_FIELD] === true && hasRpcMethod(RPC_OBSERVING_METHODS, record.type);
 }
 
 /** The host generation this process runs in, or undefined outside any host. */

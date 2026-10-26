@@ -7,9 +7,12 @@
  * same ones required. Unknown fields stay accepted, as they are on the local connection, so additive fields keep
  * working against older hosts.
  *
+ * Every field is bounded (`RPC_INBOUND_LIMITS`): ids, paths, text and secrets by length, counts as non-negative
+ * integers, lists and free-form records by size.
+ *
  * The local connection does not run this validator; it keeps parsing records as it always has. A caller that
- * forwards records on behalf of someone other than the local interactive user calls `validateRpcInboundRecord`
- * and refuses a record it does not accept.
+ * forwards records on behalf of someone other than the local interactive user (a relay forwarder, a remote
+ * viewer) imports `validateRpcInboundRecord` from the package root and refuses a record it does not accept.
  */
 
 import Type, { type Static, type TLiteral, type TProperties, type TSchema } from "typebox";
@@ -18,6 +21,7 @@ import type { RpcInboundRecord } from "./rpc-host-command-types.ts";
 import {
 	MAX_RPC_MESSAGE_CHARACTERS,
 	rpcCommandPayloadError,
+	SESSION_CONTEXT_LIMITS,
 	rpcCommandShapeError,
 	rpcMessageLengthError,
 	sessionContextError,
@@ -32,12 +36,43 @@ export const RPC_QUESTION_ANSWER_LIMITS = {
 	labelCharacters: MAX_RPC_MESSAGE_CHARACTERS,
 } as const;
 
-const Str = Type.String();
-const Num = Type.Number();
+/**
+ * Bounds every field of a validated caller's record stays inside (senpi#4346 review), so a record from someone
+ * other than the local user cannot carry a megabyte id, a negative count or a fifty-thousand-key patch. The host's
+ * own limits are reused where it has them; the rest are named here.
+ */
+export const RPC_INBOUND_LIMITS = {
+	/** ids, session and effect ids, provider and model names, other identifiers */
+	identifierCharacters: 512,
+	/** host paths: session files, working directories, export and import paths */
+	pathCharacters: 4096,
+	/** free text: prompts, commands, edits, instructions (the host's own message limit) */
+	textCharacters: MAX_RPC_MESSAGE_CHARACTERS,
+	/** credentials (API keys) */
+	secretCharacters: 16_384,
+	/** lists of ids, model entries, capabilities, delivery ids */
+	listItems: 1024,
+	/** images in one prompt, steer or follow-up */
+	images: 64,
+	/** keys in a free-form record (a context patch, bash operations, fallback chains) */
+	recordKeys: 256,
+	/** the largest count, revision, sequence or index (JSON numbers stay exact below it) */
+	count: Number.MAX_SAFE_INTEGER,
+} as const;
+
+/** Free text, bounded by the host's message limit. */
+const Str = Type.String({ maxLength: RPC_INBOUND_LIMITS.textCharacters });
+const Id = Type.String({ maxLength: RPC_INBOUND_LIMITS.identifierCharacters });
+const PathStr = Type.String({ maxLength: RPC_INBOUND_LIMITS.pathCharacters });
+const Secret = Type.String({ maxLength: RPC_INBOUND_LIMITS.secretCharacters });
+/** Counts, revisions, sequences, indexes, sizes and durations: non-negative integers. */
+const Num = Type.Integer({ minimum: 0, maximum: RPC_INBOUND_LIMITS.count });
 const Bool = Type.Boolean();
 const Opt = Type.Optional;
-const Strings = Type.Array(Str);
+const Strings = Type.Array(Id, { maxItems: RPC_INBOUND_LIMITS.listItems });
 const OptStr = Opt(Str);
+const OptId = Opt(Id);
+const OptPath = Opt(PathStr);
 const OptNum = Opt(Num);
 const OptBool = Opt(Bool);
 const literals = <const L extends readonly [string, ...string[]]>(...values: L) =>
@@ -45,17 +80,22 @@ const literals = <const L extends readonly [string, ...string[]]>(...values: L) 
 
 const ThinkingLevel = literals("off", "minimal", "low", "medium", "high", "xhigh", "max");
 const SessionKind = literals("interactive", "worker");
-const SessionContext = Type.Record(Str, Str);
-const ImageContent = Type.Object({ type: Type.Literal("image"), data: Str, mimeType: Str });
+const SessionContext = Type.Record(Id, Str, { maxProperties: SESSION_CONTEXT_LIMITS.keys });
+// Image data is bounded by the record's line limit; the count of images is bounded where they are listed.
+const ImageContent = Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Id });
+const Images = Type.Array(ImageContent, { maxItems: RPC_INBOUND_LIMITS.images });
 const ModelEntry = Type.Object({
 	model: Type.Unknown(),
 	thinkingLevel: Opt(ThinkingLevel),
 	thinkingSelection: Opt(Type.Unknown()),
 	serviceTier: Opt(Type.Unknown()),
 });
-const RetryFallback = Type.Object({ modelFallback: Bool, fallbackChains: Type.Record(Str, Type.Immutable(Strings)) });
+const RetryFallback = Type.Object({
+	modelFallback: Bool,
+	fallbackChains: Type.Record(Id, Type.Immutable(Strings), { maxProperties: RPC_INBOUND_LIMITS.recordKeys }),
+});
 const QuestionAnswers = Type.Record(
-	Str,
+	Id,
 	Type.Object({
 		selected: Type.Array(Type.String({ maxLength: RPC_QUESTION_ANSWER_LIMITS.labelCharacters }), {
 			maxItems: RPC_QUESTION_ANSWER_LIMITS.selectedPerAnswer,
@@ -67,28 +107,28 @@ const QuestionAnswers = Type.Record(
 
 /** A host-level record: `id` plus its own fields. */
 const command = <const T extends string, const P extends TProperties>(type: T, properties: P) =>
-	Type.Object({ id: OptStr, type: Type.Literal(type), ...properties });
+	Type.Object({ id: OptId, type: Type.Literal(type), ...properties });
 
 /** A session record: every one accepts the routing envelope's `sessionId`. */
 const session = <const T extends string, const P extends TProperties>(type: T, properties: P) =>
-	command(type, { sessionId: OptStr, ...properties });
+	command(type, { sessionId: OptId, ...properties });
 
 const steerOrFollowUp = <const T extends "steer" | "follow_up">(type: T) =>
 	session(type, {
 		message: Str,
-		images: Opt(Type.Array(ImageContent)),
+		images: Opt(Images),
 		enqueueOrder: OptNum,
 		whenIdle: Opt(literals("queue", "start")),
-		clientMessageId: OptStr,
-		clientTurnId: OptStr,
+		clientMessageId: OptId,
+		clientTurnId: OptId,
 	});
 
 const editMessage = <const T extends "edit_assistant_message" | "edit_user_message">(type: T) =>
-	session(type, { entryId: Str, text: Str, expectedLeafId: OptStr, summarize: OptBool, customInstructions: OptStr });
+	session(type, { entryId: Id, text: Str, expectedLeafId: OptId, summarize: OptBool, customInstructions: OptStr });
 
 const navigateTreeFields = {
 	intent: Opt(literals("select", "resume")),
-	expectedLeafId: OptStr,
+	expectedLeafId: OptId,
 	summarize: OptBool,
 	customInstructions: OptStr,
 	replaceInstructions: OptBool,
@@ -97,7 +137,7 @@ const navigateTreeFields = {
 
 const move = <const P extends TProperties>(properties: P) => command("move_session", properties);
 
-const uiResponseFrame = { type: Type.Literal("extension_ui_response"), id: Str, uiRequestId: OptStr, answerId: OptStr };
+const uiResponseFrame = { type: Type.Literal("extension_ui_response"), id: Id, uiRequestId: OptId, answerId: OptId };
 
 type RpcInboundRecordOf<K extends RpcMethodType> = Extract<RpcInboundRecord, { type: K }>;
 type KeysOf<T> = T extends unknown ? keyof T : never;
@@ -127,55 +167,55 @@ function agreeingSchemas<const Schemas extends { readonly [K in RpcMethodType]: 
 export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	// host
 	get_protocol_info: command("get_protocol_info", {
-		auth: Opt(Type.Object({ client_nonce: Str })),
+		auth: Opt(Type.Object({ client_nonce: Id })),
 		observe: OptBool,
 	}),
 	open_session: command("open_session", {
 		attended: Opt(Type.Literal(false)),
-		spawnedBy: Opt(Type.Object({ parentSessionId: Str, rootSessionId: Str, taskId: Str })),
-		expectedHostInstance: OptStr,
-		sessionPath: OptStr,
-		cwd: OptStr,
-		provider: OptStr,
-		modelId: OptStr,
+		spawnedBy: Opt(Type.Object({ parentSessionId: Id, rootSessionId: Id, taskId: Id })),
+		expectedHostInstance: OptId,
+		sessionPath: OptPath,
+		cwd: OptPath,
+		provider: OptId,
+		modelId: OptId,
 		thinkingLevel: Opt(ThinkingLevel),
-		permissionPreset: OptStr,
+		permissionPreset: OptId,
 		retain_on_disconnect: OptBool,
 		kind: Opt(SessionKind),
 		context: Opt(SessionContext),
 		auto_title: OptBool,
-		durableSessionId: OptStr,
+		durableSessionId: OptId,
 		promptSurface: Opt(literals("terminal", "app", "chat")),
 		browserEngine: Opt(literals("connected", "builtin", "none")),
 		retryFallback: Opt(RetryFallback),
 	}),
-	close_session: command("close_session", { sessionId: Str }),
+	close_session: command("close_session", { sessionId: Id }),
 	move_session: Type.Union([
-		move({ op: Type.Literal("prepare"), moveId: Str }),
-		move({ op: Type.Literal("cancel"), moveId: Str }),
-		move({ op: Type.Literal("status"), moveId: Str, sessionPath: OptStr }),
+		move({ op: Type.Literal("prepare"), moveId: Id }),
+		move({ op: Type.Literal("cancel"), moveId: Id }),
+		move({ op: Type.Literal("status"), moveId: Id, sessionPath: OptPath }),
 		move({
 			op: Type.Literal("export"),
-			sessionPath: Str,
-			moveId: Str,
-			target: Str,
+			sessionPath: PathStr,
+			moveId: Id,
+			target: Id,
 			droppedUserMessages: Opt(Strings),
 		}),
-		move({ op: Type.Literal("import"), bundleDir: Str, cwd: Str, from: OptStr }),
-		move({ op: Type.Literal("finish"), sessionPath: Str, moveId: Str, answer: Type.Unknown() }),
-		move({ op: Type.Literal("revoke"), sessionPath: Str, moveId: Str }),
+		move({ op: Type.Literal("import"), bundleDir: PathStr, cwd: PathStr, from: OptId }),
+		move({ op: Type.Literal("finish"), sessionPath: PathStr, moveId: Id, answer: Type.Unknown() }),
+		move({ op: Type.Literal("revoke"), sessionPath: PathStr, moveId: Id }),
 	]),
 	release_session: command("release_session", {
-		sessionId: Str,
+		sessionId: Id,
 		reason: literals("takeover", "move"),
-		moveId: OptStr,
-		target: OptStr,
+		moveId: OptId,
+		target: OptId,
 		interrupt: OptBool,
 		force: OptBool,
 	}),
 	unload_session: command("unload_session", {
-		sessionId: Str,
-		effectId: OptStr,
+		sessionId: Id,
+		effectId: OptId,
 		interrupt: OptBool,
 		clearQueue: OptBool,
 		children: Opt(literals("refuse", "detach")),
@@ -186,7 +226,7 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	get_rpc_method_classes: command("get_rpc_method_classes", { observe: OptBool }),
 	list_sessions: command("list_sessions", { include_workers: OptBool, observe: OptBool }),
 	subscribe_sessions: command("subscribe_sessions", {
-		sessions: Opt(Type.Union([Type.Literal("all"), Type.Object({ ids: Strings }), Type.Object({ childrenOf: Str })])),
+		sessions: Opt(Type.Union([Type.Literal("all"), Type.Object({ ids: Strings }), Type.Object({ childrenOf: Id })])),
 		include_workers: OptBool,
 		include_context: OptBool,
 		effects: OptBool,
@@ -194,15 +234,21 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 		mirror: Opt(Type.Union([Type.Literal("none"), Type.Literal("all"), Strings])),
 		observe: OptBool,
 	}),
-	unsubscribe_sessions: command("unsubscribe_sessions", { subscriptionId: Str, observe: OptBool }),
+	unsubscribe_sessions: command("unsubscribe_sessions", { subscriptionId: Id, observe: OptBool }),
 	set_session_context: command("set_session_context", {
-		sessionId: Str,
-		patch: Type.Record(Str, Type.Union([Str, Num, Bool, Type.Null()])),
+		sessionId: Id,
+		patch: Type.Record(Id, Type.Union([Str, Type.Number(), Bool, Type.Null()]), {
+			maxProperties: RPC_INBOUND_LIMITS.recordKeys,
+		}),
 	}),
-	warm: command("warm", { cwd: OptStr, kind: Opt(SessionKind), context: Opt(SessionContext) }),
-	attach_session: command("attach_session", { sessionId: Str, durableSessionId: Str, expectedHostInstance: OptStr }),
-	release_attachment: command("release_attachment", { sessionId: Str }),
-	reclaim_session: command("reclaim_session", { sessionPath: Str, durableSessionId: Str, expectedHostInstance: Str }),
+	warm: command("warm", { cwd: OptPath, kind: Opt(SessionKind), context: Opt(SessionContext) }),
+	attach_session: command("attach_session", { sessionId: Id, durableSessionId: Id, expectedHostInstance: OptId }),
+	release_attachment: command("release_attachment", { sessionId: Id }),
+	reclaim_session: command("reclaim_session", {
+		sessionPath: PathStr,
+		durableSessionId: Id,
+		expectedHostInstance: Id,
+	}),
 	// answers
 	extension_ui_response: Type.Union([
 		Type.Object({ ...uiResponseFrame, value: Str }),
@@ -212,34 +258,34 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	]),
 	extension_ui_progress: Type.Object({
 		type: Type.Literal("extension_ui_progress"),
-		id: Str,
+		id: Id,
 		answers: Opt(QuestionAnswers),
 		comment: OptStr,
-		sessionId: OptStr,
+		sessionId: OptId,
 	}),
 	host_response: Type.Object({
 		type: Type.Literal("host_response"),
-		id: Str,
-		sessionId: OptStr,
+		id: Id,
+		sessionId: OptId,
 		data: Opt(Type.Unknown()),
 		error: OptStr,
 	}),
 	// prompting
 	prompt: session("prompt", {
 		message: Str,
-		images: Opt(Type.Array(ImageContent)),
+		images: Opt(Images),
 		streamingBehavior: Opt(literals("steer", "followUp")),
 		thinkingLevel: Opt(ThinkingLevel),
 		sessionTitlePrompt: Opt(Type.Union([Str, Type.Literal(false)])),
 		expandPromptTemplates: OptBool,
 		unknownCommandAsText: OptBool,
-		clientMessageId: OptStr,
-		clientTurnId: OptStr,
-		toolBarrier: Opt(Type.Object({ id: Str, deadlineMs: Num })),
+		clientMessageId: OptId,
+		clientTurnId: OptId,
+		toolBarrier: Opt(Type.Object({ id: Id, deadlineMs: Num })),
 	}),
-	release_tool_barrier: session("release_tool_barrier", { barrierId: Str }),
+	release_tool_barrier: session("release_tool_barrier", { barrierId: Id }),
 	send_custom_message: session("send_custom_message", {
-		customType: Str,
+		customType: Id,
 		content: Type.Unknown(),
 		display: Bool,
 		details: Opt(Type.Unknown()),
@@ -251,75 +297,79 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 		expectedSeq: OptNum,
 		mode: Opt(literals("continue", "release")),
 		message: OptStr,
-		effectId: OptStr,
+		effectId: OptId,
 	}),
 	append_user_message: session("append_user_message", { content: Type.Unknown() }),
 	append_session_entry: session("append_session_entry", { entry: Type.Unknown() }),
 	steer: steerOrFollowUp("steer"),
 	follow_up: steerOrFollowUp("follow_up"),
 	abort: session("abort", {
-		effectId: OptStr,
+		effectId: OptId,
 		awaitIdle: OptBool,
 		clearQueue: OptBool,
 		graceMs: OptNum,
 		intent: Opt(literals("stop", "abort")),
 	}),
-	interrupt: session("interrupt", { turnId: OptStr, intent: Opt(literals("stop", "abort")) }),
+	interrupt: session("interrupt", { turnId: OptId, intent: Opt(literals("stop", "abort")) }),
 	hold_input: session("hold_input", {
-		inputId: Str,
+		inputId: Id,
 		revision: Num,
 		text: Str,
-		parentSessionId: OptStr,
+		parentSessionId: OptId,
 		origin: Opt(Type.Literal("human")),
 	}),
-	withdraw_held_input: session("withdraw_held_input", { inputId: Str }),
+	withdraw_held_input: session("withdraw_held_input", { inputId: Id }),
 	pause_for_run: session("pause_for_run", {
-		parentSessionId: Str,
+		parentSessionId: Id,
 		parentPauseSeq: Num,
-		runRef: Type.Object({ kind: literals("dag", "task", "workpool", "team"), id: Str }),
+		runRef: Type.Object({ kind: literals("dag", "task", "workpool", "team"), id: Id }),
 	}),
 	resume_for_run: session("resume_for_run", {
-		parentSessionId: Str,
+		parentSessionId: Id,
 		parentPauseSeq: Num,
-		resumeId: Str,
+		resumeId: Id,
 		childSeqCutoff: Num,
 	}),
 	abort_compaction: session("abort_compaction", {}),
 	reload: session("reload", {}),
 	check_reload_veto: session("check_reload_veto", {}),
 	clear_queue: session("clear_queue", { abortWillFollow: OptBool }),
-	dequeue_message: session("dequeue_message", { queuedId: Str, expectedRevision: OptNum, effectId: OptStr }),
+	dequeue_message: session("dequeue_message", { queuedId: Id, expectedRevision: OptNum, effectId: OptId }),
 	edit_queued_message: session("edit_queued_message", {
-		queuedId: Str,
+		queuedId: Id,
 		text: Str,
 		expectedRevision: OptNum,
-		effectId: OptStr,
+		effectId: OptId,
 	}),
 	get_steering_messages: session("get_steering_messages", {}),
 	get_follow_up_messages: session("get_follow_up_messages", {}),
 	abort_branch_summary: session("abort_branch_summary", {}),
-	new_session: session("new_session", { parentSession: OptStr }),
+	new_session: session("new_session", { parentSession: OptPath }),
 	wake: session("wake", { delivery_ids: Opt(Strings) }),
 	// state
 	get_state: session("get_state", {}),
 	get_snapshot: session("get_snapshot", { tail: OptNum, maxBytes: OptNum, observe: OptBool }),
 	request_self_settle: session("request_self_settle", {}),
-	get_effect_status: session("get_effect_status", { effectId: Str, sessionPath: OptStr }),
+	get_effect_status: session("get_effect_status", { effectId: Id, sessionPath: OptPath }),
 	get_pending_inputs: session("get_pending_inputs", { knownClientMessageIds: Opt(Strings) }),
 	// model and thinking
-	set_model: session("set_model", { provider: Str, modelId: Str, effectId: OptStr }),
-	set_favorite_models: session("set_favorite_models", { models: Type.Array(ModelEntry) }),
-	set_scoped_models: session("set_scoped_models", { models: Type.Array(ModelEntry) }),
+	set_model: session("set_model", { provider: Id, modelId: Id, effectId: OptId }),
+	set_favorite_models: session("set_favorite_models", {
+		models: Type.Array(ModelEntry, { maxItems: RPC_INBOUND_LIMITS.listItems }),
+	}),
+	set_scoped_models: session("set_scoped_models", {
+		models: Type.Array(ModelEntry, { maxItems: RPC_INBOUND_LIMITS.listItems }),
+	}),
 	cycle_model: session("cycle_model", { direction: Opt(literals("forward", "backward")) }),
 	get_available_models: session("get_available_models", {}),
 	set_thinking_level: session("set_thinking_level", {
 		level: ThinkingLevel,
 		scope: Opt(Type.Literal("turn")),
-		effectId: OptStr,
+		effectId: OptId,
 	}),
 	cycle_thinking_level: session("cycle_thinking_level", {}),
 	get_available_thinking_levels: session("get_available_thinking_levels", {}),
-	get_model_thinking_level: session("get_model_thinking_level", { provider: Str, modelId: Str }),
+	get_model_thinking_level: session("get_model_thinking_level", { provider: Id, modelId: Id }),
 	set_fast_mode: session("set_fast_mode", { enabled: Bool }),
 	get_fast_mode: session("get_fast_mode", {}),
 	set_steering_mode: session("set_steering_mode", { mode: literals("all", "one-at-a-time") }),
@@ -332,39 +382,45 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	// bash
 	bash: session("bash", {
 		command: Str,
-		bashId: OptStr,
+		bashId: OptId,
 		excludeFromContext: OptBool,
-		executionId: OptStr,
-		operations: Opt(Type.Record(Str, Type.Unknown())),
+		executionId: OptId,
+		operations: Opt(Type.Record(Id, Type.Unknown(), { maxProperties: RPC_INBOUND_LIMITS.recordKeys })),
 	}),
 	record_bash_result: session("record_bash_result", {
 		command: Str,
 		// JSON has no `undefined`: a killed command's result arrives without `exitCode`.
-		result: Type.Object({ output: Str, exitCode: OptNum, cancelled: Bool, truncated: Bool, fullOutputPath: OptStr }),
+		result: Type.Object({
+			output: Str,
+			exitCode: Opt(Type.Integer()),
+			cancelled: Bool,
+			truncated: Bool,
+			fullOutputPath: OptPath,
+		}),
 		excludeFromContext: OptBool,
 	}),
 	abort_bash: session("abort_bash", {}),
-	cleanup_bash_output: session("cleanup_bash_output", { path: Str }),
+	cleanup_bash_output: session("cleanup_bash_output", { path: PathStr }),
 	// tree and session
-	set_label: session("set_label", { entryId: Str, label: OptStr }),
+	set_label: session("set_label", { entryId: Id, label: OptStr }),
 	navigate_tree: Type.Union([
-		session("navigate_tree", { ...navigateTreeFields, entryId: Str, targetId: Opt(Type.Never()) }),
-		session("navigate_tree", { ...navigateTreeFields, targetId: Str, entryId: Opt(Type.Never()) }),
+		session("navigate_tree", { ...navigateTreeFields, entryId: Id, targetId: Opt(Type.Never()) }),
+		session("navigate_tree", { ...navigateTreeFields, targetId: Id, entryId: Opt(Type.Never()) }),
 	]),
 	get_session_stats: session("get_session_stats", {}),
-	resolve_path: session("resolve_path", { path: Str }),
+	resolve_path: session("resolve_path", { path: PathStr }),
 	memory_report: session("memory_report", {}),
-	export_html: session("export_html", { outputPath: OptStr, themeName: OptStr }),
-	export_jsonl: session("export_jsonl", { outputPath: OptStr }),
-	switch_session: session("switch_session", { sessionPath: Str, cwdOverride: OptStr }),
-	fork: session("fork", { entryId: Str, position: Opt(literals("before", "at")) }),
+	export_html: session("export_html", { outputPath: OptPath, themeName: OptId }),
+	export_jsonl: session("export_jsonl", { outputPath: OptPath }),
+	switch_session: session("switch_session", { sessionPath: PathStr, cwdOverride: OptPath }),
+	fork: session("fork", { entryId: Id, position: Opt(literals("before", "at")) }),
 	edit_assistant_message: editMessage("edit_assistant_message"),
 	edit_user_message: editMessage("edit_user_message"),
 	clone: session("clone", {}),
 	get_fork_messages: session("get_fork_messages", {}),
 	get_entries: session("get_entries", {
-		since: OptStr,
-		before: OptStr,
+		since: OptId,
+		before: OptId,
 		limit: OptNum,
 		tail: OptNum,
 		maxBytes: OptNum,
@@ -373,27 +429,30 @@ export const RPC_INBOUND_SCHEMAS = agreeingSchemas({
 	get_last_assistant_text: session("get_last_assistant_text", {}),
 	set_session_name: session("set_session_name", { name: Str }),
 	record_user_activity: session("record_user_activity", { kind: Type.Literal("draft") }),
-	import_jsonl: session("import_jsonl", { inputPath: Str, cwdOverride: OptStr }),
+	import_jsonl: session("import_jsonl", { inputPath: PathStr, cwdOverride: OptPath }),
 	get_messages: session("get_messages", {}),
-	get_media: session("get_media", { toolCallId: Str, contentIndex: Num }),
+	get_media: session("get_media", { toolCallId: Id, contentIndex: Num }),
 	get_commands: session("get_commands", {}),
 	get_loaded_surfaces: session("get_loaded_surfaces", {}),
-	extension_request: session("extension_request", { name: Str, data: Opt(Type.Unknown()) }),
+	extension_request: session("extension_request", { name: Id, data: Opt(Type.Unknown()) }),
 	"eval_cells.list": session("eval_cells.list", {}),
-	"eval_cells.peek": session("eval_cells.peek", { cellId: Str, tailBytes: OptNum }),
-	"eval_cells.stop": session("eval_cells.stop", { cellId: Str }),
+	"eval_cells.peek": session("eval_cells.peek", { cellId: Id, tailBytes: OptNum }),
+	"eval_cells.stop": session("eval_cells.stop", { cellId: Id }),
 	// credentials and accounts
 	get_auth_providers: session("get_auth_providers", {}),
-	login_start: session("login_start", { provider: Str }),
-	login_cancel: session("login_cancel", { provider: Str }),
-	login_api_key: session("login_api_key", { provider: Str, key: Str }),
-	logout: session("logout", { provider: Str }),
-	verify_api_key: session("verify_api_key", { provider: Str, key: Str }),
-	get_provider_accounts: session("get_provider_accounts", { provider: Str }),
-	account_pin: session("account_pin", { provider: Str, name: Type.Union([Str, Type.Null()]) }),
-	account_remove: session("account_remove", { provider: Str, name: Str }),
-	account_order: session("account_order", { provider: Str, names: Type.Union([Strings, Type.Null()]) }),
-	set_client_info: session("set_client_info", { width: Num, capabilities: Opt(Strings) }),
+	login_start: session("login_start", { provider: Id }),
+	login_cancel: session("login_cancel", { provider: Id }),
+	login_api_key: session("login_api_key", { provider: Id, key: Secret }),
+	logout: session("logout", { provider: Id }),
+	verify_api_key: session("verify_api_key", { provider: Id, key: Secret }),
+	get_provider_accounts: session("get_provider_accounts", { provider: Id }),
+	account_pin: session("account_pin", { provider: Id, name: Type.Union([Str, Type.Null()]) }),
+	account_remove: session("account_remove", { provider: Id, name: Id }),
+	account_order: session("account_order", { provider: Id, names: Type.Union([Strings, Type.Null()]) }),
+	set_client_info: session("set_client_info", {
+		width: Type.Integer({ minimum: 1, maximum: 100_000 }),
+		capabilities: Opt(Strings),
+	}),
 });
 
 export type RpcInboundValidation = { readonly ok: true } | { readonly ok: false; readonly reason: string };

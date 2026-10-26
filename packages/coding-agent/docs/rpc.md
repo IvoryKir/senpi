@@ -3544,11 +3544,16 @@ current without fetching it; `version` changes only when the meaning of a class 
 The host derives three of its own lists from the same table, so they cannot drift from it: the observing reads that
 may carry `observe: true`, the reads that leave an idle session's activity untouched (every `observe` type plus the
 read-only device reads `resolve_path`, `get_auth_providers` and `get_provider_accounts`), and the inputs a pending idle
-handover holds back. An embedder that forwards records for someone other than the local user can check each one with
-`validateRpcInboundRecord(record)` (`src/modes/rpc/rpc-inbound-schema.ts`). It answers `{ ok: true }` or
-`{ ok: false, reason }` from one schema per inbound record type plus the host's own field bounds, refuses a type it
-does not know, and bounds question answers (`extension_ui_response`, `extension_ui_progress`) to 64 answers of at most
-64 selected labels, each label at most 1,000,000 characters. The local connection does not run it.
+handover holds back. An embedder that forwards records for someone other than the local user (a relay forwarder, a
+remote viewer) imports `validateRpcInboundRecord` from the package root (`import { validateRpcInboundRecord } from
+"@code-yeongyu/senpi"`) and checks each record with it. It answers `{ ok: true }` or `{ ok: false, reason }` from one
+schema per inbound record type plus the host's own field bounds, and refuses a type it does not know. Every field is
+bounded, by the exported `RPC_INBOUND_LIMITS`: ids and other identifiers at 512 characters, host paths at 4,096, free
+text at the host's 1,000,000-character message limit, credentials at 16,384; counts, revisions, sequences and indexes
+are non-negative integers; lists at 1,024 items, images at 64 per message, free-form records (a context patch, bash
+operations, fallback chains) at 256 keys. Question answers (`extension_ui_response`, `extension_ui_progress`) are
+bounded to 64 answers of at most 64 selected labels. A refusal names the type and the first failing field, never a
+value. The local connection does not run it.
 
 #### get_effect_status
 

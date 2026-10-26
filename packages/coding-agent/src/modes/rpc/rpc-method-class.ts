@@ -399,16 +399,22 @@ export const RPC_METHOD_TRAITS = {
 	move_session: [],
 } as const satisfies RpcMethodTraitTable;
 
-type DerivedClass = RpcMethodClass | typeof RPC_METHOD_CLASS_DYNAMIC;
+/**
+ * The class of a type's bare record (`{ type }`, no optional fields): a fixed class as is, a versioned rule applied to the
+ * bare record. Traits describe the method, not one record: `get_effect_status` is an observing read whether or not it
+ * names a session file, which only changes who may send it.
+ */
+export function rpcMethodBaseClass(type: RpcMethodType): RpcMethodClass {
+	const entry: RpcMethodClass | { readonly classify: (record: object) => RpcMethodClass } = RPC_METHOD_CLASS[type];
+	return typeof entry === "string" ? entry : entry.classify({ type });
+}
 
 function methodsWhere(
-	rule: (methodClass: DerivedClass, traits: readonly RpcMethodTrait[]) => boolean,
+	rule: (methodClass: RpcMethodClass, traits: readonly RpcMethodTrait[]) => boolean,
 ): ReadonlySet<RpcMethodType> {
 	const methods = new Set<RpcMethodType>();
 	for (const type of Object.keys(RPC_METHOD_CLASS) as RpcMethodType[]) {
-		const entry: RpcMethodClass | object = RPC_METHOD_CLASS[type];
-		const methodClass = typeof entry === "string" ? entry : RPC_METHOD_CLASS_DYNAMIC;
-		if (rule(methodClass, RPC_METHOD_TRAITS[type])) methods.add(type);
+		if (rule(rpcMethodBaseClass(type), RPC_METHOD_TRAITS[type])) methods.add(type);
 	}
 	return methods;
 }
@@ -456,6 +462,11 @@ export function classifyRpcMethod(record: unknown): RpcMethodClass | undefined {
  * Whether a caller holding `granted` may send `record`. Fails closed: an unclassified record is refused whatever is
  * granted, `connection_local` is never permitted, and every other class only when it is granted explicitly.
  */
+/** Whether a wire value (any type) names a method in `methods`; the one place the set is read as strings. */
+export function hasRpcMethod(methods: ReadonlySet<RpcMethodType>, type: unknown): boolean {
+	return typeof type === "string" && (methods as ReadonlySet<string>).has(type);
+}
+
 export function rpcMethodPermitted(record: unknown, granted: ReadonlySet<RpcMethodClass>): boolean {
 	const methodClass = classifyRpcMethod(record);
 	return methodClass !== undefined && methodClass !== "connection_local" && granted.has(methodClass);

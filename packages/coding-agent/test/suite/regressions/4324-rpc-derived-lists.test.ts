@@ -15,6 +15,7 @@ import {
 	RPC_ACTIVITY_NEUTRAL_METHODS,
 	RPC_METHOD_CLASS,
 	RPC_METHOD_TRAITS,
+	rpcMethodBaseClass,
 	RPC_NEW_WORK_METHODS,
 	RPC_OBSERVING_METHODS,
 	type RpcMethodType,
@@ -241,11 +242,10 @@ describe("senpi#4324 lists derived from the method table", () => {
 		const allowed: Record<string, readonly string[]> = {
 			observing_read: ["observe", "connection_local"],
 			read_only: ["device_admin"],
-			new_work: ["drive", "thread", "device_admin", "dynamic"],
+			new_work: ["drive", "thread", "device_admin"],
 		};
 		for (const type of EVERY_TYPE) {
-			const entry: string | object = RPC_METHOD_CLASS[type];
-			const methodClass = typeof entry === "string" ? entry : "dynamic";
+			const methodClass = rpcMethodBaseClass(type);
 			for (const trait of RPC_METHOD_TRAITS[type])
 				expect(allowed[trait], `${type}: ${trait}`).toContain(methodClass);
 		}

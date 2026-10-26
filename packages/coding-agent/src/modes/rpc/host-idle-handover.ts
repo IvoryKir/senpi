@@ -25,7 +25,7 @@
  * (`handover_in_progress`) until the pending operation ends.
  */
 import type { HostLifecyclePolicyInput } from "./host-lifecycle.ts";
-import { RPC_NEW_WORK_METHODS } from "./rpc-method-class.ts";
+import { RPC_NEW_WORK_METHODS, hasRpcMethod } from "./rpc-method-class.ts";
 
 /**
  * Set on a successor launched by an idle handover: the runtime it must report. A successor that
@@ -119,7 +119,7 @@ export class HostIdleHandover {
 	/** False while a handover holds new work back; a blocked one admits again. */
 	admits(commandType: string): boolean {
 		const state = this.operation?.view.state;
-		return state === undefined || state === "handover_blocked" || !(RPC_NEW_WORK_METHODS as ReadonlySet<string>).has(commandType);
+		return state === undefined || state === "handover_blocked" || !hasRpcMethod(RPC_NEW_WORK_METHODS, commandType);
 	}
 
 	async begin(request: IdleHandoverRequest): Promise<HandoverAnswer> {
