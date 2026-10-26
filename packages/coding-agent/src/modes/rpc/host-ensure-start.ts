@@ -102,7 +102,10 @@ export async function startHost(
 					: ["ignore", "ignore", stderr.fd],
 		});
 		if (options.presenterBootstrap)
-			presenterEnrollment = relayPresenterBootstrap(options.presenterBootstrap, child, "initial");
+			presenterEnrollment = relayPresenterBootstrap(options.presenterBootstrap, child, {
+				kind: "initial",
+				predecessorHostInstance: null,
+			});
 		childExit = new Promise((resolveExit) => {
 			child!.once("exit", (code, signal) => {
 				exitedEarly = { code, signal };

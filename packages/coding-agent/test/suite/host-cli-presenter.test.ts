@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
@@ -109,6 +110,33 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 			await closed;
 		},
 		180_000,
+	);
+
+	// #4254 review: the immediate route signs the predecessor, so it must be the host actually replaced.
+	it.each(["foreign", "stale"] as const)(
+		"immediate handoff refuses a %s predecessor without enrolling the successor",
+		async (kind) => {
+			const qa = await hostCliSandbox(kind === "foreign" ? "pf" : "ps");
+			const first = await launched(qa, ["ensure", ...enforcement]);
+			const current =
+				kind === "stale"
+					? (await launched(qa, ["handoff", ...enforcement], { predecessor: first.enrolled.hostInstance }))
+							.enrolled.hostInstance
+					: first.enrolled.hostInstance;
+			const claimed = kind === "foreign" ? randomUUID() : first.enrolled.hostInstance;
+			expect(claimed).not.toBe(current);
+			const frames: string[] = [];
+			const result = await runHostCli(qa, ["handoff", ...enforcement], {}, async (socket) => {
+				socket.on("data", (chunk) => frames.push(String(chunk)));
+				const closed = once(socket, "close", { signal: AbortSignal.timeout(60_000) });
+				send(socket, enrollmentRequest({ launchKind: "replacement", predecessorHostInstance: claimed }));
+				await closed;
+			});
+			expect(frames).toEqual([]);
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(onlyJsonLine(result)).toMatchObject({ action: "handoff" });
+		},
+		240_000,
 	);
 
 	it.each([true, false])(

@@ -61,7 +61,12 @@ export function presenterBootstrapStream(fd: number): Duplex | undefined {
 export function relayPresenterBootstrap(
 	upstream: Duplex,
 	child: ChildProcess,
-	launchKind?: "initial" | "replacement",
+	/**
+	 * The launch this CLI is performing. A v2 enrollment for a different kind, or naming a predecessor other
+	 * than the host this launch replaces (`null` for an initial launch), is dropped before the host sees it.
+	 * `predecessorHostInstance: undefined` means nothing proves the replaced host, so no replacement enrolls.
+	 */
+	launch?: { readonly kind: "initial" | "replacement"; readonly predecessorHostInstance: string | null | undefined },
 ): Promise<void> {
 	const downstream = child.stdio[MCP_PRESENTER_BOOTSTRAP_FD];
 	if (!(downstream instanceof Socket)) {
@@ -85,7 +90,7 @@ export function relayPresenterBootstrap(
 		const unreadUp = attachJsonlLineReader(
 			upstream,
 			(line) => {
-				if (launchKind) {
+				if (launch) {
 					try {
 						const record: unknown = JSON.parse(line);
 						if (
@@ -95,7 +100,11 @@ export function relayPresenterBootstrap(
 							record.type === "enroll" &&
 							"version" in record &&
 							record.version === 2 &&
-							(!("launchKind" in record) || record.launchKind !== launchKind)
+							(!("launchKind" in record) ||
+								record.launchKind !== launch.kind ||
+								launch.predecessorHostInstance === undefined ||
+								!("predecessorHostInstance" in record) ||
+								record.predecessorHostInstance !== launch.predecessorHostInstance)
 						)
 							return finish();
 					} catch {
