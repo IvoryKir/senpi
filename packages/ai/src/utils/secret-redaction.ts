@@ -11,6 +11,7 @@
 import {
 	COOKIE_ATTRIBUTES,
 	COOKIE_WORDS,
+	credentialShapeEnd,
 	credentialShapeStart,
 	isInert,
 	lowerToken,
@@ -98,8 +99,12 @@ function secretRanges(text: string, shapesOnly = false): number[] {
 			slashes === 2 && first.character === 47 && readUnit(text, start + first.length).character === 47;
 		if (!shapesOnly && authority && before.colonOnly && after.colonOnly) userinfoStart = after.end;
 
-		const shape = credentialShapeStart(text, start, end);
-		if (shape >= 0) addRange(ranges, shape, end);
+		let shape = credentialShapeStart(text, start, end);
+		while (shape >= 0) {
+			const stop = credentialShapeEnd(text, shape, end);
+			addRange(ranges, shape, stop);
+			shape = credentialShapeStart(text, stop, end);
+		}
 		if (shapesOnly) continue;
 		if (bearerArmed && valueLength >= MIN_BEARER_LENGTH && !isInert(text, start, end)) {
 			addRange(ranges, start, valueEnd);

@@ -171,6 +171,25 @@ function matchesPrefixRule(text: string, start: number, end: number, rule: Prefi
 	return false;
 }
 
+/** A known key ends at its alphabet's boundary, not at the end of a URL or filename containing it. */
+export function credentialShapeEnd(text: string, start: number, end: number): number {
+	for (const rule of PREFIX_RULES) {
+		if (!matchesPrefixRule(text, start, end, rule)) continue;
+		for (const prefix of rule.prefixes) {
+			if (!matchesAt(text, start, prefix, end)) continue;
+			let i = start + prefix.length;
+			while (i < end) {
+				const unit = readUnit(text, i);
+				if (!rule.chars(unit.character)) break;
+				i += unit.length;
+			}
+			return i;
+		}
+	}
+	// JWTs have their own segment grammar; retain the conservative span for those.
+	return end;
+}
+
 /**
  * Whether a JWT (three base64url segments joined by ".", the first a JSON header "eyJ") starts at p: -1 when one does,
  * else where the next JWT candidate may start. A candidate before the first "." after p sees the same segments with a

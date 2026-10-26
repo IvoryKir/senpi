@@ -16,6 +16,29 @@ const ghp = `ghp_${"FIXTURE".repeat(3)}0008`;
 const sk = `sk-${"proj"}FIXTURE0006`;
 const jwt = ["eyJhbGciOiJub25lIn0", "eyJzdWIiOiJmaXh0dXJlIn0", "Zml4dHVyZS1zaWcx"].join(".");
 
+describe.each([
+	["full", redactSecrets],
+	["shapes", redactCredentialShapes],
+] as const)("credential suffix boundaries (%s)", (_mode, redact) => {
+	it.each(
+		[ghp, `github_pat_${"FIXTURE".repeat(4)}`].flatMap((value) =>
+			[
+				["/hooks.json", "/hooks.json"],
+				[".json", ".json"],
+				[":42", ":42"],
+				["", ""],
+				[`/${ghp}`, "/[REDACTED]"],
+				[`.${ghp}`, ".[REDACTED]"],
+			].map(([suffix, expected]) => ({ value, suffix, expected })),
+		),
+	)("preserves $suffix after $value", ({ value, suffix, expected }) => {
+		const result = redact(`/repo/${value}${suffix}`);
+		expect(result).toBe(`/repo/[REDACTED]${expected}`);
+		expect(result).not.toContain(value);
+		expect(result).not.toContain(ghp);
+	});
+});
+
 // senpi#4283: both public paths must consume the same logical separator, never its hex suffix. Generic values
 // without a credential name remain readable in both; only the full redactor interprets credential names.
 const ENCODING_CASES = ["upper", "lower", "mixed"] as const;
