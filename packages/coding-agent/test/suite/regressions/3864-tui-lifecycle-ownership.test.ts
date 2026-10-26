@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { ExtensionUIContext } from "../../../src/core/extensions/types.ts";
+import type { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { LIFECYCLE_STATUS_KEY } from "../../../src/modes/interactive/lifecycle-status.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
 import { createTuiLifecycle, emit, invoke, render } from "../tui-lifecycle-harness.ts";
@@ -11,16 +12,34 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 });
 
+function lifecycleStatus(mode: InteractiveMode): string | undefined {
+	const provider = Reflect.get(mode, "footerDataProvider") as { getExtensionStatuses(): ReadonlyMap<string, string> };
+	return provider.getExtensionStatuses().get(LIFECYCLE_STATUS_KEY);
+}
+
 it("keeps the lifecycle footer status through /reload and keeps following later lifecycle changes", async () => {
 	const { harness, mode, base } = await createTuiLifecycle(cleanups);
 	const state = harness.session.lifecycle.state;
+	expect(lifecycleStatus(mode)).toBe(state);
 	expect(render(mode)).toContain(state);
 	const showError = vi.spyOn(mode as unknown as { showError(message: string): void }, "showError");
 	await invoke(mode, "handleReloadCommand");
 	expect(showError).not.toHaveBeenCalled();
+	expect(lifecycleStatus(mode)).toBe(state);
 	expect(render(mode)).toContain(state);
 	emit(harness.session, { ...base, state: "waiting_background" });
+	expect(lifecycleStatus(mode)).toBe("waiting_background");
 	expect(render(mode)).toContain("waiting_background");
+});
+
+it("an extension UI reset clears extension statuses but keeps the host-owned lifecycle status", async () => {
+	const { harness, mode } = await createTuiLifecycle(cleanups);
+	const ui = invoke(mode, "createExtensionUIContext") as ExtensionUIContext;
+	ui.setStatus("my-ext", "mine");
+	expect(render(mode)).toContain("mine");
+	invoke(mode, "resetExtensionUI");
+	expect(render(mode)).not.toContain("mine");
+	expect(lifecycleStatus(mode)).toBe(harness.session.lifecycle.state);
 });
 
 it("reserves the lifecycle status key: extensions cannot overwrite or clear it", async () => {

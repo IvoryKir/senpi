@@ -346,6 +346,9 @@ import {
 	type WorkingStatusRgbColor,
 } from "./working-status.ts";
 
+/** Footer statuses the host owns: an extension UI reset (e.g. /reload) keeps them. */
+const HOST_STATUS_KEYS: ReadonlySet<string> = new Set([LIFECYCLE_STATUS_KEY]);
+
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 /** Interface for components that can be expanded/collapsed */
@@ -3546,7 +3549,7 @@ export class InteractiveMode {
 		this.setExtensionFooter(undefined);
 		this.setExtensionHeader(undefined);
 		this.clearExtensionWidgets();
-		this.footerDataProvider.clearExtensionStatuses();
+		this.footerDataProvider.clearExtensionStatuses(HOST_STATUS_KEYS);
 		this.footer.invalidate();
 		this.autocompleteProviderWrappers = [];
 		this.setCustomEditorComponent(undefined);
@@ -9615,8 +9618,6 @@ export class InteractiveMode {
 			// or failed reload with nothing left to restore them, so the TUI stopped
 			// self-repainting until an input event forced a frame.
 			this.resetExtensionUI();
-			// The reset cleared every footer status and reload keeps the agent subscription, so nothing else restores it.
-			this.showLifecycleStatus(this.session);
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 			this.outputPad = this.settingsManager.getOutputPad();
 			// Reload replaces the session runner: a genuine ownership boundary, so the
