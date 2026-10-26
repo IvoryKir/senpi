@@ -4,6 +4,11 @@ import { SecretOutputRedactor } from "../../src/core/tools/secret-output-redacto
 import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 
 describe("streaming secret tokenizer", () => {
+	it("redacts punctuation inside an unquoted secret assignment", () => {
+		const redactor = new SecretOutputRedactor();
+		const input = "PASSWORD=synthetic,comma;tail/path after";
+		expect(redactor.push(input) + redactor.finish()).toBe("PASSWORD=<redacted> after");
+	});
 	it("recognizes tokens across ANSI styling and discards hidden OSC payloads", () => {
 		const fixture = secretOutputCases()[0];
 		assert(fixture);

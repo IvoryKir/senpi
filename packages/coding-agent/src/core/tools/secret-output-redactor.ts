@@ -131,7 +131,7 @@ export class SecretOutputRedactor {
 					}
 					continue;
 				}
-				if (!/[\s,;'"()[\]{}]/.test(character)) continue;
+				if (!/[\s'"]/.test(character)) continue;
 				this.value = undefined;
 			}
 			if (character === "=" && !this.bearer && !this.oversized && /^[A-Za-z_][A-Za-z0-9_]*$/.test(this.token)) {
