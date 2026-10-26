@@ -324,7 +324,7 @@ import { PROMPT_CACHE_SAFE_WAIT_ENV, resolvePromptCacheSafeWaitSeconds } from ".
 import { PromptCachePrefixBuilds } from "./prompt-cache-prefix-request.ts";
 import type { PromptSizeInventory } from "./prompt-size-startup.ts";
 import { expandPromptTemplateWithMetadata, type PromptTemplate } from "./prompt-templates.ts";
-import { type ProviderFailure, providerFailureOf } from "./provider-failure.ts";
+import { type ProviderFailure, providerFailureOf, type SelectedModel, selectedModelOf } from "./provider-failure.ts";
 import { rejectedImageSources } from "./provider-rejected-images.ts";
 import { createProviderTimeoutRetryPlan, runBoundedRetryContinuation } from "./provider-timeout-retry.ts";
 import { QueuedInputAges } from "./queued-input-age.ts";
@@ -536,8 +536,11 @@ type AgentSessionAgentEndEvent = Extract<AgentEvent, { type: "agent_end" }> & {
 	abortCause?: AgentAbortCause;
 };
 
-function withProviderFailure(event: AgentSessionAgentEndEvent): AgentSessionAgentEndEvent {
-	const failure = providerFailureOf(event.messages);
+function withProviderFailure(
+	event: AgentSessionAgentEndEvent,
+	selected: SelectedModel | undefined,
+): AgentSessionAgentEndEvent {
+	const failure = providerFailureOf(event.messages, selected);
 	return failure === undefined ? event : { ...event, failure };
 }
 
@@ -3872,14 +3875,17 @@ export class AgentSession {
 		// Notify all listeners
 		const sessionEvent =
 			event.type === "agent_end"
-				? withProviderFailure({
-						...event,
-						willRetry: agentEndWillRetry,
-						...(this._deadlineTracker.current !== undefined
-							? { aborted: true, abortSource: "system" as const, deadline: this._deadlineTracker.current }
-							: {}),
-						...(abortCause === undefined ? {} : { abortCause }),
-					})
+				? withProviderFailure(
+						{
+							...event,
+							willRetry: agentEndWillRetry,
+							...(this._deadlineTracker.current !== undefined
+								? { aborted: true, abortSource: "system" as const, deadline: this._deadlineTracker.current }
+								: {}),
+							...(abortCause === undefined ? {} : { abortCause }),
+						},
+						selectedModelOf(this._retryFallback.activeState?.originalSelector, this._modelRegistry, this.model),
+					)
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))
 					: event;
@@ -11874,12 +11880,12 @@ export class AgentSession {
 				getCallableTools: () => this._getCallableTools(),
 			},
 			{
-				registerProvider: (name, config) => {
-					this._modelRuntime.registerProvider(name, config);
+				registerProvider: (name, config, extensionPath) => {
+					this._modelRuntime.registerProvider(name, config, { extensionPath });
 					this._refreshCurrentModelFromRegistry();
 				},
-				registerNativeProvider: (provider) => {
-					this._modelRuntime.registerNativeProvider(provider);
+				registerNativeProvider: (provider, extensionPath) => {
+					this._modelRuntime.registerNativeProvider(provider, { extensionPath });
 					this._refreshCurrentModelFromRegistry();
 				},
 				unregisterProvider: (name) => {

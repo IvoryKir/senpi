@@ -5012,6 +5012,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
   "failure": {
     "category": "rate_limit",
     "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
     "httpStatus": 429,
     "code": "rate_limit_error",
     "reason": "the provider is rate limiting requests",
@@ -5020,7 +5021,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
 }
 ```
 
-`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. Every category carries a `reason` and an `action`:
+`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. `provider` and `model` are the ids of the request that failed. When that request ran on a model other than the one the user selected (a fallback rung, or the model a virtual model routed to), `selectedProvider` and `selectedModel` name the selected one; both are absent otherwise. Every category carries a `reason` and an `action`:
 
 | `category` | `action` |
 | --- | --- |
@@ -5474,6 +5475,20 @@ Stores an API key for a provider. The response comes after the model registry ha
 A provider holds logins of one kind. If it had an OAuth login, the key replaces it: `auth.json` is backed up first, and the response `data` is `{replaced: "oauth", backupPath?}`, where `backupPath` is absent when the credential store is not a file (a failed backup fails the login instead). A key added over another key has no `data`.
 
 `get_auth_providers` API-key rows carry `keyHint`, the last four characters of a literal key the app stored when it is at least 12 characters long. OAuth rows, `!command` and `$ENV` references, and short keys have none.
+
+Every `get_auth_providers` row whose provider is defined carries `origin`, which says where the definition lives so a client can name what to edit when the app cannot remove the entry itself:
+
+| `origin.kind` | Meaning |
+| --- | --- |
+| `builtin` | Shipped with senpi. |
+| `models_json` | Defined only in models.json. |
+| `extension` | Registered by an extension (a native provider, a provider config with no builtin underneath, or virtual models). |
+
+`modelsJsonPath` is the models.json that defines or overrides the provider, and `extensionPath` is the extension that registered or overrides it, when its registration named one. Both are optional, on any kind:
+
+```json
+{"id": "proxy-box", "name": "proxy-box", "authType": "api_key", "status": {"configured": false}, "origin": {"kind": "extension", "extensionPath": "/home/user/.senpi/agent/extensions/proxy.ts"}}
+```
 
 ## Extension UI Protocol
 
