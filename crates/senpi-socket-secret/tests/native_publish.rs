@@ -188,9 +188,12 @@ mod windows {
         );
     }
 
-    /// The owner ACE grants full access to `user_sid` (an `S-1-...` string).
+    /// The owner ACE grants full access to `user_sid` (an `S-1-...` string). The ACE's SID is compared
+    /// as a SID, not as SDDL text: both sides go through `ConvertStringSidToSidW`, so an alias the
+    /// SDDL printer chose (`LA` for RID 500) reads as the SID it stands for.
     fn owner_ace_matches(ace: &str, user_sid: &str) -> bool {
-        ace == format!("A;;FA;;;{user_sid}")
+        ace.strip_prefix("A;;FA;;;")
+            .is_some_and(|sid| sid_string_of(sid) == sid_string_of(user_sid))
     }
 
     /// senpi#4362: SDDL prints some machine-relative SIDs as aliases, e.g. the built-in local

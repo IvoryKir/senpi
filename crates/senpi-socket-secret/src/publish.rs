@@ -153,6 +153,10 @@ mod windows_publish {
             .and_then(|()| rename_no_replace(&writer, final_path));
         let staging_left_behind = match result {
             Ok(PublishOutcome::Published) => {
+                // senpi#4362: close the writer (GENERIC_WRITE, share read only) the moment the rename
+                // lands, so a reader of the final name that does not grant FILE_SHARE_WRITE is refused
+                // only between the rename call and this close, never afterwards.
+                drop(writer);
                 published();
                 None
             }
