@@ -3513,23 +3513,26 @@ only reads and may be sent with `observe: true`.
 
 ```json
 {"type": "get_rpc_method_classes"}
-{"type": "response", "command": "get_rpc_method_classes", "success": true, "data": {"version": 1, "digest": "<64 hex>", "classes": {"get_state": "observe", "prompt": "drive", "export_html": "dynamic", "bash": "device_admin", "set_client_info": "connection_local"}}}
+{"type": "response", "command": "get_rpc_method_classes", "success": true, "data": {"version": 1, "digest": "<64 hex>", "classes": {"get_state": "observe", "prompt": "drive", "append_session_entry": "dynamic", "bash": "device_admin", "set_client_info": "connection_local"}, "dynamic_versions": {"append_session_entry": 1}}}
 ```
 
 `classes` names every inbound record type (the example shows five). `dynamic` marks a type whose class depends on
-the record: `export_html` and `export_jsonl` are `observe` without `outputPath` and `device_admin` with it (the
-engine writes that path on its own filesystem), and `append_session_entry` is `drive` for a user-authored message
-entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_admin` for any other entry. The classes, least to most dangerous:
+the record, and `dynamic_versions` gives the version of each such rule: `append_session_entry` is `drive` for a
+user-authored message entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_admin` for any
+other entry. `export_html` and `export_jsonl` are `device_admin` with or without `outputPath`: both write a file on
+the engine's filesystem (into the session's working directory when no path is given). The classes, least to most dangerous:
 `observe` (side-effect-free reads), `drive` (runs, steers or edits a session), `answer` (`extension_ui_response`,
 `extension_ui_progress`), `thread` (creates, opens, attaches, switches, forks or closes sessions), `device_admin`
 (acts on the device outside the agent's permission flow: direct shell, path probes and writes, credentials,
 device-wide model settings, reloads, forged session entries; a forwarding client should unlock it only with an
-explicit `admin` grant) and `connection_local` (configures or tears down the sender's own connection or host ownership,
-so it is meaningful only to the connection that sends it). A type missing from `classes` is unclassified: treat it
+explicit `admin` grant) and `connection_local` (configures or tears down the sender's own connection, its session
+subscriptions (`subscribe_sessions`, `unsubscribe_sessions`) or host ownership, so it is meaningful only to the
+connection that sends it; a forwarding client serves those itself). A type missing from `classes` is unclassified: treat it
 as more dangerous than every class and refuse it. `connection_local` is never accepted on someone else's behalf.
 
 `get_protocol_info` advertises the table as `rpc_method_classes: { version, digest }`. `digest` is the lowercase hex
-sha256 of the `<type>=<class>\n` lines of `classes` (`<type>=dynamic` for a record-dependent type), sorted, so a client that kept a copy can tell whether it is
+sha256 of the `<type>=<class>\n` lines of `classes` (`<type>=dynamic@<version>` for a record-dependent type, its
+version from `dynamic_versions`), sorted, so a client that kept a copy can tell whether it is
 current without fetching it; `version` changes only when the meaning of a class does.
 
 #### get_effect_status

@@ -106,13 +106,19 @@ describe("RPC method classes (senpi#4319)", () => {
 		expect(rpcMethodPermitted({ type: "get_state" }, new Set<RpcMethodClass>())).toBe(false);
 	});
 
-	it.each(["export_html", "export_jsonl"])("classifies %s by whether it writes outputPath on the host", (type) => {
-		expect(classifyRpcMethod({ type })).toBe("observe");
+	// Both forms write a file on the host: an absent outputPath writes into the session's cwd.
+	it.each(["export_html", "export_jsonl"])("classifies %s as device_admin with or without outputPath", (type) => {
+		expect(classifyRpcMethod({ type })).toBe("device_admin");
 		expect(classifyRpcMethod({ type, outputPath: "/tmp/out" })).toBe("device_admin");
-		expect(classifyRpcMethod({ type, outputPath: null })).toBe("device_admin");
 		const observeOnly = new Set<RpcMethodClass>(["observe"]);
-		expect(rpcMethodPermitted({ type }, observeOnly)).toBe(true);
-		expect(rpcMethodPermitted({ type, outputPath: "/tmp/out" }, observeOnly)).toBe(false);
+		expect(rpcMethodPermitted({ type }, observeOnly)).toBe(false);
+		expect(rpcMethodClassesAnswer().classes[type as "export_html"]).toBe("device_admin");
+	});
+
+	// A forwarder serves session streams itself; per-connection subscription state cannot be forwarded.
+	it.each(["subscribe_sessions", "unsubscribe_sessions"])("classifies %s as connection_local", (type) => {
+		expect(classifyRpcMethod({ type })).toBe("connection_local");
+		expect(rpcMethodPermitted({ type }, EVERY_CLASS)).toBe(false);
 	});
 
 	it("drives a user-authored append_session_entry and treats any other entry as device_admin", () => {
@@ -134,22 +140,33 @@ describe("RPC method classes (senpi#4319)", () => {
 		expect(classifyRpcMethod({ type: "append_session_entry" })).toBe("device_admin");
 	});
 
-	it("digests the sorted type=class lines, dynamic entries as type=dynamic, and changes with one reassignment", () => {
-		const { classes } = rpcMethodClassesAnswer();
-		expect(classes.export_html).toBe("dynamic");
-		expect(classes.export_jsonl).toBe("dynamic");
+	// A changed rule must bump its version deliberately: this snapshot makes the change visible.
+	it("versions every record-dependent entry", () => {
+		const { classes, dynamic_versions } = rpcMethodClassesAnswer();
+		expect(dynamic_versions).toEqual({ append_session_entry: 1 });
+		expect(Object.keys(classes).filter((type) => classes[type as "prompt"] === "dynamic")).toEqual([
+			"append_session_entry",
+		]);
+	});
+
+	it("digests the sorted type=class lines, dynamic entries as type=dynamic@<version>, and changes with one reassignment", () => {
+		const { classes, dynamic_versions } = rpcMethodClassesAnswer();
 		expect(classes.append_session_entry).toBe("dynamic");
 		expect(classes.prompt).toBe("drive");
-		const lines = Object.entries(classes)
+		const digestValues: Record<string, string> = { ...classes };
+		for (const [type, version] of Object.entries(dynamic_versions)) digestValues[type] = `dynamic@${version}`;
+		const lines = Object.entries(digestValues)
 			.map(([type, methodClass]) => `${type}=${methodClass}\n`)
 			.sort()
 			.join("");
-		expect(lines).toContain("export_html=dynamic\n");
+		expect(lines).toContain("append_session_entry=dynamic@1\n");
 		expect(RPC_METHOD_CLASSES_DIGEST).toBe(createHash("sha256").update(lines).digest("hex"));
-		const reversed = Object.fromEntries(Object.entries(classes).reverse());
+		const reversed = Object.fromEntries(Object.entries(digestValues).reverse());
 		expect(rpcMethodClassesDigest(reversed)).toBe(RPC_METHOD_CLASSES_DIGEST);
-		expect(rpcMethodClassesDigest({ ...classes, get_state: "drive" })).not.toBe(RPC_METHOD_CLASSES_DIGEST);
-		expect(rpcMethodClassesDigest({ ...classes, export_html: "observe" })).not.toBe(RPC_METHOD_CLASSES_DIGEST);
+		expect(rpcMethodClassesDigest({ ...digestValues, get_state: "drive" })).not.toBe(RPC_METHOD_CLASSES_DIGEST);
+		expect(rpcMethodClassesDigest({ ...digestValues, append_session_entry: "dynamic@2" })).not.toBe(
+			RPC_METHOD_CLASSES_DIGEST,
+		);
 	});
 
 	it("advertises the digest in get_protocol_info and answers the table on get_rpc_method_classes", async () => {
@@ -165,8 +182,10 @@ describe("RPC method classes (senpi#4319)", () => {
 			type: "response",
 			command: "get_rpc_method_classes",
 			success: true,
-			data: { version: 1, digest: RPC_METHOD_CLASSES_DIGEST, classes: rpcMethodClassesAnswer().classes },
+			data: rpcMethodClassesAnswer(),
 		});
+		expect(rpcMethodClassesAnswer()).toMatchObject({ version: 1, digest: RPC_METHOD_CLASSES_DIGEST });
+		expect(await router.handle({ id: "classes", type: "get_rpc_method_classes" })).toMatchObject({});
 	});
 
 	it("serves get_rpc_method_classes as an observing read", () => {

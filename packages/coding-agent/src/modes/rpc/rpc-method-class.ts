@@ -5,7 +5,7 @@
  * to know which records it may accept from that someone. A list kept outside the engine drifts the moment a method
  * lands, so the table lives here and is exhaustive at compile time: it `satisfies` a mapped type over
  * `RpcInboundRecord["type"]`, so a record type added without a class fails the typecheck. An entry is a class, or a
- * pure function of the record when the class depends on its fields. The engine only classifies; it does not gate its
+ * versioned rule (a pure function of the record) when the class depends on its fields. The engine only classifies; it does not gate its
  * own local connections with this table.
  *
  * Classes, least to most dangerous:
@@ -33,10 +33,18 @@ export type RpcMethodType = RpcInboundRecord["type"];
 
 type RpcInboundRecordOf<K extends RpcMethodType> = Extract<RpcInboundRecord, { type: K }>;
 
-/** A fixed class, or a pure function of the record for a type whose class depends on its fields. */
-type RpcMethodClassEntry<K extends RpcMethodType> =
-	| RpcMethodClass
-	| ((record: RpcInboundRecordOf<K>) => RpcMethodClass);
+/**
+ * A record-dependent entry: a pure function of the record plus the version of its rule. The digest hashes the entry
+ * as `type=dynamic@<version>`, so changing what `classify` decides REQUIRES bumping `version`; otherwise a client
+ * holding the old digest never learns the rule moved.
+ */
+interface RpcMethodClassRule<K extends RpcMethodType> {
+	readonly classify: (record: RpcInboundRecordOf<K>) => RpcMethodClass;
+	readonly version: number;
+}
+
+/** A fixed class, or a versioned rule for a type whose class depends on its fields. */
+type RpcMethodClassEntry<K extends RpcMethodType> = RpcMethodClass | RpcMethodClassRule<K>;
 
 type RpcMethodClassTable = { readonly [K in RpcMethodType]: RpcMethodClassEntry<K> };
 
@@ -46,13 +54,8 @@ export const RPC_METHOD_CLASSES_VERSION = 1;
 /** Advertised in `get_protocol_info.capabilities`; `get_rpc_method_classes` answers the table. */
 export const RPC_METHOD_CLASSES_CAPABILITY = "rpc_method_classes";
 
-/** How `get_rpc_method_classes` and the digest name an entry whose class depends on the record. */
+/** How `get_rpc_method_classes` names an entry whose class depends on the record. */
 export const RPC_METHOD_CLASS_DYNAMIC = "dynamic";
-
-/** The engine writes `outputPath` on its own filesystem; without it the export is a transcript read. */
-function exportClass(record: object): RpcMethodClass {
-	return Object.hasOwn(record, "outputPath") ? "device_admin" : "observe";
-}
 
 /**
  * Which session entry types a user could author through the session's own input. Exhaustive over
@@ -94,8 +97,6 @@ export const RPC_METHOD_CLASS = {
 	get_rpc_method_classes: "observe",
 	get_subscription_limits: "observe",
 	list_sessions: "observe",
-	subscribe_sessions: "observe",
-	unsubscribe_sessions: "observe",
 	get_state: "observe",
 	get_snapshot: "observe",
 	get_entries: "observe",
@@ -118,9 +119,6 @@ export const RPC_METHOD_CLASS = {
 	memory_report: "observe",
 	"eval_cells.list": "observe",
 	"eval_cells.peek": "observe",
-	// observe without `outputPath`, device_admin with it
-	export_html: exportClass,
-	export_jsonl: exportClass,
 	// drive
 	prompt: "drive",
 	steer: "drive",
@@ -161,7 +159,7 @@ export const RPC_METHOD_CLASS = {
 	request_self_settle: "drive",
 	"eval_cells.stop": "drive",
 	// drive for a user-authored message entry, device_admin for any other entry
-	append_session_entry: appendEntryClass,
+	append_session_entry: { classify: appendEntryClass, version: 1 },
 	// answer
 	extension_ui_response: "answer",
 	extension_ui_progress: "answer",
@@ -198,8 +196,14 @@ export const RPC_METHOD_CLASS = {
 	account_remove: "device_admin",
 	set_favorite_models: "device_admin",
 	set_scoped_models: "device_admin",
+	// both forms write a file on the host: without `outputPath`, into the session's cwd
+	export_html: "device_admin",
+	export_jsonl: "device_admin",
 	// connection_local
 	set_client_info: "connection_local",
+	// a forwarder serves session streams itself; per-connection subscription state cannot be forwarded
+	subscribe_sessions: "connection_local",
+	unsubscribe_sessions: "connection_local",
 	record_user_activity: "connection_local",
 	detach_connection: "connection_local",
 	release_session: "connection_local",
@@ -218,8 +222,9 @@ export function classifyRpcMethod(record: unknown): RpcMethodClass | undefined {
 	if (typeof record !== "object" || record === null || Array.isArray(record)) return undefined;
 	const type: unknown = Reflect.get(record, "type");
 	if (typeof type !== "string" || !Object.hasOwn(RPC_METHOD_CLASS, type)) return undefined;
-	const entry: RpcMethodClass | ((record: object) => RpcMethodClass) = RPC_METHOD_CLASS[type as RpcMethodType];
-	return typeof entry === "function" ? entry(record) : entry;
+	const entry: RpcMethodClass | { readonly classify: (record: object) => RpcMethodClass } =
+		RPC_METHOD_CLASS[type as RpcMethodType];
+	return typeof entry === "string" ? entry : entry.classify(record);
 }
 
 /**
@@ -235,15 +240,28 @@ export type RpcMethodClassDescription = RpcMethodClass | typeof RPC_METHOD_CLASS
 
 export type RpcMethodClassesTable = Readonly<Record<RpcMethodType, RpcMethodClassDescription>>;
 
-function describeTable(): RpcMethodClassesTable {
-	const described: Record<string, RpcMethodClassDescription> = {};
-	for (const [type, entry] of Object.entries(RPC_METHOD_CLASS))
-		described[type] = typeof entry === "function" ? RPC_METHOD_CLASS_DYNAMIC : entry;
-	return described as RpcMethodClassesTable;
+/** The version of every record-dependent entry, keyed by type. */
+export type RpcMethodClassDynamicVersions = Readonly<Partial<Record<RpcMethodType, number>>>;
+
+function describeTable(): { classes: RpcMethodClassesTable; dynamicVersions: RpcMethodClassDynamicVersions } {
+	const classes: Record<string, RpcMethodClassDescription> = {};
+	const dynamicVersions: Record<string, number> = {};
+	for (const [type, entry] of Object.entries(RPC_METHOD_CLASS)) {
+		if (typeof entry === "string") {
+			classes[type] = entry;
+		} else {
+			classes[type] = RPC_METHOD_CLASS_DYNAMIC;
+			dynamicVersions[type] = entry.version;
+		}
+	}
+	return { classes: classes as RpcMethodClassesTable, dynamicVersions };
 }
 
-/** sha256 (hex) of the table's `type=class` lines (`type=dynamic` for a function entry), sorted, each ending in `\n`. */
-export function rpcMethodClassesDigest(table: Readonly<Record<string, RpcMethodClassDescription>>): string {
+/**
+ * sha256 (hex) of the sorted `type=value\n` lines, where `value` is the class, or `dynamic@<version>` for a
+ * record-dependent entry.
+ */
+export function rpcMethodClassesDigest(table: Readonly<Record<string, string>>): string {
 	const lines = Object.entries(table)
 		.map(([type, methodClass]) => `${type}=${methodClass}\n`)
 		.sort();
@@ -252,7 +270,14 @@ export function rpcMethodClassesDigest(table: Readonly<Record<string, RpcMethodC
 
 const DESCRIBED_TABLE = describeTable();
 
-export const RPC_METHOD_CLASSES_DIGEST = rpcMethodClassesDigest(DESCRIBED_TABLE);
+function digestValues(): Record<string, string> {
+	const values: Record<string, string> = { ...DESCRIBED_TABLE.classes };
+	for (const [type, version] of Object.entries(DESCRIBED_TABLE.dynamicVersions))
+		values[type] = `${RPC_METHOD_CLASS_DYNAMIC}@${version}`;
+	return values;
+}
+
+export const RPC_METHOD_CLASSES_DIGEST = rpcMethodClassesDigest(digestValues());
 
 /** The `rpc_method_classes` field of `get_protocol_info`: enough for a client to tell whether its copy is current. */
 export interface RpcMethodClassesAdvertisement {
@@ -265,11 +290,16 @@ export const RPC_METHOD_CLASSES_ADVERTISEMENT: RpcMethodClassesAdvertisement = {
 	digest: RPC_METHOD_CLASSES_DIGEST,
 };
 
-/** The `get_rpc_method_classes` answer: the advertisement plus the table it digests. */
+/** The `get_rpc_method_classes` answer: the advertisement, the table, and the version of each `dynamic` entry. */
 export interface RpcMethodClassesAnswer extends RpcMethodClassesAdvertisement {
 	readonly classes: RpcMethodClassesTable;
+	readonly dynamic_versions: RpcMethodClassDynamicVersions;
 }
 
 export function rpcMethodClassesAnswer(): RpcMethodClassesAnswer {
-	return { ...RPC_METHOD_CLASSES_ADVERTISEMENT, classes: DESCRIBED_TABLE };
+	return {
+		...RPC_METHOD_CLASSES_ADVERTISEMENT,
+		classes: DESCRIBED_TABLE.classes,
+		dynamic_versions: DESCRIBED_TABLE.dynamicVersions,
+	};
 }
