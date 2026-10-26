@@ -12,6 +12,21 @@
 
 ### Removed
 
+## [2026.10.27-1] - 2026-10-26
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- Preserve startup diagnostics when an MCP stdio child exits before protocol classification, and follow the SDK's default timeout for modern multi-round requests ([#4226](https://github.com/code-yeongyu/senpi/issues/4226)).
+- Claude subscription billing errors identify the attempted account and source and offer effective account-switch or top-up actions. Attempt-open logs include store and account provenance as salted digests, without account names or absolute paths ([#4364](https://github.com/code-yeongyu/senpi/pull/4364)).
+
+### Removed
+
 ## [2026.10.26-2] - 2026-10-26
 
 ### Breaking Changes

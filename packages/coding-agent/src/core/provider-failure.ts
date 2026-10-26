@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	type Api,
+	type AssistantMessage,
 	type Model,
 	type ProviderDiagnostic,
 	type ProviderDiagnosticCategory,
@@ -9,12 +10,19 @@ import {
 import { type FallbackModelLookup, parseFallbackSelector } from "./retry-fallback/chains.ts";
 
 /**
+ * `request_refused`: an `auth` failure on a credential that served a response moments before, so the
+ * provider refused this request rather than the key (senpi#2491).
+ */
+export type ProviderFailureCategory = ProviderDiagnosticCategory | "request_refused";
+
+/**
  * Structured failure of a turn that ended with a provider error, attached to `agent_end`.
- * Built only from the adapter-minted `ProviderDiagnostic`; message text is never read.
+ * Built only from the adapter-minted `ProviderDiagnostic` and the runtime's typed served-credential
+ * mark; message text is never read.
  * Every category, `unknown` included, carries a reason and an action.
  */
 export interface ProviderFailure {
-	readonly category: ProviderDiagnosticCategory;
+	readonly category: ProviderFailureCategory;
 	/** Provider id of the failing request. */
 	readonly provider: string;
 	/** Model id of the failing request (senpi#4328). */
@@ -33,8 +41,12 @@ export interface ProviderFailure {
 	readonly action: string;
 }
 
-const ACTIONS: Record<Exclude<ProviderDiagnosticCategory, "unknown">, { reason: string; action: string }> = {
+const ACTIONS: Record<Exclude<ProviderFailureCategory, "unknown">, { reason: string; action: string }> = {
 	auth: { reason: "the provider rejected the credentials", action: "re-authenticate the provider" },
+	request_refused: {
+		reason: "the provider refused this request, but the same key worked moments ago, so it may still be valid",
+		action: "send the message again or choose another model; if it keeps failing, re-authenticate",
+	},
 	rate_limit: { reason: "the provider is rate limiting requests", action: "retry later or set a fallback model" },
 	quota: { reason: "the provider account is out of quota", action: "check the plan or credits" },
 	context_limit: {
@@ -50,6 +62,14 @@ function identifier(diagnostic: ProviderDiagnostic | undefined): string {
 	if (diagnostic?.code !== undefined) return `code ${diagnostic.code}`;
 	if (diagnostic?.httpStatus !== undefined) return `status ${diagnostic.httpStatus}`;
 	return "no code";
+}
+
+/** An `auth` failure on a credential that served a response moments before: the request was refused, not the key. */
+export function isRequestLevelRefusal(message: AssistantMessage): boolean {
+	return (
+		message.credentialServedRecently === true &&
+		sanitizeProviderDiagnostic(message.providerDiagnostic)?.category === "auth"
+	);
 }
 
 /** The provider and model a turn was meant to run on. */
@@ -75,9 +95,11 @@ export function selectedModelOf(
 export function describeProviderFailure(
 	diagnostic: ProviderDiagnostic | undefined,
 	provider: string,
-	options: { readonly model?: string } = {},
+	options: { readonly model?: string; readonly requestRefused?: boolean } = {},
 ): ProviderFailure {
-	const category = diagnostic?.category ?? "unknown";
+	const category: ProviderFailureCategory = options.requestRefused
+		? "request_refused"
+		: (diagnostic?.category ?? "unknown");
 	const detail =
 		category === "unknown"
 			? {
@@ -94,6 +116,7 @@ export function describeProviderFailure(
 		...(diagnostic?.code === undefined ? {} : { code: diagnostic.code }),
 		...(resetsAt === undefined ? {} : { resetsAt }),
 		...detail,
+		...(category === "request_refused" ? { action: `${detail.action} ${provider}` } : {}),
 		...(resetsAt === undefined ? {} : { reason: `${detail.reason} until ${new Date(resetsAt).toISOString()}` }),
 	};
 }
@@ -110,6 +133,7 @@ export function providerFailureOf(
 	if (last === undefined || last.role !== "assistant" || last.stopReason !== "error") return undefined;
 	const failure = describeProviderFailure(sanitizeProviderDiagnostic(last.providerDiagnostic), last.provider, {
 		model: last.model,
+		requestRefused: isRequestLevelRefusal(last),
 	});
 	if (selected === undefined || (selected.provider === last.provider && selected.model === last.model)) {
 		return failure;
