@@ -226,23 +226,20 @@ mod windows {
             "not a SID: {sddl_sid}"
         );
         let mut text: *mut u16 = std::ptr::null_mut();
-        // SAFETY: `sid` is valid; `text` receives a LocalAlloc string.
-        assert_ne!(
-            unsafe { ConvertSidToStringSidW(sid, &mut text) },
-            0,
-            "ConvertSidToStringSidW failed"
-        );
+        // SAFETY: `sid` is valid; `text` receives a LocalAlloc string. `sid` is freed before the
+        // result is checked, so a failed conversion leaks nothing.
+        let converted = unsafe { ConvertSidToStringSidW(sid, &mut text) };
+        // SAFETY: `sid` came from ConvertStringSidToSidW above and is freed exactly once.
+        unsafe { LocalFree(sid.cast()) };
+        assert_ne!(converted, 0, "ConvertSidToStringSidW failed");
         // SAFETY: `text` is a NUL-terminated UTF-16 string from the conversion above.
         let length = (0..)
             .take_while(|&index| unsafe { *text.add(index) } != 0)
             .count();
         // SAFETY: `text` holds `length` readable units before its terminator.
         let value = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-        // SAFETY: both allocations came from the calls above and are freed exactly once.
-        unsafe {
-            LocalFree(text.cast());
-            LocalFree(sid.cast());
-        }
+        // SAFETY: `text` came from ConvertSidToStringSidW above and is freed exactly once.
+        unsafe { LocalFree(text.cast()) };
         value
     }
 
