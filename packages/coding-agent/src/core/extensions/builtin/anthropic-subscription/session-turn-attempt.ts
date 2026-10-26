@@ -108,7 +108,7 @@ export function createSessionTurnAttempt(
 	 * checkpoint from an unanswered attempt, the entry kept when a session closes, a resumed lineage and
 	 * a binding restored from the session file on restart are recorded the same way, so it can name an
 	 * account whose latest attempt went unanswered. Undefined when nothing has been recorded since the
-	 * session started, forked or lost its binding (compaction, divergence).
+	 * session started, forked or lost its binding (for example on compaction or divergence).
 	 */
 	servedLineage?: ContinuityBinding,
 ) {
