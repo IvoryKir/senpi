@@ -136,6 +136,78 @@ describe("agent_end provider failure", () => {
 		expect(end.failure).toBeUndefined();
 	});
 
+	// senpi#4328: changing the next selection does not reroute a request already in flight.
+	it("keeps the dispatched selection when a model is switched mid-request", async () => {
+		const harness = await createHarness({
+			models: [{ id: "faux-a" }, { id: "faux-b" }],
+			settings: { retry: { enabled: false } },
+		});
+		harnesses.push(harness);
+		const dispatched = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		harness.setResponses([
+			async () => {
+				dispatched.resolve();
+				await release.promise;
+				return failedTurn("denied", { category: "auth", httpStatus: 401, evidence: "structured_status" });
+			},
+		]);
+		const target = harness.getModel("faux-b");
+		if (target === undefined) throw new Error("Missing model switch fixture");
+		const prompt = harness.session.prompt("go");
+		try {
+			await dispatched.promise;
+			await harness.session.setModel(target);
+		} finally {
+			release.resolve();
+			await prompt;
+		}
+		expect(harness.faux.getCallLog().map((call) => call.modelId)).toEqual(["faux-a"]);
+		expect(harness.session.model?.id).toBe("faux-b");
+		const failure = harness.eventsOfType("agent_end").at(-1)?.failure;
+		expect(failure).toMatchObject({ provider: "faux", model: "faux-a" });
+		expect(failure).not.toHaveProperty("selectedProvider");
+		expect(failure).not.toHaveProperty("selectedModel");
+	});
+
+	// senpi#4328: virtual selections stay distinct from the physical provider request.
+	it("names the virtual selection beside the routed model that failed", async () => {
+		const harness = await createHarness({
+			settings: { retry: { enabled: false } },
+			extensionFactories: [
+				(pi) =>
+					pi.registerVirtualModel({
+						provider: "router",
+						id: "auto",
+						name: "Auto",
+						contextWindow: 200_000,
+						route(_request, ctx) {
+							const model = ctx.modelRegistry.find("faux", "faux-1");
+							if (model === undefined) throw new Error("Missing routed model fixture");
+							return { model, thinkingLevel: "off" };
+						},
+					}),
+			],
+		});
+		harnesses.push(harness);
+		const selected = harness.session.modelRuntime.getModel("router", "auto");
+		if (selected === undefined) throw new Error("Missing virtual model fixture");
+		await harness.session.setModel(selected);
+		harness.setResponses([
+			failedTurn("denied", { category: "auth", httpStatus: 401, evidence: "structured_status" }),
+		]);
+
+		await harness.session.prompt("go");
+
+		expect(harness.faux.getCallLog().map((call) => call.modelId)).toEqual(["faux-1"]);
+		expect(harness.eventsOfType("agent_end").at(-1)?.failure).toMatchObject({
+			provider: "faux",
+			model: "faux-1",
+			selectedProvider: "router",
+			selectedModel: "auto",
+		});
+	});
+
 	it("omits failure on an aborted turn", async () => {
 		const end = await agentEndOf(fauxAssistantMessage("", { stopReason: "aborted" }));
 		expect(end.failure).toBeUndefined();
@@ -147,7 +219,7 @@ describe("agent_end provider failure", () => {
 		const failure = describeProviderFailure(
 			{ category: "rate_limit", httpStatus: 429, code: "rate_limit_error", evidence: "structured_code" },
 			"kiro",
-			"claude-opus-5",
+			{ model: "claude-opus-5" },
 		);
 		const line = formatProviderFailure(failure);
 		expect(line.split("\n")).toHaveLength(1);

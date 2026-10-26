@@ -5480,11 +5480,11 @@ Every `get_auth_providers` row whose provider is defined carries `origin`, which
 
 | `origin.kind` | Meaning |
 | --- | --- |
-| `builtin` | Shipped with senpi. |
+| `builtin` | Shipped with senpi, including providers registered by builtin extensions. |
 | `models_json` | Defined only in models.json. |
 | `extension` | Registered by an extension (a native provider, a provider config with no builtin underneath, or virtual models). |
 
-`modelsJsonPath` is the models.json that defines or overrides the provider, and `extensionPath` is the extension that registered or overrides it, when its registration named one. Both are optional, on any kind:
+`modelsJsonPath` is the models.json that defines or overrides the provider, and `extensionPath` is the filesystem path of the extension that registered or overrides it, when known. Synthetic builtin identifiers and inline or unknown extension placeholders are omitted. Both paths are optional, on any kind:
 
 ```json
 {"id": "proxy-box", "name": "proxy-box", "authType": "api_key", "status": {"configured": false}, "origin": {"kind": "extension", "extensionPath": "/home/user/.senpi/agent/extensions/proxy.ts"}}

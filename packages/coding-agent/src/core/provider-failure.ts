@@ -75,7 +75,7 @@ export function selectedModelOf(
 export function describeProviderFailure(
 	diagnostic: ProviderDiagnostic | undefined,
 	provider: string,
-	model?: string,
+	options: { readonly model?: string } = {},
 ): ProviderFailure {
 	const category = diagnostic?.category ?? "unknown";
 	const detail =
@@ -89,7 +89,7 @@ export function describeProviderFailure(
 	return {
 		category,
 		provider,
-		...(model === undefined ? {} : { model }),
+		...(options.model === undefined ? {} : { model: options.model }),
 		...(diagnostic?.httpStatus === undefined ? {} : { httpStatus: diagnostic.httpStatus }),
 		...(diagnostic?.code === undefined ? {} : { code: diagnostic.code }),
 		...(resetsAt === undefined ? {} : { resetsAt }),
@@ -108,11 +108,9 @@ export function providerFailureOf(
 ): ProviderFailure | undefined {
 	const last = messages.findLast((message) => message.role === "assistant");
 	if (last === undefined || last.role !== "assistant" || last.stopReason !== "error") return undefined;
-	const failure = describeProviderFailure(
-		sanitizeProviderDiagnostic(last.providerDiagnostic),
-		last.provider,
-		last.model,
-	);
+	const failure = describeProviderFailure(sanitizeProviderDiagnostic(last.providerDiagnostic), last.provider, {
+		model: last.model,
+	});
 	if (selected === undefined || (selected.provider === last.provider && selected.model === last.model)) {
 		return failure;
 	}

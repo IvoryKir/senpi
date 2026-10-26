@@ -2428,6 +2428,11 @@ export class AgentSession {
 			this._failedResponse = undefined;
 			const previous = (await previousPrepareRequest?.(request, signal)) ?? undefined;
 			const model = previous?.model ?? this.agent.state.model;
+			this._requestSelectedModel = selectedModelOf(
+				this._retryFallback.activeState?.originalSelector,
+				this._modelRegistry,
+				model,
+			);
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
 			if (!isVirtualModel(model)) {
 				// A request after a routed one in the same run still names the routed model.
@@ -3399,12 +3404,21 @@ export class AgentSession {
 
 	// Track last assistant message for auto-compaction check
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+	private _requestSelectedModel: SelectedModel | undefined;
+	private readonly _endSelectedModels = new WeakMap<AgentEvent, SelectedModel>();
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent, signal: AbortSignal): void => {
-		if (event.type === "agent_start") this._lifecycleBinding.startRun();
+		if (event.type === "agent_start") {
+			this._lifecycleBinding.startRun();
+			this._requestSelectedModel = undefined;
+		}
 		// Bound at emission: the core can start the next run before the queue reaches this end (senpi#3864).
-		if (event.type === "agent_end") this._lifecycleBinding.bindTurnEnd(event);
+		if (event.type === "agent_end") {
+			this._lifecycleBinding.bindTurnEnd(event);
+			// Freeze before async delivery or a queued run can replace the dispatched selection.
+			if (this._requestSelectedModel) this._endSelectedModels.set(event, this._requestSelectedModel);
+		}
 		if (event.type === "message_start") {
 			try {
 				const entryId = this._lifecycleBinding.consume(event.message);
@@ -3884,7 +3898,7 @@ export class AgentSession {
 								: {}),
 							...(abortCause === undefined ? {} : { abortCause }),
 						},
-						selectedModelOf(this._retryFallback.activeState?.originalSelector, this._modelRegistry, this.model),
+						this._endSelectedModels.get(event),
 					)
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))

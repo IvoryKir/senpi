@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ANTHROPIC_SUBSCRIPTION_PROVIDER_ID } from "../../src/core/extensions/builtin/anthropic-subscription/index.ts";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
+import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
 import { createRpcConnectionHandler } from "../../src/modes/rpc/connection-handler.ts";
 import { createHarness } from "./harness.ts";
 import { makeHarness, makeSink } from "./rpc-connection-harness.ts";
@@ -163,6 +164,15 @@ describe("RPC auth and connection handler contracts", () => {
 					path: "/extensions/proxy-provider.ts",
 					factory: (pi) => pi.registerProvider("proxy-box", customProvider()),
 				},
+				...["anthropic-subscription", "cursor-cli-oauth", "vertex-model-garden"].map((id) => ({
+					path: `<builtin:${id}>`,
+					factory: (pi: ExtensionAPI) => pi.registerProvider(id, customProvider()),
+				})),
+				(pi) => pi.registerProvider("inline-box", customProvider()),
+				{
+					path: "<unknown>",
+					factory: (pi) => pi.registerProvider("unknown-box", customProvider()),
+				},
 			],
 		});
 		cleanup = harness.cleanup;
@@ -187,6 +197,11 @@ describe("RPC auth and connection handler contracts", () => {
 			modelsJsonPath: join(harness.tempDir, "models.json"),
 		});
 		expect(originOf("proxy-box")).toEqual({ kind: "extension", extensionPath: "/extensions/proxy-provider.ts" });
+		for (const id of ["anthropic-subscription", "cursor-cli-oauth", "vertex-model-garden"]) {
+			expect(originOf(id)).toEqual({ kind: "builtin" });
+		}
+		expect(originOf("inline-box")).toEqual({ kind: "extension" });
+		expect(originOf("unknown-box")).toEqual({ kind: "extension" });
 		await handler.dispose();
 	});
 

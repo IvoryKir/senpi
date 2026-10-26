@@ -12,7 +12,7 @@ export interface ProviderOrigin {
 	readonly kind: ProviderOriginKind;
 	/** The models.json that defines or overrides the provider. */
 	readonly modelsJsonPath?: string;
-	/** The extension that registered or overrides the provider, when its registration named one. */
+	/** Filesystem path of the registering extension, omitted for synthetic identifiers. */
 	readonly extensionPath?: string;
 }
 
@@ -26,19 +26,23 @@ export interface ProviderOriginFacts {
 }
 
 export function providerOriginOf(facts: ProviderOriginFacts): ProviderOrigin | undefined {
-	const kind: ProviderOriginKind | undefined = facts.nativeExtension
-		? "extension"
-		: facts.builtin
-			? "builtin"
-			: facts.extension
-				? "extension"
-				: facts.modelsJsonPath !== undefined
-					? "models_json"
-					: undefined;
+	const builtinExtension = facts.extensionPath?.startsWith("<builtin:") === true;
+	const extensionPath = facts.extensionPath?.startsWith("<") === true ? undefined : facts.extensionPath;
+	const kind: ProviderOriginKind | undefined = builtinExtension
+		? "builtin"
+		: facts.nativeExtension
+			? "extension"
+			: facts.builtin
+				? "builtin"
+				: facts.extension
+					? "extension"
+					: facts.modelsJsonPath !== undefined
+						? "models_json"
+						: undefined;
 	if (kind === undefined) return undefined;
 	return {
 		kind,
 		...(facts.modelsJsonPath === undefined ? {} : { modelsJsonPath: facts.modelsJsonPath }),
-		...(facts.extensionPath === undefined ? {} : { extensionPath: facts.extensionPath }),
+		...(extensionPath === undefined ? {} : { extensionPath }),
 	};
 }
