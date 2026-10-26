@@ -342,22 +342,27 @@ export class EndpointReservationStore {
 	}
 
 	#transaction<T>(run: () => T): T {
+		const busy = (error: unknown) => /busy|locked/i.test(error instanceof Error ? error.message : String(error));
 		try {
 			this.#database.exec("BEGIN IMMEDIATE");
 		} catch (error: unknown) {
-			if (/busy|locked/i.test(error instanceof Error ? error.message : String(error))) {
+			if (busy(error))
 				throw new EndpointReservationError("store_busy", "another process holds the reservation store");
-			}
 			throw error;
 		}
+		let result: T;
 		try {
-			const result = run();
+			result = run();
+			// COMMIT can also find the store busy (a reader's shared lock); then nothing of this transition is kept.
 			this.#database.exec("COMMIT");
-			return result;
 		} catch (error: unknown) {
 			this.#database.exec("ROLLBACK");
+			if (error instanceof EndpointReservationError) throw error;
+			if (busy(error))
+				throw new EndpointReservationError("store_busy", "another process holds the reservation store");
 			throw error;
 		}
+		return result;
 	}
 
 	#reservation(generation: string): ReservationRow {

@@ -184,6 +184,16 @@ describe("endpoint reservation store", () => {
 		raw.close();
 		await expect(openEndpointReservationStore(path)).rejects.toMatchObject({ reason: "schema_unsupported" });
 	});
+	it("answers a commit blocked by another connection's read as store_busy and writes nothing", async () => {
+		const { path, store: s } = await store();
+		const generation = s.reserve(ENDPOINT, OWNER);
+		const reader = new DatabaseSync(path);
+		reader.exec("BEGIN; SELECT * FROM roles;");
+		expect(rejection(() => s.offer(generation, "supervisor", OWNER))).toBe("store_busy");
+		reader.exec("COMMIT;");
+		reader.close();
+		expect(s.roleRow({ endpoint: ENDPOINT, generation, role: "supervisor" })).toBeUndefined();
+	});
 });
 
 type Locator = { endpoint: string; generation: string; role: "supervisor" | "host" };
