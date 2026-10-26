@@ -1,9 +1,10 @@
-import { redactSecrets as redactProviderSecrets } from "@earendil-works/pi-ai";
+import { redactCredentialShapes, redactSecrets as redactProviderSecrets } from "@earendil-works/pi-ai";
 import { redactResolvedReferenceValues } from "./config-reference-redaction.ts";
 
-// An environment assignment whose name contains a credential word. One bounded class up to the "=" keeps the match
-// linear; a pattern with unbounded characters on both sides of the word was quadratic on one long name (senpi#4283).
-const ENV_ASSIGNMENT = /\b([A-Z][A-Z0-9_]{0,127})=([^\s'"]+)/g;
+// An environment assignment whose name contains a credential word. One class up to the "=", anchored at a word start,
+// keeps the match linear; a pattern with characters on both sides of the word was quadratic on one long name
+// (senpi#4283). The name test runs once per assignment on that name only.
+const ENV_ASSIGNMENT = /\b([A-Z][A-Z0-9_]*)=([^\s'"]+)/g;
 const ENV_SECRET_WORD = /API_KEY|SECRET|TOKEN|PASSWORD|AUTH/;
 
 export function redactSensitiveOutput(text: string): string {
@@ -18,9 +19,7 @@ export function redactSensitiveOutput(text: string): string {
 }
 
 export function redactSensitiveTokenValues(text: string, replacement = "[REDACTED]"): string {
-	return redactResolvedReferenceValues(text, replacement)
-		.replace(/\bghp_[A-Za-z0-9]{20,}\b/g, replacement)
-		.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, replacement);
+	return redactCredentialShapes(redactResolvedReferenceValues(text, replacement), replacement);
 }
 
 /**

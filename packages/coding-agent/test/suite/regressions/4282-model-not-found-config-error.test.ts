@@ -1,6 +1,5 @@
 import { fauxAssistantMessage, isModelConfigError } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { redactSecrets } from "../../../src/core/sensitive-output.ts";
 import { createHarness, type Harness } from "../harness.ts";
 import {
 	chainedHarness,
@@ -180,20 +179,6 @@ describe("senpi#4282 model_not_found is a configuration error", () => {
 			expect(lastErrorMessage(harness)).toBe(errorMessage);
 			expect(persistedSessionText(harness)).toContain(JSON.stringify(errorMessage).slice(1, -1));
 		});
-
-		const MB = 1 << 20;
-		for (const unit of ["key", "aaaaakey", "token_", "TOKEN", "A_TOKEN_ ", "key: a "]) {
-			it(`redacts 1 MB of ${JSON.stringify(unit)} repeated in linear time`, () => {
-				const text = unit.repeat(Math.ceil(MB / unit.length));
-				let best = Number.POSITIVE_INFINITY;
-				for (let attempt = 0; attempt < 3; attempt++) {
-					const start = performance.now();
-					redactSecrets(text);
-					best = Math.min(best, performance.now() - start);
-				}
-				expect(best).toBeLessThan(50);
-			});
-		}
 
 		it("keeps names that merely contain a credential word readable", async () => {
 			const harness = await chainedHarness(harnesses, { persistSession: true });

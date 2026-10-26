@@ -33,6 +33,13 @@ const KEY_SPELLINGS: readonly string[] = [
 	"Authorization",
 	"Cookie",
 	"Set-Cookie",
+	// Numbered slots, qualifiers and a field named bearer (senpi#4283 round-6 review).
+	"OPENAI_API_KEY_2",
+	"token2",
+	"x-api-key-1",
+	"api_key_value",
+	"apiKeyId",
+	"bearer",
 ];
 
 function valueFor(key: string, secret: string): string {
@@ -167,7 +174,34 @@ const ROUND_4_CELLS: readonly SecretCell[] = [
 	},
 ];
 
-export const SECRET_CELLS: readonly SecretCell[] = [...REVIEW_CELLS, ...ROUND_4_CELLS, ...named, ...prefixed];
+// The inputs the delta review of 75bce8e879 saw leak: a name past the old length window, and short values under a
+// password or authorization name.
+const ROUND_6_CELLS: readonly SecretCell[] = [
+	{
+		name: "review: a 130-character name",
+		secret: secretFor(9201),
+		text: json({ [`${"a".repeat(130)}_api_key`]: secretFor(9201) }),
+	},
+	{
+		name: "review: a long dotted authorization path",
+		secret: secretFor(9202),
+		text: `request.headers.${"x".repeat(120)}.authorization: ${secretFor(9202)}`,
+	},
+	{ name: "review: a short password", secret: "hunter2-shrt", text: json({ password: "hunter2-shrt" }) },
+	{
+		name: "review: a short Basic credential",
+		secret: ["dXNl", "cjpw", "YXNz"].join(""),
+		text: `Authorization: Basic ${["dXNl", "cjpw", "YXNz"].join("")}`,
+	},
+];
+
+export const SECRET_CELLS: readonly SecretCell[] = [
+	...REVIEW_CELLS,
+	...ROUND_4_CELLS,
+	...ROUND_6_CELLS,
+	...named,
+	...prefixed,
+];
 
 // Names that merely contain a credential word, with values a name-substring rule would mangle.
 export const READABLE_NAMED_VALUES: readonly string[] = [
@@ -180,6 +214,7 @@ export const READABLE_NAMED_VALUES: readonly string[] = [
 	"session_id: 0f8fad5b-d9cb-469f-a165-70867728950e",
 	"token_type: bearer_access_token_v2_long",
 	"authorization_endpoint=api.example.com/oauth2/authorize",
+	"token_count: 12345678901234567890",
 ];
 
 // Diagnostic text that must stay readable: model ids, error codes, request ids, token counts.

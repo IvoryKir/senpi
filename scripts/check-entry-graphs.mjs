@@ -40,7 +40,9 @@ const BUDGETS = {
 			// +1 (senpi#3858): auth/credential-read.ts, the credential-store read auth/resolve.ts wraps in ModelsError.
 			// +1 (senpi#3858): utils/config-reference-error.ts, the typebox-free error a slot read raises for an unresolved reference.
 			// +1 (senpi#4282): utils/provider-error.ts, the redaction every provider stream applies at its boundary.
-			maxFiles: 27,
+			// +1 (senpi#4283): utils/secret-redaction.ts, the one-pass token-wise redactor provider-error.ts runs; one module,
+			// because the ./utils/* entries (event-stream, provider-error) are held to 3 files each.
+			maxFiles: 28,
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
 		},
 		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
