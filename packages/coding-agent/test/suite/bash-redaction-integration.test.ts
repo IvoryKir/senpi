@@ -11,14 +11,15 @@ import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 import { createHarness, getMessageText } from "./harness.ts";
 
 describe.skipIf(process.platform === "win32")("real bash redaction across runtimes", () => {
-	it.each([
+	const runtimes = [
 		{ toolRuntime: "in-process", terminal: false },
 		{ toolRuntime: "child", terminal: false },
 		{ toolRuntime: "in-process", terminal: true },
 		{ toolRuntime: "child", terminal: true },
-	] as const)(
-		"redacts stdout, stderr and transcripts on $toolRuntime (terminal=$terminal)",
-		async ({ toolRuntime, terminal }) => {
+	] as const;
+	it.each(runtimes.flatMap((runtime) => [undefined, false, true].map((enabled) => ({ ...runtime, enabled }))))(
+		"applies redaction to stdout, stderr and transcripts on $toolRuntime (terminal=$terminal, enabled=$enabled)",
+		async ({ toolRuntime, terminal, enabled }) => {
 			// Source-checkout children need the same resolver used by the tool-child job tests.
 			const launch = vi.spyOn(toolChildLaunch, "toolChildCommand").mockResolvedValue({
 				command: process.execPath,
@@ -31,7 +32,7 @@ describe.skipIf(process.platform === "win32")("real bash redaction across runtim
 			const harness = await createHarness({
 				toolRuntime,
 				persistSession: true,
-				settings: { tools: { bash: { redactSecretsInOutput: true } } },
+				settings: enabled === undefined ? {} : { tools: { bash: { redactSecretsInOutput: enabled } } },
 				extensionFactories: terminal ? [registerTerminalExtension] : [],
 			});
 			// The extension normally opens global/project settings. Hand it this isolated session's manager.
@@ -41,7 +42,7 @@ describe.skipIf(process.platform === "win32")("real bash redaction across runtim
 				settings.mockRestore();
 				const fixtures = secretOutputCases();
 				const input = fixtures.map(({ input }) => input).join("\n") + "\n";
-				const expected = fixtures.map(({ expected }) => expected).join("\n") + "\n";
+				const expected = enabled ? fixtures.map(({ expected }) => expected).join("\n") + "\n" : input;
 				const script = `const x=Buffer.from("${Buffer.from(input).toString("base64")}","base64");process.stdout.write(x);process.stderr.write(x);`;
 				const command = `${JSON.stringify(process.execPath)} -e '${script}'`;
 				harness.setResponses([

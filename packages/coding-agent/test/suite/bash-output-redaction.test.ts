@@ -26,27 +26,30 @@ describe("opt-in bash output redaction", () => {
 		);
 	});
 	for (const fixture of secretOutputCases()) {
-		it(`redacts ${fixture.name} across every chunk boundary before streaming`, async () => {
-			for (let split = 1; split < fixture.input.length; split++) {
-				const updates: string[] = [];
-				const tool = createBashTool(process.cwd(), {
-					redactSecretsInOutput: true,
-					operations: {
-						async exec(_command, _cwd, { onData }) {
-							onData(Buffer.from(fixture.input.slice(0, split)));
-							onData(Buffer.from(`${fixture.input.slice(split)}\n`));
-							return { exitCode: 0 };
+		it.each(["stdout", "stderr"] as const)(
+			`redacts ${fixture.name} across every %s chunk boundary`,
+			async (stream) => {
+				for (let split = 1; split < fixture.input.length; split++) {
+					const updates: string[] = [];
+					const tool = createBashTool(process.cwd(), {
+						redactSecretsInOutput: true,
+						operations: {
+							async exec(_command, _cwd, { onData }) {
+								onData(Buffer.from(fixture.input.slice(0, split)), stream);
+								onData(Buffer.from(`${fixture.input.slice(split)}\n`), stream);
+								return { exitCode: 0 };
+							},
 						},
-					},
-				});
-				const result = await tool.execute("redact", { command: "synthetic" }, undefined, (update) => {
-					updates.push(getMessageText(update));
-				});
-				expect(getMessageText(result)).toBe(`${fixture.expected}\n`);
-				expect(result.structuredContent).toMatchObject({ output: `${fixture.expected}\n` });
-				for (const update of updates) expect(`${fixture.expected}\n`.startsWith(update)).toBe(true);
-			}
-		});
+					});
+					const result = await tool.execute("redact", { command: "synthetic" }, undefined, (update) => {
+						updates.push(getMessageText(update));
+					});
+					expect(getMessageText(result)).toBe(`${fixture.expected}\n`);
+					expect(result.structuredContent).toMatchObject({ output: `${fixture.expected}\n` });
+					for (const update of updates) expect(`${fixture.expected}\n`.startsWith(update)).toBe(true);
+				}
+			},
+		);
 	}
 
 	it.each([undefined, false])("preserves output when option is %s", async (enabled) => {
@@ -65,12 +68,15 @@ describe("opt-in bash output redaction", () => {
 		expect(getMessageText(await tool.execute("off", { command: "synthetic" }))).toBe(input);
 	});
 
-	it("redacts before spilling and preserves nonzero exit output", async () => {
-		const fixture = secretOutputCases()[0];
-		assert(fixture);
-		const input = `${fixture.input}\n${"ordinary line\n".repeat(6000)}${fixture.input}`;
+	it.each([false, true])("applies the setting before spilling every secret class (enabled=%s)", async (enabled) => {
+		const fixtures = secretOutputCases();
+		const raw = fixtures.map(({ input }) => input).join("\n");
+		const clean = fixtures.map(({ expected }) => expected).join("\n");
+		const padding = "ordinary line\n".repeat(6000);
+		const input = `${raw}\n${padding}${raw}`;
+		const expected = enabled ? `${clean}\n${padding}${clean}` : input;
 		const tool = createBashTool(process.cwd(), {
-			redactSecretsInOutput: true,
+			redactSecretsInOutput: enabled,
 			operations: {
 				async exec(_command, _cwd, { onData }) {
 					onData(Buffer.from(input));
@@ -83,12 +89,32 @@ describe("opt-in bash output redaction", () => {
 		assert(path);
 		try {
 			const spill = readFileSync(path, "utf8");
-			expect(spill).toBe(input.replaceAll(fixture.input, fixture.expected));
-			expect(JSON.stringify(result)).not.toContain(fixture.input);
+			expect(spill).toBe(expected);
+			expect(result.structuredContent).toMatchObject({ output: expected });
+			if (enabled) {
+				for (const fixture of fixtures) expect(JSON.stringify(result)).not.toContain(fixture.input);
+			}
 			expect(result.isError).toBe(true);
 		} finally {
 			rmSync(path, { force: true });
 		}
+	});
+
+	it.each(["aborted", "timeout:1"])("flushes redaction at an interrupted EOF (%s)", async (reason) => {
+		const fixtures = secretOutputCases();
+		const input = fixtures.map(({ input }) => input).join("\n");
+		const expected = fixtures.map(({ expected }) => expected).join("\n");
+		const tool = createBashTool(process.cwd(), {
+			redactSecretsInOutput: true,
+			operations: {
+				async exec(_command, _cwd, { onData }) {
+					for (const character of input) onData(Buffer.from(character), "stderr");
+					throw new Error(reason);
+				},
+			},
+		});
+		const status = reason === "aborted" ? "Command aborted" : "Command timed out after 1 seconds";
+		await expect(tool.execute("interrupted", { command: "synthetic" })).rejects.toThrow(`${expected}\n\n${status}`);
 	});
 
 	it.each([false, true])("applies settings to real stdout, stderr and transcript (enabled=%s)", async (enabled) => {
