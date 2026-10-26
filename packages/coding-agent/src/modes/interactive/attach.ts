@@ -2,12 +2,29 @@ import { randomUUID } from "node:crypto";
 import { Container, setKeybindings, Text, type Component, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../core/keybindings.ts";
 import type { RpcSessionState } from "../rpc/rpc-types.ts";
-import { AttachClient, type AttachRecord } from "./attach-client.ts";
+import { AttachClient, AttachRefusedError, type AttachRecord } from "./attach-client.ts";
 import { AttachDialogs } from "./attach-dialogs.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
 import { RecordRenderer } from "./record-renderer.ts";
 import { getEditorTheme, theme } from "./theme/theme.ts";
+
+/** Reports every width its line is drawn at, so the endpoint learns the presentation's width. */
+class WidthReporter implements Component {
+	private readonly inner: Text;
+	private readonly onWidth: (width: number) => void;
+	constructor(inner: Text, onWidth: (width: number) => void) {
+		this.inner = inner;
+		this.onWidth = onWidth;
+	}
+	render(width: number): string[] {
+		this.onWidth(width);
+		return this.inner.render(width);
+	}
+	invalidate(): void {
+		this.inner.invalidate();
+	}
+}
 
 export function validateAttachTerminal(inputIsTTY: boolean | undefined, outputIsTTY: boolean | undefined): void {
 	if (!inputIsTTY || !outputIsTTY) throw new Error("--attach requires an interactive terminal on stdin and stdout");
@@ -19,7 +36,9 @@ export class AttachedTui extends Container implements Focusable {
 	readonly layoutRoot: Component;
 	state: RpcSessionState | undefined;
 	private readonly ui: TUI;
-	private readonly status = new Text("Connecting", 1, 0);
+	private readonly statusText = new Text("Connecting", 1, 0);
+	private readonly status = new WidthReporter(this.statusText, (width) => this.reportWidth(width));
+	private width: number | undefined;
 	private readonly editor: CustomEditor;
 	private readonly dialogs: AttachDialogs;
 	private readonly client: AttachClient;
@@ -32,7 +51,7 @@ export class AttachedTui extends Container implements Focusable {
 	private loadingHistory: Promise<void> | undefined;
 	private buffering: AttachRecord[] | undefined = [];
 
-	constructor(ui: TUI, finish: () => void) {
+	constructor(ui: TUI, finish: () => void, options: { readonly answerDeadlineMs?: number } = {}) {
 		super();
 		this.ui = ui;
 		const keys = KeybindingsManager.create();
@@ -41,9 +60,9 @@ export class AttachedTui extends Container implements Focusable {
 		this.dialogs = new AttachDialogs(
 			ui,
 			keys,
-			(response) => {
-				if (this.sessionId) this.client.answer(this.sessionId, response);
-			},
+			(response) =>
+				this.sessionId ? this.client.answer(this.sessionId, response) : Promise.reject(new Error("Disconnected")),
+			(message) => this.showStatus(message),
 			() => ui.setFocus(this),
 		);
 		this.client = new AttachClient(
@@ -52,19 +71,26 @@ export class AttachedTui extends Container implements Focusable {
 				if (this.buffering) this.buffering.push(record);
 				else this.record(record);
 			},
-			() => {
+			(reason) => {
 				this.connected = false;
 				this.dialogs.dispose();
 				ui.setFocus(this);
-				this.showStatus("Disconnected");
+				this.showStatus(reason ? `Disconnected: ${reason}` : "Disconnected");
 			},
+			{ answerDeadlineMs: options.answerDeadlineMs },
 		);
 		this.editor.onSubmit = (text) => {
 			if (text.trim() === "/quit") {
 				finish();
 				return;
 			}
-			this.perform(() => this.submit(text));
+			this.perform(
+				() => this.submit(text),
+				() => {
+					// The editor clears before onSubmit; a refused input goes back so nothing typed is lost.
+					if (this.editor.getText() === "") this.editor.setText(text);
+				},
+			);
 		};
 		this.editor.onCtrlD = finish;
 		this.editor.onAction("app.clear", finish);
@@ -101,9 +127,10 @@ export class AttachedTui extends Container implements Focusable {
 		try {
 			await this.client.connect(path);
 			this.connected = true;
+			this.width = this.ui.terminal.columns;
 			await this.client.request({
 				type: "set_client_info",
-				width: this.ui.terminal.columns,
+				width: this.width,
 				capabilities: ["interactive_user", "question", "grant_select"],
 			});
 			const listing = await this.client.request({ type: "list_sessions", observe: true });
@@ -118,6 +145,11 @@ export class AttachedTui extends Container implements Focusable {
 			if (!row?.durableSessionId)
 				throw new Error(
 					matches.length > 1 ? "Ambiguous session reference" : "No live session matches the reference",
+				);
+			if (row.retain_on_disconnect !== true)
+				throw new AttachRefusedError(
+					"session_not_retained",
+					`Session ${ref} is not retained on disconnect: the endpoint ends it when its last client leaves, so leaving this view could end it. Attach to a session opened with retain_on_disconnect.`,
 				);
 			this.sessionId = row.sessionId;
 			await this.client.request({
@@ -193,8 +225,6 @@ export class AttachedTui extends Container implements Focusable {
 			message,
 			clientMessageId: randomUUID(),
 		});
-		this.editor.setText("");
-		this.ui.requestRender();
 	}
 
 	async abort(): Promise<void> {
@@ -250,14 +280,25 @@ export class AttachedTui extends Container implements Focusable {
 		this.ui.requestRender();
 	}
 
+	private reportWidth(width: number): void {
+		if (!this.attached || !this.connected || width === this.width) return;
+		this.width = width;
+		this.perform(async () => {
+			await this.client.request({ type: "set_client_info", width });
+		});
+	}
+
 	private showStatus(value: string): void {
-		this.status.setText(
+		this.statusText.setText(
 			theme.fg("muted", `${value}${this.state?.sessionName ? ` - ${this.state.sessionName}` : ""}`),
 		);
 		this.ui.requestRender();
 	}
 
-	private perform(action: () => Promise<void>): void {
-		void action().catch((error: unknown) => this.showStatus(error instanceof Error ? error.message : String(error)));
+	private perform(action: () => Promise<void>, onError?: () => void): void {
+		void action().catch((error: unknown) => {
+			onError?.();
+			this.showStatus(error instanceof Error ? error.message : String(error));
+		});
 	}
 }

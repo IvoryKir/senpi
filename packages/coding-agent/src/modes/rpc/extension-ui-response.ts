@@ -70,18 +70,18 @@ export function settleExtensionUiResponse(
 	const requestId = answeredUiRequestId(response) ?? response.id;
 	const answer = requestId === response.id ? response : { ...response, id: requestId };
 	const question = targets.questions.respond(answer, targets.beforeAnswer);
-	if (typeof question === "string") return refused(response.id, question);
+	if (typeof question === "string") return refusedExtensionUiResponse(response.id, question);
 	if (question || targets.dialogs.resolve(answer, targets.beforeAnswer))
 		return { ...reply(response.id), success: true };
 	// A routed binding owns exactly one session's request map: an unmatched response is a protocol
 	// error for its sender, never a cross-session match.
-	return targets.routed ? refused(response.id, "unknown_extension_ui_request") : undefined;
+	return targets.routed ? refusedExtensionUiResponse(response.id, "unknown_extension_ui_request") : undefined;
 }
 
 function reply(id: string) {
 	return { id, type: "response", command: "extension_ui_response" } as const;
 }
 
-function refused(id: string, error: string): ExtensionUiResponseReply {
+export function refusedExtensionUiResponse(id: string, error: string): ExtensionUiResponseReply {
 	return { ...reply(id), success: false, error };
 }

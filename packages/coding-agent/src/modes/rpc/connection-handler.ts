@@ -101,7 +101,7 @@ import {
 import { EffectLedger } from "./effect-ledger.ts";
 import { EFFECT_LEDGER_CAPABILITY } from "./effect-record.ts";
 import { createRpcEventOutputBuffer } from "./event-output-buffer.ts";
-import { settleExtensionUiResponse } from "./extension-ui-response.ts";
+import { refusedExtensionUiResponse, settleExtensionUiResponse } from "./extension-ui-response.ts";
 import { answerGetEntries } from "./get-entries-command.ts";
 import { runHoldInput } from "./held-input-commands.ts";
 import { HostSessionControl } from "./host-session-control.ts";
@@ -2128,7 +2128,11 @@ export function createRpcConnectionHandler(
 					sender === undefined
 						? clientCapabilities?.includes("grant_select") === true
 						: options.clientInfo?.hasCapability?.(sender, "grant_select") === true;
-				if (grantRequests.get(parsed.id) !== sender || !capable) return;
+				// The sender hears the refusal, so its dialog does not vanish as if the answer had counted.
+				if (grantRequests.get(parsed.id) !== sender || !capable) {
+					output(refusedExtensionUiResponse(parsed.id, "grant_answer_refused"));
+					return;
+				}
 			}
 			const reply = settleExtensionUiResponse(parsed as RpcExtensionUIResponse, {
 				questions,

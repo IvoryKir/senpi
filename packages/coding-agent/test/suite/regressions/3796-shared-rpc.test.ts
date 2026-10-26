@@ -153,6 +153,33 @@ it("targets only grant_select and rejects another connection's answer", async ()
 	expect(await decision).toBe(true);
 });
 
+// senpi#4269 review M3: the refused sender hears it, so its dialog does not vanish as if answered.
+it("answers a grant response from a connection that may not answer it with a typed refusal", async () => {
+	const current = await setup();
+	const delivered = nextSelect();
+	const decision = selectMcpGrant(getMcpGrantPresentation(current.session.sessionId), "synthetic grant");
+	const frame = await delivered;
+	await writer?.withConnection("question-only", () =>
+		handler?.handleInputLine(
+			JSON.stringify({ type: "extension_ui_response", id: frame.id, value: "Grant and save permanently" }),
+		),
+	);
+	await writer?.flushConnection("question-only");
+	expect(frames.get("question-only")).toContainEqual(
+		expect.objectContaining({
+			type: "response",
+			command: "extension_ui_response",
+			id: frame.id,
+			success: false,
+			error: "grant_answer_refused",
+		}),
+	);
+	await writer?.withConnection("grant-client", () =>
+		handler?.handleInputLine(JSON.stringify({ type: "extension_ui_response", id: frame.id, value: "Deny" })),
+	);
+	expect(await decision).toBe(false);
+});
+
 it("expires a capable client that never answers at 120 seconds", async () => {
 	const current = await setup();
 	vi.useFakeTimers();

@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { VirtualTerminal } from "../../../../tui/test/virtual-terminal.ts";
 import { parseArgs } from "../../cli/args.ts";
 import { resolveSocketTransportAddress } from "../rpc/socket-transport.ts";
-import { endpoint } from "../../../test/helpers/attach-endpoint.ts";
+import { type EndpointOptions, endpoint } from "../../../test/helpers/attach-endpoint.ts";
 import { AttachedTui, validateAttachTerminal } from "./attach.ts";
+import { AttachClient } from "./attach-client.ts";
 import { RecordRenderer } from "./record-renderer.ts";
 import { initTheme } from "./theme/theme.ts";
 
@@ -33,20 +34,40 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function attached() {
+async function attached(options: EndpointOptions = {}, answerDeadlineMs?: number) {
 	initTheme("dark");
-	const host = await endpoint();
+	const host = await endpoint(options);
 	cleanups.push(host.close);
 	const ui = new TUI(new VirtualTerminal(80, 24));
 	const renders = new EventEmitter();
 	ui.requestRender = () => {
 		renders.emit("render");
 	};
-	const view = new AttachedTui(ui, () => {});
+	const view = new AttachedTui(ui, () => {}, { answerDeadlineMs });
 	cleanups.push(() => view.close());
 	await view.connect(host.path, "durable");
-	return { host, view, nextRender: () => once(renders, "render", { signal: AbortSignal.timeout(5000) }) };
+	const screen = () => view.render(80).join("\n");
+	/** Waits, render by render, until the screen satisfies `predicate`. */
+	const until = async (predicate: (screen: string) => boolean) => {
+		const signal = AbortSignal.timeout(5000);
+		while (!predicate(screen())) await once(renders, "render", { signal });
+	};
+	return {
+		host,
+		view,
+		screen,
+		until,
+		nextRender: () => once(renders, "render", { signal: AbortSignal.timeout(5000) }),
+	};
 }
+
+const permissionRequest = {
+	type: "extension_ui_request",
+	id: "permission",
+	method: "select",
+	title: "Allow operation?",
+	options: ["Allow", "Deny"],
+} as const;
 
 // #4269: drive the real local socket, editor and renderer, not a mocked client.
 describe("attached interactive TUI", () => {
@@ -223,5 +244,79 @@ describe("attached interactive TUI", () => {
 	it("rejects --attach with --mode rpc as usage", () => {
 		const parsed = parseArgs(["--attach", "/tmp/x.sock", "--mode", "rpc"]);
 		expect(parsed.diagnostics.some((diagnostic) => diagnostic.type === "error")).toBe(true);
+	});
+	// #4269 review M1: an endpoint's bad record or a dead socket never throws into the terminal's input path.
+	it("reports an unreadable endpoint record and disconnects instead of throwing", async () => {
+		const { host, until, screen } = await attached();
+		host.sendRaw("{not json");
+		await until((text) => text.includes("Disconnected"));
+		expect(screen()).toContain("unreadable record");
+		expect(screen()).toContain("Previous question");
+	});
+
+	it("rejects an answer on a dead connection instead of throwing", async () => {
+		const client = new AttachClient(
+			() => {},
+			() => {},
+		);
+		let sent: Promise<void> | undefined;
+		expect(() => {
+			sent = client.answer("live", { type: "extension_ui_response", id: "permission", value: "Allow" });
+		}).not.toThrow();
+		await expect(sent).rejects.toThrow(/Disconnected/);
+	});
+
+	// #4269 review M3: a dialog leaves the screen only when the endpoint accepted its answer.
+	it.each(["grant_answer_refused", "question_incomplete"])(
+		"re-shows a dialog whose answer the endpoint refuses with %s",
+		async (refusal) => {
+			const { host, view, until } = await attached({ answer: () => ({ error: refusal }) });
+			host.send(permissionRequest);
+			await until((text) => text.includes("Allow operation?"));
+			view.handleInput("\r");
+			await host.command("extension_ui_response");
+			await until((text) => text.includes(refusal) && text.includes("Allow operation?"));
+			view.handleInput("\r");
+			const first = host.commands.find((record) => record.type === "extension_ui_response");
+			await host.waitFor((record) => record.type === "extension_ui_response" && record !== first);
+			// The second answer is refused too, so the dialog comes back again.
+			await until((text) => text.includes("Allow operation?"));
+		},
+	);
+
+	it("re-shows a dialog when the endpoint never acknowledges its answer", async () => {
+		const { host, view, until } = await attached({ answer: () => "none" }, 50);
+		host.send(permissionRequest);
+		await until((text) => text.includes("Allow operation?"));
+		view.handleInput("\r");
+		await host.command("extension_ui_response");
+		await until((text) => text.includes("No acknowledgement") && text.includes("Allow operation?"));
+	});
+
+	it.each(["question_already_resolved", "unknown_extension_ui_request"])(
+		"dismisses a dialog the endpoint no longer waits on (%s) and says so",
+		async (refusal) => {
+			const { host, view, until, screen } = await attached({ answer: () => ({ error: refusal }) });
+			host.send(permissionRequest);
+			await until((text) => text.includes("Allow operation?"));
+			view.handleInput("\r");
+			await until((text) => text.includes(refusal));
+			expect(screen()).not.toContain("Allow operation?");
+		},
+	);
+
+	it("keeps typed text when the endpoint refuses a prompt", async () => {
+		const { view, until, screen } = await attached({ refuse: { prompt: "session_busy" } });
+		for (const key of "Keep this text") view.handleInput(key);
+		view.handleInput("\r");
+		await until((text) => text.includes("session_busy"));
+		expect(screen()).toContain("Keep this text");
+	});
+
+	it("sends a width update when the terminal width changes", async () => {
+		const { host, view } = await attached();
+		view.render(60);
+		const update = await host.waitFor((record) => record.type === "set_client_info" && record.width === 60);
+		expect(update).not.toHaveProperty("capabilities");
 	});
 });
