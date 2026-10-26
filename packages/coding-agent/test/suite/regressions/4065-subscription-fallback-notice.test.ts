@@ -157,9 +157,32 @@ it.each([
 	);
 });
 
-it("still retries when the calibrated prompt and both reserves fit", async () => {
-	const { message, attempts } = await fallbackTurn("x".repeat(150_000 * 4), { maxTokens: 8_192 });
+// senpi#4066: main turns omit maxTokens; the catalog ceiling is not the retry's output cap.
+it.each([
+	{ tokens: 150_000, maxTokens: undefined, cap: 32_000 },
+	{ tokens: 175_000, maxTokens: undefined, cap: undefined },
+	{ tokens: 150_000, maxTokens: 4_096, cap: 4_096 },
+])("retries a $tokens main turn with maxTokens=$maxTokens", async ({ tokens, maxTokens, cap }) => {
+	const { message, attempts } = await fallbackTurn("x".repeat(tokens * 4), {
+		streamKind: "main",
+		...(maxTokens === undefined ? {} : { maxTokens }),
+	});
 	expect(attempts).toHaveLength(2);
 	expect(attempts[1].env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("200000");
+	const retryCap = Number(attempts[1].env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS);
+	if (cap !== undefined) expect(retryCap).toBe(cap);
+	else {
+		expect(retryCap).toBeGreaterThanOrEqual(8_192);
+		expect(retryCap).toBeLessThan(32_000);
+		expect(tokens + 16_384 + retryCap).toBeLessThanOrEqual(200_000);
+	}
+	expect(attempts[0].env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
 	expect(message.stopReason).toBe("stop");
+});
+
+it("does not retry a 195k main turn even without an explicit output budget", async () => {
+	const { message, attempts } = await fallbackTurn("x".repeat(195_000 * 4), { streamKind: "main" });
+	expect(attempts).toHaveLength(1);
+	expect(message.stopReason).toBe("error");
+	expect(message.errorMessage).toContain("8192 output tokens cannot fit");
 });

@@ -178,6 +178,7 @@ describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion",
 		const second = await runTurn(lane, LEGACY);
 		expect(second.attempts[0].model).toBe(`${LEGACY}[1m]`);
 		expect(second.attempts[0].env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
+		expect(second.attempts[0].env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
 	});
 
 	it.each([
@@ -199,6 +200,25 @@ describe.each(["ambient", "oauth-slots"] as const)("%s: extra usage exhaustion",
 		expect(result.attempts).toHaveLength(1);
 		expect(result.fallbacks).toBe(0);
 		expect(longContextAvailable()).toBe(true);
+	});
+
+	// senpi#4066: admit the exact boundary, but never send a retry whose actual output cap exceeds it.
+	it.each([
+		{ contextTokens: 191_808, outputReserveTokens: undefined, cap: 8_192 },
+		{ contextTokens: 191_809, outputReserveTokens: undefined, cap: undefined },
+		{ contextTokens: 175_000, outputReserveTokens: undefined, cap: 25_000 },
+		{ contextTokens: 150_000, outputReserveTokens: undefined, cap: 32_000 },
+		{ contextTokens: 183_616, outputReserveTokens: 16_384, cap: 16_384 },
+		{ contextTokens: 183_617, outputReserveTokens: 16_384, cap: undefined },
+	])("budgets the output actually requested at 200k: %j", async ({ cap, ...budget }) => {
+		const result = await runTurn(lane, LEGACY, budget);
+		expect(result.attempts).toHaveLength(cap === undefined ? 1 : 2);
+		if (cap !== undefined) {
+			expect(result.failure).toBeUndefined();
+			expect(result.attempts[1].env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe(String(cap));
+		} else {
+			expect(String(result.failure)).toContain(EXHAUSTED);
+		}
 	});
 
 	it.each([NATIVE, LEGACY])("does not retry exhaustion on a plain %s request", async (id) => {

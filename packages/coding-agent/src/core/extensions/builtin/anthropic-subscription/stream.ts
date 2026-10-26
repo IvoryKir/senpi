@@ -156,7 +156,7 @@ export function streamAnthropicSubscription(
 					buildPromptBlocks(context, resolvedTools.customToolNameToSdk, toolWatchNote),
 					options?.sessionId,
 				);
-			const outputReserveTokens = options?.maxTokens ?? model.maxTokens;
+			const outputReserveTokens = options?.maxTokens;
 			if (options?.streamKind === "main" && !useResidentSession) {
 				// The reason must reflect the ACTUAL cause: resume mode "off"
 				// disables the lane by setting, while any other mode simply has no

@@ -97,5 +97,10 @@ it("restores 1M when a standard-window retry fails over to a different account",
 		"200000",
 		"1000000",
 	]);
+	expect(attempts.map((options) => options.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)).toEqual([
+		undefined,
+		"32000",
+		undefined,
+	]);
 	expect(messages).toEqual([{ type: "result", subtype: "success", result: "ok" }]);
 });

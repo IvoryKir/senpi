@@ -33,6 +33,9 @@ export { ANTHROPIC_SUBSCRIPTION_PROVIDER_ID } from "./account-management.ts";
 
 export const EXPIRING_WITHIN_MS = 5 * 60_000;
 
+const DEFAULT_FALLBACK_OUTPUT_TOKENS = 32_000;
+const MIN_FALLBACK_OUTPUT_TOKENS = 8_192;
+
 /** A managed lane with an empty pool must refuse rather than spawn the SDK against ambient host credentials. */
 const NO_MANAGED_ACCOUNTS_ERROR =
 	"authentication_failed: No Anthropic Subscription accounts configured for the managed lane; " +
@@ -96,7 +99,7 @@ export type AuthenticatedQueryInput = {
 	onLongContextFallback?: () => void;
 	/** Full request context estimate, including a resident session's already billed prefix. */
 	contextTokens?: () => number;
-	/** Space reserved for the response, outside the full prompt estimate. */
+	/** Explicit response cap for the 200k retry; otherwise it uses the fallback default. */
 	outputReserveTokens?: number;
 	createAttempt?: (
 		input: AuthenticatedAttemptInput,
@@ -229,6 +232,7 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 	const pool = await managedPool(input.providerSettings, input.env);
 	let standardWindow = false;
 	let retryAccountName: string | undefined;
+	let outputReserveTokens = input.outputReserveTokens ?? DEFAULT_FALLBACK_OUTPUT_TOKENS;
 	const buildOptions = (lane: AnthropicSubscriptionTokenInjection): Options => {
 		const options = input.buildOptions(lane);
 		if (standardWindow) {
@@ -236,16 +240,26 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 			options.env = {
 				...options.env,
 				CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW),
+				// Reserve and request the same output budget, not the model catalog's ceiling.
+				CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(outputReserveTokens),
 			};
 		}
 		return options;
 	};
 	const onLongContextRefused = (error: unknown): void => {
 		if (isExtraUsageExhausted(error)) {
-			if ((input.contextTokens?.() ?? 0) > CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW - (input.outputReserveTokens ?? 0)) {
+			// The full estimate already includes the preamble margin when no billed prefix exists.
+			const contextTokens = input.contextTokens?.() ?? 0;
+			outputReserveTokens =
+				input.outputReserveTokens ??
+				Math.max(
+					MIN_FALLBACK_OUTPUT_TOKENS,
+					Math.min(DEFAULT_FALLBACK_OUTPUT_TOKENS, CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW - contextTokens),
+				);
+			if (contextTokens > CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW - outputReserveTokens) {
 				const reason = error instanceof Error ? error.message : String(error);
 				throw new Error(
-					`${reason} Top up extra usage to keep the 1M window, or start a new session or compact this session before retrying.`,
+					`${reason} The prompt plus ${outputReserveTokens} output tokens cannot fit the 200k retry. Top up extra usage to keep the 1M window, or start a new session or compact this session before retrying.`,
 				);
 			}
 			// Exhausted balance is not an entitlement verdict: only this request uses 200k.
