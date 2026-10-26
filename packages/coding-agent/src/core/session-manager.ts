@@ -54,7 +54,15 @@ import { materializeSessionEntries } from "./session-entry-materializer.ts";
 import { replaceFileAtomically } from "./session-file-replace.ts";
 import { type HistoryReducer, HistoryReductions } from "./session-history-reduce.ts";
 import type { SpawnedBy } from "./session-lifecycle-types.ts";
+import { compactUpdatesEnabled } from "./engine-socket-flag.ts";
 import { planLoadedTail } from "./session-loaded-tail.ts";
+import {
+	captureTranscriptBase,
+	type PersistedBase,
+	snapshotTranscript,
+	TranscriptJournal,
+	type TranscriptTransition,
+} from "./session-transcript-journal.ts";
 import { SessionWriteGuard } from "./session-move/write-guard.ts";
 import { type ResidentStoreStats, ResidentStringStore } from "./session-resident-store.ts";
 import { SessionWriteFence } from "./session-write-fence.ts";
@@ -1124,6 +1132,7 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 let sessionEntryLoader = loadEntriesFromFile;
 
 const DEFERRED_FILE_LOAD = Symbol("deferred-session-file-load");
+const NO_TRANSCRIPT_BASE = { base: null, history: 0 } as const;
 
 /** Test seam for observing disk reloads without mocking ESM filesystem exports. */
 export function setSessionEntryLoaderForTesting(loader: typeof loadEntriesFromFile): () => void {
@@ -1183,6 +1192,10 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	// The persisted base of the last load or rewrite, and how many history entries it holds (R3.C1.1).
+	private transcriptBase: { readonly base: PersistedBase | null; readonly history: number } = NO_TRANSCRIPT_BASE;
+	private transcriptJournal: TranscriptJournal | undefined;
+	private readonly capturesTranscriptBase = compactUpdatesEnabled();
 	private residentStore = new ResidentStringStore();
 	private mirrorTrimmed = false;
 	// Set while a navigation to an entry outside the mirror reloads the whole file into it.
@@ -1300,6 +1313,7 @@ export class SessionManager {
 			throw new Error(`Session file is not a valid ${APP_NAME} session: ${this.sessionFile}`);
 		}
 		this._setSessionFile(this.sessionFile, fileEntries);
+		this._journalReplace();
 	}
 
 	/** Brings `id` back into the mirror by reloading the whole file when the mirror does not hold it. */
@@ -1316,6 +1330,7 @@ export class SessionManager {
 	/** Switch to a different session file (used for resume and branching) */
 	setSessionFile(sessionFile: string): void {
 		this._setSessionFile(sessionFile);
+		this._journalReplace();
 	}
 
 	private _setSessionFile(
@@ -1327,6 +1342,7 @@ export class SessionManager {
 		if (existingFile === undefined) return;
 		const entries = preloadedFileEntries ?? loadEntriesFromFile(existingFile);
 		if (!this._adoptFileEntries(existingFile, entries, newSessionOptions)) return;
+		this._captureTranscriptBase(existingFile);
 		const loadedHistory = this._retainLoadedTail();
 		this.fileEntries = this.fileEntries.map((entry) => this.residentStore.externalize(entry));
 		this._completeFileLoad(loadedHistory);
@@ -1346,6 +1362,7 @@ export class SessionManager {
 		if (existingFile === undefined) return;
 		const entries = preloadedFileEntries ?? (await loadEntriesFromFileAsync(existingFile, slicer));
 		if (!this._adoptFileEntries(existingFile, entries, newSessionOptions)) return;
+		this._captureTranscriptBase(existingFile);
 		const loadedHistory = this._retainLoadedTail();
 		this.fileEntries = await mapInSlices(this.fileEntries, (entry) => this.residentStore.externalize(entry), slicer);
 		this._completeFileLoad(loadedHistory);
@@ -1442,6 +1459,7 @@ export class SessionManager {
 			reserveSessionWrite(path);
 			this.sessionFile = path;
 		}
+		this._journalReplace();
 		return this.sessionFile;
 	}
 
@@ -1466,6 +1484,7 @@ export class SessionManager {
 			...(options?.spawnedBy ? { spawnedBy: options.spawnedBy } : {}),
 		};
 		this.fileEntries = [header];
+		this.transcriptBase = NO_TRANSCRIPT_BASE;
 		this.historyGeneration++;
 		this.verbatimFromCount = 0;
 		this.mirrorTrimmed = false;
@@ -1584,6 +1603,39 @@ export class SessionManager {
 		this.writeFence.assertOwned(this.sessionFile);
 		reserveSessionWrite(this.sessionFile);
 		replaceFileAtomically(this.sessionFile, this._serializedFileEntries());
+		this._captureTranscriptBase(this.sessionFile);
+	}
+
+	/** Flag off, no load or rewrite stats the file or fingerprints its entries. */
+	private _captureTranscriptBase(path: string): void {
+		if (this.capturesTranscriptBase) this.transcriptBase = captureTranscriptBase(path, this.fileEntries);
+	}
+
+	/** Starts journaling committed transcript changes and returns the whole transcript they follow (R3.C1.1). */
+	beginTranscriptJournal(): TranscriptTransition[] {
+		this.transcriptJournal = new TranscriptJournal();
+		return this._transcriptSnapshot();
+	}
+
+	/** The transcript changes committed since the journal began or was last drained. */
+	drainTranscript(): TranscriptTransition[] {
+		return this.transcriptJournal?.drain() ?? [];
+	}
+
+	private _journalReplace(): void {
+		this.transcriptJournal?.record(...this._transcriptSnapshot());
+	}
+
+	private _transcriptSnapshot(): TranscriptTransition[] {
+		const { base, history } = this.transcriptBase;
+		const unpersisted = base ? this.fullEntryCount - history : this.fileEntries.length;
+		const resident = base ? this.fileEntries.length - 1 : this.mirrorTrimmed ? -1 : this.fileEntries.length;
+		return snapshotTranscript({
+			base,
+			unpersisted: unpersisted <= resident ? this.fileEntries.slice(this.fileEntries.length - unpersisted) : undefined,
+			leafId: this.leafId,
+			own: (entry) => JSON.stringify(this.residentStore.materialize(entry)),
+		});
 	}
 
 	private *_serializedFileEntries(): Generator<string> {
@@ -1769,6 +1821,11 @@ export class SessionManager {
 		const residentEntry = this.residentStore.externalize(entry);
 		this._persist(residentEntry);
 		this._commitEntry(this._shareMessage(residentEntry, shareable));
+		this.transcriptJournal?.record({
+			kind: "append",
+			id: residentEntry.id,
+			entry: JSON.stringify(this.residentStore.materialize(residentEntry)),
+		});
 	}
 
 	/**
@@ -2769,6 +2826,7 @@ export class SessionManager {
 		}
 		this.leafId = branchFromId;
 		this.mutationCount++;
+		this.transcriptJournal?.record({ kind: "leaf", leafId: branchFromId });
 	}
 
 	/**
@@ -2779,6 +2837,7 @@ export class SessionManager {
 	resetLeaf(): void {
 		this.leafId = null;
 		this.mutationCount++;
+		this.transcriptJournal?.record({ kind: "leaf", leafId: null });
 	}
 
 	/**
@@ -2824,6 +2883,7 @@ export class SessionManager {
 		if (path.length === 0) {
 			throw new Error(`Entry ${leafId} not found`);
 		}
+		this.transcriptBase = NO_TRANSCRIPT_BASE;
 
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map.
 		// Because labels are real tree entries, later entries can be children of labels;
@@ -2925,6 +2985,7 @@ export class SessionManager {
 			} else {
 				this.flushed = false;
 			}
+			this._journalReplace();
 
 			return newSessionFile;
 		}
@@ -2951,6 +3012,7 @@ export class SessionManager {
 		this._buildIndex();
 		this.historyGeneration++;
 		this.mutationCount++;
+		this._journalReplace();
 		return undefined;
 	}
 

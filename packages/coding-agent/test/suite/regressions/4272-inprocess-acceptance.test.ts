@@ -57,7 +57,7 @@ it("T5 sequences in-process records in producer order, correlation before its co
 		},
 	);
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: harness.session.sessionManager.getLeafId() });
+	lane.bootstrap({ transcript: [] });
 	const entry: RpcSessionEntry = {
 		scope,
 		runtime,
@@ -171,7 +171,7 @@ it("mints opaque message and turn ids at their start, at a start-less terminal, 
 	expect(recoveryCarrier(update)).toEqual(recoveryCarrier(start));
 
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: [] });
 	expect(lane.accept({ type: "queue_update" }, undefined), "a pass-through record takes no sequence").toBeUndefined();
 	expect(lane.accept({ type: "agent_start" }, undefined)?.turnId).toBeNull();
 	const directTurnEnd = lane.accept({ type: "turn_end" }, undefined);

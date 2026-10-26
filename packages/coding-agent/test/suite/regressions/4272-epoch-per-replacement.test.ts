@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { readTranscriptRoot, type TranscriptRoot } from "../../../src/modes/rpc/accepted-transcript.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { type WireRecord, workerAcceptanceHost } from "./4272-worker-acceptance-support.ts";
 
@@ -77,7 +78,12 @@ async function acrossReplacement(kind: Replacement) {
 		await prompt(host, sessionId);
 		const firstNew = refs.findIndex((ref) => ref.sessionEpoch !== before.sessionEpoch);
 		expect(firstNew, "no ref of the new epoch before the replacement, none of the old one after").toBe(atReplaced);
-		const result = { before, after, oldRefs: refs.slice(0, firstNew), newRefs: refs.slice(firstNew) };
+		// Read while the session files exist: a persisted base is read from disk, never from a copy.
+		const roots = { oldEntries: rootEntries(before.transcript), newEntries: rootEntries(after.transcript) };
+		expect(rootEntries(before.transcript), "the old root is unchanged by the new epoch's turn").toEqual(
+			roots.oldEntries,
+		);
+		const result = { before, after, ...roots, oldRefs: refs.slice(0, firstNew), newRefs: refs.slice(firstNew) };
 		lane.release(before);
 		lane.release(after);
 		expect(lane.liveRoots).toBe(0);
@@ -87,12 +93,32 @@ async function acrossReplacement(kind: Replacement) {
 	}
 }
 
-function expectNewEpoch({ before, after, oldRefs, newRefs }: Awaited<ReturnType<typeof acrossReplacement>>): void {
+function rootEntries(root: TranscriptRoot): ReadonlyArray<{ readonly id: string; readonly type: string }> {
+	const read = readTranscriptRoot(root);
+	if (!read.ok) throw new Error(`transcript read failed: ${read.error}`);
+	return read.entries;
+}
+
+function expectNewEpoch({
+	before,
+	after,
+	oldEntries,
+	newEntries,
+	oldRefs,
+	newRefs,
+}: Awaited<ReturnType<typeof acrossReplacement>>): void {
 	expect(before.sessionEpoch).toMatch(UUID);
 	expect(after.sessionEpoch, "the replacement minted a new epoch").toMatch(UUID);
 	expect(after.sessionEpoch).not.toBe(before.sessionEpoch);
 	expect(after.sequence, "the new epoch starts from its bootstrap").toBe(0);
-	expect(after.transcript.count, "no accepted append crosses into the new epoch").toBe(0);
+	const oldTurn = oldEntries.filter((entry) => entry.type === "message").map((entry) => entry.id);
+	expect(oldTurn.length, "the old epoch's root holds its turn").toBeGreaterThan(0);
+	const newIds = newEntries.map((entry) => entry.id);
+	expect(newIds[0], "the new epoch's root is the new session's").not.toBe(oldEntries[0]?.id);
+	expect(
+		newIds.filter((id) => oldTurn.includes(id)),
+		"no entry of the old turn crosses into the new epoch's root",
+	).toEqual([]);
 	expect(oldRefs.length).toBeGreaterThan(2);
 	expect(oldRefs.every((ref) => ref.sessionEpoch === before.sessionEpoch)).toBe(true);
 	expect(newRefs.length).toBeGreaterThan(2);
@@ -102,8 +128,11 @@ function expectNewEpoch({ before, after, oldRefs, newRefs }: Awaited<ReturnType<
 	).toBe(true);
 	for (const [index, ref] of newRefs.entries())
 		if (index > 0) expect(ref.sequence).toBeGreaterThan(newRefs[index - 1]?.sequence ?? 0);
-	// Sequences restart per epoch, so an ordering across the boundary exists only through the epoch.
-	expect(newRefs[0]?.sequence, "the new epoch's sequence restarted").toBe(1);
+	// Sequences restart per epoch, so an ordering across the boundary exists only through the epoch. Transcript
+	// transitions take sequences too (C1.1), so the first record follows any the new session committed first.
+	expect(newRefs[0]?.sequence, "the new epoch's sequence restarted from its bootstrap").toBeGreaterThan(
+		after.sequence,
+	);
 	expect(newRefs[0]?.sequence ?? 0).toBeLessThan(oldRefs.at(-1)?.sequence ?? 0);
 	expect(before.sequence, "the old cut stays inside its own epoch's numbering").toBeLessThanOrEqual(
 		oldRefs.at(-1)?.sequence ?? 0,
@@ -111,14 +140,14 @@ function expectNewEpoch({ before, after, oldRefs, newRefs }: Awaited<ReturnType<
 }
 
 // Part of #4272, ruling 10 Q2: replacement, fork and switch each start a new AgentSession incarnation.
-it("Q2 replace: new_session mints a new sessionEpoch and its sequences are never compared with the old epoch", async () => {
+it("Q2 replace: new_session mints a new sessionEpoch with its own transcript root, and its sequences are never compared with the old epoch", async () => {
 	expectNewEpoch(await acrossReplacement("new_session"));
 }, 120_000);
 
-it("Q2 fork: fork mints a new sessionEpoch and its sequences are never compared with the old epoch", async () => {
+it("Q2 fork: fork mints a new sessionEpoch with its own transcript root, and its sequences are never compared with the old epoch", async () => {
 	expectNewEpoch(await acrossReplacement("fork"));
 }, 120_000);
 
-it("Q2 switch: switch_session mints a new sessionEpoch and its sequences are never compared with the old epoch", async () => {
+it("Q2 switch: switch_session mints a new sessionEpoch with its own transcript root, and its sequences are never compared with the old epoch", async () => {
 	expectNewEpoch(await acrossReplacement("switch_session"));
 }, 120_000);

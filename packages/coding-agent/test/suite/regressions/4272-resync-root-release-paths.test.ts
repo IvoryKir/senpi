@@ -4,7 +4,7 @@ import { type ShedEnd, shedThenEnd } from "./4272-resync-shed-support.ts";
 
 async function shedOnLane(end: ShedEnd) {
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: [] });
 	const result = await shedThenEnd(end, lane);
 	expect(result.liveDuringShed, "the shed froze the attached session's root before awaiting the drain").toBe(1);
 	return result;

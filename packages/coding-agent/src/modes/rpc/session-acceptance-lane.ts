@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
+import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
+import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
 interface AcceptedRef {
@@ -8,14 +10,6 @@ interface AcceptedRef {
 	readonly historyVersion: number;
 	readonly messageId: string | null;
 	readonly turnId: string | null;
-}
-
-/** Accepted transcript appends since bootstrap: `entries` is shared append-only storage, read up to `count`. */
-interface TranscriptRoot {
-	readonly historyVersion: number;
-	readonly leafId: string | null;
-	readonly entries: readonly string[];
-	readonly count: number;
 }
 
 interface AcceptedCorrelation {
@@ -34,8 +28,9 @@ export interface FrozenAcceptedRoot {
 	readonly transcript: TranscriptRoot;
 }
 
+/** The incarnation's transcript as its manager journaled it up to bootstrap: base, unpersisted entries, leaf. */
 export interface SessionBootstrap {
-	readonly leafId: string | null;
+	readonly transcript: readonly TranscriptTransition[];
 }
 
 /** Recovery kinds take a sequence; responses and every other record keep FIFO order with none. */
@@ -74,9 +69,7 @@ function turnScoped(type: string, record: object): boolean {
 export class SessionAcceptanceLane {
 	private epoch = "";
 	private sequence = 0;
-	private historyVersion = 0;
-	private leafId: string | null = null;
-	private entries: string[] = [];
+	private transcript = new AcceptedTranscript();
 	private activeMessageId: string | null = null;
 	private turnId: string | null = null;
 	private correlation: AcceptedCorrelation | null = null;
@@ -95,12 +88,20 @@ export class SessionAcceptanceLane {
 		if (this.retired) return;
 		this.epoch = randomUUID();
 		this.sequence = 0;
-		this.historyVersion = 0;
-		this.leafId = input.leafId;
-		this.entries = [];
+		this.transcript = new AcceptedTranscript();
+		for (const transition of input.transcript) this.transcript.apply(transition);
 		this.activeMessageId = null;
 		this.turnId = null;
 		this.correlation = null;
+	}
+
+	/** Transcript transitions committed before the record they arrive with; each takes its own sequence (C1.1). */
+	applyTranscript(transitions: readonly TranscriptTransition[]): void {
+		if (this.retired || this.epoch === "") return;
+		for (const transition of transitions) {
+			this.sequence += 1;
+			this.transcript.apply(transition);
+		}
 	}
 
 	accept(record: object, carrier: RecoveryCarrier | undefined): AcceptedRef | undefined {
@@ -114,11 +115,10 @@ export class SessionAcceptanceLane {
 		const messageId = type.startsWith("message_") ? (carrier?.messageId ?? null) : null;
 		if (type === "message_start") this.activeMessageId = messageId;
 		if (type === "message_end" && this.activeMessageId === messageId) this.activeMessageId = null;
-		if (type === "entry_appended") this.acceptAppend(field(record, "entry"));
 		return {
 			sessionEpoch: this.epoch,
 			sequence: this.sequence,
-			historyVersion: this.historyVersion,
+			historyVersion: this.transcript.historyVersion,
 			messageId,
 			turnId,
 		};
@@ -131,12 +131,7 @@ export class SessionAcceptanceLane {
 			activeMessageId: this.activeMessageId,
 			turnId: this.turnId,
 			correlation: this.correlation,
-			transcript: Object.freeze({
-				historyVersion: this.historyVersion,
-				leafId: this.leafId,
-				entries: this.entries,
-				count: this.entries.length,
-			}),
+			transcript: this.transcript.freeze(),
 		});
 		this.live.add(root);
 		return root;
@@ -170,14 +165,5 @@ export class SessionAcceptanceLane {
 			return;
 		this.sequence += 1;
 		this.correlation = Object.freeze({ sequence: this.sequence, ...next });
-	}
-
-	/** The root owns a serialized value: the manager may later mutate the entry object (mirror trimming). */
-	private acceptAppend(entry: unknown): void {
-		if (typeof entry !== "object" || entry === null) return;
-		this.historyVersion += 1;
-		const id = field(entry, "id");
-		this.leafId = typeof id === "string" ? id : this.leafId;
-		this.entries.push(JSON.stringify(entry));
 	}
 }
