@@ -21,7 +21,8 @@ export interface TreeRow {
 	readonly zombie: boolean;
 	/** `ps -o lstart=` in the C locale, the form `readProcessStartTime` records. */
 	readonly start: string;
-	readonly marker: string | undefined;
+	/** Every marker value in the process's environment; never read from its argv. */
+	readonly markers: readonly string[];
 }
 
 export interface TreeProbes {
@@ -65,7 +66,7 @@ export function selectTree(
 			.filter(
 				(row) =>
 					(leader !== undefined && (row.pid === leader || row.pgid === leader)) ||
-					(root.marker !== undefined && row.marker === root.marker) ||
+					(root.marker !== undefined && row.markers.includes(root.marker)) ||
 					known.get(row.pid) === row.start,
 			)
 			.map((row) => row.pid),
@@ -119,12 +120,20 @@ async function drain(
 
 const LSTART = String.raw`\S+\s+\S+\s+\d+\s+[\d:]+\s+\d+`;
 const PS_ROW = new RegExp(String.raw`^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(${LSTART})(?:\s(.*))?$`);
+const PS_ARGV_ROW = new RegExp(String.raw`^\s*(\d+)\s+(${LSTART})(?:\s(.*))?$`);
+const MARKER_PREFIX = `${MANAGED_LAUNCH_MARKER_ENV}=`;
 
-export function parseTreeRows(
-	stdout: string,
-	markerOf: (pid: number, command: string) => string | undefined,
-): TreeRow[] {
-	const rows: TreeRow[] = [];
+interface TableRow {
+	readonly pid: number;
+	readonly ppid: number;
+	readonly pgid: number;
+	readonly zombie: boolean;
+	readonly start: string;
+	readonly command: string;
+}
+
+function parseTableRows(stdout: string): TableRow[] {
+	const rows: TableRow[] = [];
 	for (const line of stdout.split("\n")) {
 		const match = PS_ROW.exec(line);
 		if (match === null) continue;
@@ -135,46 +144,82 @@ export function parseTreeRows(
 			pgid: Number(pgid),
 			zombie: stat.startsWith("Z"),
 			start: start.replace(/\s+/g, " "),
-			marker: markerOf(Number(pid), command),
+			command,
 		});
 	}
 	return rows;
 }
 
-/** macOS appends a process's environment to its command with `ps -E`, where the kernel shows it to the same user. */
-function markerInCommand(_pid: number, command: string): string | undefined {
-	return new RegExp(String.raw`(?:^|\s)${MANAGED_LAUNCH_MARKER_ENV}=(\S+)`).exec(command)?.[1];
+/** Linux `/proc/<pid>/environ`: NUL-separated entries, so only a whole entry naming the marker counts. */
+export function markersInEnviron(environ: string): string[] {
+	return environ
+		.split("\0")
+		.filter((entry) => entry.startsWith(MARKER_PREFIX))
+		.map((entry) => entry.slice(MARKER_PREFIX.length));
 }
 
-function markerInProcEnviron(pid: number): string | undefined {
+/**
+ * macOS `ps -E` prints argv and then the environment in one column, so argv alone cannot be told apart from it. The
+ * argv-only snapshot (same pid and start instant) is cut off first; a row whose `-E` text does not begin with its argv
+ * (rewritten in between, or absent from one snapshot) yields no marker rather than a guess.
+ */
+export function parseDarwinTreeRows(withEnvironment: string, argvOnly: string): TreeRow[] {
+	const argvs = new Map<number, { readonly start: string; readonly command: string }>();
+	for (const line of argvOnly.split("\n")) {
+		const match = PS_ARGV_ROW.exec(line);
+		if (match === null) continue;
+		const [, pid = "", start = "", command = ""] = match;
+		argvs.set(Number(pid), { start: start.replace(/\s+/g, " "), command });
+	}
+	return parseTableRows(withEnvironment).map(({ command, ...row }) => {
+		const argv = argvs.get(row.pid);
+		const environment =
+			argv !== undefined && argv.start === row.start && command.startsWith(argv.command)
+				? command.slice(argv.command.length)
+				: "";
+		const markers = environment
+			.split(/\s+/)
+			.filter((entry) => entry.startsWith(MARKER_PREFIX))
+			.map((entry) => entry.slice(MARKER_PREFIX.length));
+		return { ...row, markers };
+	});
+}
+
+function linuxMarkers(pid: number): string[] {
 	try {
-		const prefix = `${MANAGED_LAUNCH_MARKER_ENV}=`;
-		const entry = readFileSync(`/proc/${pid}/environ`, "latin1")
-			.split("\0")
-			.find((variable) => variable.startsWith(prefix));
-		return entry?.slice(prefix.length);
+		return markersInEnviron(readFileSync(`/proc/${pid}/environ`, "latin1"));
 	} catch {
 		// Another user's process, or one that exited after the snapshot: it carries no marker of ours.
-		return undefined;
+		return [];
 	}
 }
 
-function scanProcessTable(): Promise<readonly TreeRow[] | undefined> {
-	const platform = process.platform;
-	if (platform !== "darwin" && platform !== "linux") return Promise.resolve(undefined);
-	const columns = platform === "darwin" ? "pid=,ppid=,pgid=,stat=,lstart=,command=" : "pid=,ppid=,pgid=,stat=,lstart=";
-	const args = platform === "darwin" ? ["-A", "-E", "-ww", "-o", columns] : ["-A", "-ww", "-o", columns];
+function runPs(args: readonly string[]): Promise<string | undefined> {
 	return new Promise((resolve) => {
 		execFile(
 			"ps",
-			args,
+			[...args],
 			{ env: { ...process.env, LC_ALL: "C", LANG: "C" }, maxBuffer: 64 * 1024 * 1024, timeout: 5_000 },
-			(error, stdout) => {
-				if (error !== null) return resolve(undefined);
-				resolve(parseTreeRows(String(stdout), platform === "darwin" ? markerInCommand : markerInProcEnviron));
-			},
+			(error, stdout) => resolve(error === null ? String(stdout) : undefined),
 		);
 	});
+}
+
+async function scanProcessTable(): Promise<readonly TreeRow[] | undefined> {
+	if (process.platform === "linux") {
+		const stdout = await runPs(["-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,lstart="]);
+		return stdout === undefined
+			? undefined
+			: parseTableRows(stdout).map(({ command: _none, ...row }) => ({ ...row, markers: linuxMarkers(row.pid) }));
+	}
+	if (process.platform !== "darwin") return undefined;
+	const [withEnvironment, argvOnly] = await Promise.all([
+		runPs(["-A", "-E", "-ww", "-o", "pid=,ppid=,pgid=,stat=,lstart=,command="]),
+		runPs(["-A", "-ww", "-o", "pid=,lstart=,command="]),
+	]);
+	return withEnvironment === undefined || argvOnly === undefined
+		? undefined
+		: parseDarwinTreeRows(withEnvironment, argvOnly);
 }
 
 export const defaultTreeProbes: TreeProbes = {

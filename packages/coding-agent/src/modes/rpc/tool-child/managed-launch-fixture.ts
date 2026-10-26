@@ -130,7 +130,14 @@ export function managedLaunchFixture() {
 		scan: async () =>
 			[...processes]
 				.filter(([, p]) => p.alive)
-				.map(([pid, p]) => ({ pid, ppid: p.ppid, pgid: p.group, zombie: false, start: START, marker: p.marker })),
+				.map(([pid, p]) => ({
+					pid,
+					ppid: p.ppid,
+					pgid: p.group,
+					zombie: false,
+					start: START,
+					markers: p.marker === undefined ? [] : [p.marker],
+				})),
 		signal: (pid) => kill((p) => p === processes.get(pid)),
 		wait,
 	};
