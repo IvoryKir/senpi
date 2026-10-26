@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { managedLaunchFixture } from "./managed-launch-fixture.ts";
 import type { HeldManagedLaunch } from "./managed-launch-process.ts";
 import { SessionLaunchSupervisor } from "./session-launch-supervisor.ts";
+import { JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE } from "./windows-job.ts";
+
+const JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x1000;
 
 const directories: string[] = [];
 const supervisors: SessionLaunchSupervisor[] = [];
@@ -23,6 +26,7 @@ async function setup(platform: "win32" | "darwin") {
 		platform,
 		kernel: os.kernel,
 		groups: os.groups,
+		tree: os.tree,
 		prepare: os.prepare,
 	});
 	supervisors.push(owner);
@@ -59,6 +63,56 @@ describe.each(["win32", "darwin"] as const)("managed session containment on %s",
 		await expect(command.completed).resolves.toBe(0);
 
 		expect(os.alive(os.launches[0]?.descendant)).toBe(true);
+		expect(os.alive(os.launches[0]?.shim)).toBe(true);
+	});
+
+	it("reaps a finished launch that has no surviving descendants", async () => {
+		const { os, start } = await setup(platform);
+		const command = await start("call-a");
+		const launch = os.launches[0];
+		for (const pid of [launch?.target, launch?.descendant, launch?.setsidDescendant, launch?.breakaway]) os.exit(pid);
+		launch?.finish(0);
+
+		await expect(command.completed).resolves.toBe(0);
+
+		expect(os.alive(launch?.shim)).toBe(false);
+		if (platform === "win32") expect(os.jobs.size).toBe(1);
+	});
+
+	it("ends every owned process, including one that started its own session or asked to break away", async () => {
+		const { os, owner, start } = await setup(platform);
+		await start("service:browser");
+		const launch = os.launches[0];
+		expect(os.alive(launch?.setsidDescendant)).toBe(true);
+
+		await owner.close();
+
+		expect(os.alive(launch?.setsidDescendant)).toBe(false);
+		expect(os.alive(launch?.breakaway)).toBe(false);
+	});
+
+	it("restarts a service under the same key after that key was cancelled", async () => {
+		const { os, owner, start } = await setup(platform);
+		await start("service:browser");
+		await owner.cancel("service:browser");
+
+		await start("service:browser");
+
+		expect(os.launches.map((launch) => os.alive(launch.target))).toEqual([false, true]);
+	});
+
+	it.runIf(platform !== "win32")("lets a failed close be retried", async () => {
+		const { os, owner, start } = await setup(platform);
+		await start("call-a");
+		const stubborn = os.processes.get(os.launches[0]?.descendant ?? -1);
+		if (stubborn === undefined) throw new Error("fixture descendant missing");
+		stubborn.immortal = true;
+		await expect(owner.close()).rejects.toThrow();
+		stubborn.immortal = false;
+
+		await owner.close();
+
+		expect([...os.processes.values()].some((process) => process.alive)).toBe(false);
 	});
 
 	it("ends every owned tree when the session ends", async () => {
@@ -87,6 +141,15 @@ describe.each(["win32", "darwin"] as const)("managed session containment on %s",
 		await start("call-b");
 		const targets = os.launches.map((launch) => os.processes.get(launch.target ?? -1));
 		if (platform === "win32") {
+			const breakaway = JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+			expect(
+				[...os.jobs.values()].map((job) => job.flags & (breakaway | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)),
+			).toEqual([
+				JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+				JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+				JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			]);
+			expect(os.launches.map((launch) => launch.breakaway)).toEqual([undefined, undefined]);
 			expect(targets.map((p) => p?.jobs.size)).toEqual([2, 2]);
 			const first = targets[0]?.jobs ?? new Set<number>();
 			const second = targets[1]?.jobs ?? new Set<number>();
@@ -97,10 +160,26 @@ describe.each(["win32", "darwin"] as const)("managed session containment on %s",
 	});
 
 	it("does not release a launch whose call was cancelled during preparation", async () => {
-		const { os, owner, start } = await setup(platform);
-		await owner.cancel("cancelled-before-start");
+		const { os } = await setup(platform);
+		const dir = directories.at(-1);
+		if (dir === undefined) throw new Error("fixture directory missing");
+		const prepared = Promise.withResolvers<HeldManagedLaunch>();
+		const owner = new SessionLaunchSupervisor({
+			dir: join(dir, "cancelled"),
+			platform,
+			kernel: os.kernel,
+			groups: os.groups,
+			tree: os.tree,
+			prepare: () => prepared.promise,
+		});
+		supervisors.push(owner);
+		const command = { command: "fixture", args: [], cwd: dir, env: {}, logPath: join(dir, "cancelled.log") };
+		const pending = owner.start(command, "call-a");
+		const rejected = expect(pending).rejects.toMatchObject({ code: "managed_launch_cancelled" });
 
-		await expect(start("cancelled-before-start")).rejects.toMatchObject({ code: "managed_launch_cancelled" });
+		await owner.cancel("call-a");
+		prepared.resolve(await os.prepare(command));
+		await rejected;
 
 		expect(os.launches.every((launch) => launch.target === undefined)).toBe(true);
 	});
