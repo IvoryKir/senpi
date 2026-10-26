@@ -5,6 +5,7 @@ Rust/N-API Windows adapter for the socket-secret lifecycle of sisyphuslabs/omo-d
 ## STRUCTURE
 
 ```text
+src/answers.rs            Revision 8.2 raw query answers -> facts; the exact "absent" codes, raw codes kept
 src/classify.rs           Pure Revision 8 locality rule over the volume facts (unit-tested with fakes)
 src/session.rs            PID-4 creation FILETIME; `Unverified` never matches anything
 src/volume.rs             Volume facts read from ONE handle that follows reparse points
@@ -14,7 +15,7 @@ tests/native_receipts.rs  Native receipts 27 and 28; real Windows only
 
 ## CONTRACTS
 
-- Locality comes from the kernel driver in the volume's I/O path (`FileFsDriverPathInformation`), never from the reported file-system name alone. Any query failure is `not_local`.
+- Locality comes from the kernel driver in the volume's I/O path (`FileFsDriverPathInformation`), never from the reported file-system name alone. Any query failure is `not_local`; only the exact absent answers listed in `src/answers.rs` (design Revision 8.2) are answers, and a new code joins that list only once a receipt shows its meaning.
 - The classifying handle follows reparse points. Never open it with `FILE_FLAG_OPEN_REPARSE_POINT`.
 - `SessionIdentity` has no `PartialEq` on purpose; compare with `same_session`, under which `Unverified` matches nothing.
 - Prebuilds and the loader are not wired yet; this crate ships no artifact until the packaging change lands.

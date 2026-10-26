@@ -9,9 +9,18 @@ use senpi_socket_secret::{classify, probe_volume, read_kernel_session_identity, 
 fn receipt_volume(label: &str, path: &str) -> Locality {
     let facts = probe_volume(path).unwrap_or_else(|error| panic!("{label}: cannot open {path}: {error:?}"));
     let locality = classify(&facts);
+    let codes = facts.codes;
     println!(
-        "RECEIPT_28 {label} locality={locality:?} reported={:?} ntfs={:?} refs={:?} remote_device={:?} remote_protocol={:?}",
-        facts.reported_file_system, facts.ntfs_driver, facts.refs_driver, facts.remote_device, facts.remote_protocol
+        "RECEIPT_28 {label} locality={locality:?} reported={:?} ntfs={:?} refs={:?} remote_device={:?} remote_protocol={:?} raw_ntfs_status={:#010x} raw_refs_status={:#010x} raw_device_status={:#010x} raw_remote_protocol_error={}",
+        facts.reported_file_system,
+        facts.ntfs_driver,
+        facts.refs_driver,
+        facts.remote_device,
+        facts.remote_protocol,
+        codes.ntfs_status.cast_unsigned(),
+        codes.refs_status.cast_unsigned(),
+        codes.device_status.cast_unsigned(),
+        codes.remote_protocol_error
     );
     locality
 }

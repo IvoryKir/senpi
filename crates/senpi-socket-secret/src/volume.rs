@@ -23,15 +23,13 @@ pub fn probe_volume(path: &str) -> Result<VolumeFacts, ProbeError> {
 #[cfg(windows)]
 mod windows_probe {
     use super::ProbeError;
+    use crate::answers::{driver_path_from_query, remote_protocol_from_query, ProbeCodes};
     use crate::classify::{DriverPath, RemoteDevice, RemoteProtocol, VolumeFacts, NTFS_DRIVER, REFS_DRIVER};
     use windows_sys::Wdk::Storage::FileSystem::{
         FileFsDeviceInformation, FileFsDriverPathInformation, NtQueryVolumeInformationFile,
     };
     use windows_sys::Wdk::System::SystemServices::{FILE_FS_DEVICE_INFORMATION, FILE_REMOTE_DEVICE};
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED,
-        HANDLE, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FileRemoteProtocolInfo, GetFileInformationByHandleEx, GetVolumeInformationByHandleW,
         FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_REMOTE_PROTOCOL_INFO, FILE_SHARE_DELETE,
@@ -67,12 +65,22 @@ mod windows_probe {
             return Err(ProbeError::OpenFailed(unsafe { GetLastError() }));
         }
         let handle = OwnedHandle(raw);
+        let (ntfs_driver, ntfs_status) = driver_in_path(handle.0, NTFS_DRIVER);
+        let (refs_driver, refs_status) = driver_in_path(handle.0, REFS_DRIVER);
+        let (remote_device, device_status) = remote_device(handle.0);
+        let (remote_protocol, remote_protocol_error) = remote_protocol(handle.0);
         Ok(VolumeFacts {
             reported_file_system: reported_file_system(handle.0),
-            ntfs_driver: driver_in_path(handle.0, NTFS_DRIVER),
-            refs_driver: driver_in_path(handle.0, REFS_DRIVER),
-            remote_device: remote_device(handle.0),
-            remote_protocol: remote_protocol(handle.0),
+            ntfs_driver,
+            refs_driver,
+            remote_device,
+            remote_protocol,
+            codes: ProbeCodes {
+                ntfs_status,
+                refs_status,
+                device_status,
+                remote_protocol_error,
+            },
         })
     }
 
@@ -98,7 +106,7 @@ mod windows_probe {
         String::from_utf16(&name[..end]).ok()
     }
 
-    fn remote_device(handle: HANDLE) -> RemoteDevice {
+    fn remote_device(handle: HANDLE) -> (RemoteDevice, i32) {
         let mut info = FILE_FS_DEVICE_INFORMATION::default();
         let mut status_block = IO_STATUS_BLOCK::default();
         // SAFETY: `info` is a writable FILE_FS_DEVICE_INFORMATION and its exact size is passed.
@@ -111,16 +119,17 @@ mod windows_probe {
                 FileFsDeviceInformation,
             )
         };
-        if status < 0 {
+        let answer = if status < 0 {
             RemoteDevice::QueryFailed
         } else if info.Characteristics & FILE_REMOTE_DEVICE != 0 {
             RemoteDevice::Set
         } else {
             RemoteDevice::Clear
-        }
+        };
+        (answer, status)
     }
 
-    fn remote_protocol(handle: HANDLE) -> RemoteProtocol {
+    fn remote_protocol(handle: HANDLE) -> (RemoteProtocol, u32) {
         // SAFETY: an all-zero FILE_REMOTE_PROTOCOL_INFO is a valid value of this plain-data struct.
         let mut info: FILE_REMOTE_PROTOCOL_INFO = unsafe { std::mem::zeroed() };
         // SAFETY: `info` is writable and its exact size is passed.
@@ -132,21 +141,15 @@ mod windows_probe {
                 std::mem::size_of::<FILE_REMOTE_PROTOCOL_INFO>() as u32,
             )
         };
-        if ok != 0 {
-            return RemoteProtocol::Available;
-        }
-        // SAFETY: reads this thread's last-error value, set by the failed call above.
-        match unsafe { GetLastError() } {
-            ERROR_INVALID_PARAMETER | ERROR_NOT_SUPPORTED | ERROR_INVALID_FUNCTION => {
-                RemoteProtocol::Unavailable
-            }
-            _ => RemoteProtocol::QueryFailed,
-        }
+        let answered = ok != 0;
+        // SAFETY: reads this thread's last-error value, set by the failed call above; unused on success.
+        let error = if answered { 0 } else { unsafe { GetLastError() } };
+        (remote_protocol_from_query(answered, error), error)
     }
 
     /// `FILE_FS_DRIVER_PATH_INFORMATION`: `BOOLEAN DriverInPath` at 0, `ULONG DriverNameLength` (bytes)
     /// at 4, `WCHAR DriverName[]` at 8. The caller writes the name first; the buffer is 8-byte aligned.
-    fn driver_in_path(handle: HANDLE, driver: &str) -> DriverPath {
+    fn driver_in_path(handle: HANDLE, driver: &str) -> (DriverPath, i32) {
         let name: Vec<u16> = driver.encode_utf16().collect();
         let name_bytes = name.len() * 2;
         let mut buffer = vec![0u64; (8 + name_bytes).div_ceil(8)];
@@ -167,14 +170,9 @@ mod windows_probe {
                 FileFsDriverPathInformation,
             )
         };
-        if status < 0 {
-            return DriverPath::QueryFailed;
-        }
-        // SAFETY: byte 0 is inside the buffer and holds the BOOLEAN the call wrote.
-        if unsafe { bytes.read() } != 0 {
-            DriverPath::InPath
-        } else {
-            DriverPath::NotInPath
-        }
+        // SAFETY: byte 0 is inside the buffer; the call wrote the BOOLEAN there on success and it is
+        // still the zero it was allocated with otherwise.
+        let in_path = unsafe { bytes.read() } != 0;
+        (driver_path_from_query(status, status >= 0 && in_path), status)
     }
 }

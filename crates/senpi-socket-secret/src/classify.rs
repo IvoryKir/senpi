@@ -3,6 +3,8 @@
 //! that is identified by the kernel driver in the volume's I/O path, never by the name the volume
 //! reports: a user-mode file system (WinFsp, Dokany) chooses its reported name.
 
+use crate::answers::ProbeCodes;
+
 /// `NtQueryVolumeInformationFile(FileFsDriverPathInformation)` for one driver object name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DriverPath {
@@ -36,6 +38,8 @@ pub struct VolumeFacts {
     pub refs_driver: DriverPath,
     pub remote_device: RemoteDevice,
     pub remote_protocol: RemoteProtocol,
+    /// The raw query answers behind the fields above (Revision 8.2); never consulted by [`classify`].
+    pub codes: ProbeCodes,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +108,7 @@ mod tests {
             refs_driver: refs,
             remote_device: RemoteDevice::Clear,
             remote_protocol: RemoteProtocol::Unavailable,
+            codes: ProbeCodes::default(),
         }
     }
 
