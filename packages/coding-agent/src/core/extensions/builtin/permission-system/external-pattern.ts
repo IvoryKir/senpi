@@ -4,7 +4,10 @@ import { realpathWithoutOpen } from "../../../../utils/paths.ts";
 import { Wildcard } from "./wildcard.ts";
 
 /** Recover on-disk case without replacing any lexical ancestor with its symlink target. */
-export function canonicalPathCase(value: string): string {
+export function canonicalPathCase(
+	value: string,
+	listDirectory: (directory: string) => readonly string[] = readdirSync,
+): string {
 	if (!isAbsolute(value)) return value;
 	const root = parse(value).root;
 	const parts = value.slice(root.length).split(sep).filter(Boolean);
@@ -12,33 +15,57 @@ export function canonicalPathCase(value: string): string {
 	for (let index = 0; index < parts.length; index++) {
 		const part = parts[index];
 		try {
-			const entries = readdirSync(parent);
+			const entries = listDirectory(parent);
 			if (!entries.includes(part)) {
-				const identity = lstatSync(join(parent, part), { bigint: true });
+				const identity = lstatSync(`${parent}${parent.endsWith(sep) ? "" : sep}${part}`, { bigint: true });
 				const spelling = entries.find((entry) => {
 					if (entry.toLowerCase() !== part.toLowerCase()) return false;
-					const candidate = lstatSync(join(parent, entry), { bigint: true });
+					const candidate = lstatSync(`${parent}${parent.endsWith(sep) ? "" : sep}${entry}`, { bigint: true });
 					return candidate.dev === identity.dev && candidate.ino === identity.ino;
 				});
 				if (spelling !== undefined) parts[index] = spelling;
 			}
 		} catch {
 			// Missing or unreadable components have no proven alternative spelling.
-			return join(parent, ...parts.slice(index));
+			return `${parent}${parent.endsWith(sep) ? "" : sep}${parts.slice(index).join(sep)}`;
 		}
-		parent = join(parent, parts[index]);
+		parent = `${parent}${parent.endsWith(sep) ? "" : sep}${parts[index]}`;
 	}
 	return parent;
 }
 
+/** Case aliases must name the same component, not merely symlinks to the same destination. */
+export function sameLexicalPath(left: string, right: string): boolean {
+	if (left === right) return true;
+	if (left.toLowerCase() !== right.toLowerCase()) return false;
+	const leftRoot = parse(left).root;
+	const rightRoot = parse(right).root;
+	const leftParts = left.slice(leftRoot.length).split(sep);
+	const rightParts = right.slice(rightRoot.length).split(sep);
+	try {
+		for (let index = 0; index < leftParts.length; index++) {
+			if (leftParts[index] === rightParts[index]) continue;
+			const a = lstatSync(leftRoot + leftParts.slice(0, index + 1).join(sep), { bigint: true });
+			const b = lstatSync(rightRoot + rightParts.slice(0, index + 1).join(sep), { bigint: true });
+			if (a.dev !== b.dev || a.ino !== b.ino) return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /** Keep filesystem observations within one evaluation, never across permission decisions. */
-export function createExternalPathMatcher(preserveAncestry = false): (value: string, pattern: string) => boolean {
+export function createExternalPathMatcher(
+	preserveAncestry = false,
+	canonicalCase = canonicalPathCase,
+): (value: string, pattern: string) => boolean {
 	const resolved = new Map<string, string>();
 	const identities = new Map<string, BigIntStats | Error>();
 	const realpath = (value: string): string => {
 		let result = resolved.get(value);
 		if (result === undefined) {
-			result = preserveAncestry ? canonicalPathCase(value) : realpathWithoutOpen(value);
+			result = preserveAncestry ? canonicalCase(value) : realpathWithoutOpen(value);
 			resolved.set(value, result);
 		}
 		return result;
@@ -102,7 +129,7 @@ function matchesExternalPath(
 			if (
 				candidate.dev === identity.dev &&
 				candidate.ino === identity.ino &&
-				(!preserveAncestry || ancestor === prefix)
+				(!preserveAncestry || sameLexicalPath(ancestor, prefix))
 			) {
 				if (tail.length === 0 && suffix.length > 0) return false;
 				return matchesSuffix(ancestor, tail, suffix.join("/").split(sep).join("/"), stat);

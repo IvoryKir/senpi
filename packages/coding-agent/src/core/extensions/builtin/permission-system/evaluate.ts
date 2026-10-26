@@ -18,8 +18,12 @@ export function evaluate(permission: string, pattern: string | readonly string[]
 }
 
 /** Evaluate a lexical spelling without letting a resolved rule erase its ancestry. */
-export function evaluateExternalSpelling(pattern: string | readonly string[], ...rulesets: Ruleset[]): Rule {
-	return evaluatePatterns("external_directory", pattern, rulesets, createExternalPathMatcher(true));
+export function evaluateExternalSpelling(
+	pattern: string | readonly string[],
+	ruleset: Ruleset,
+	canonicalCase?: (value: string) => string,
+): Rule {
+	return evaluatePatterns("external_directory", pattern, [ruleset], createExternalPathMatcher(true, canonicalCase));
 }
 
 function evaluatePatterns(

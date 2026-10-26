@@ -1,10 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPresetRule } from "./config.ts";
-import { realpathWithoutOpen } from "../../../../utils/paths.ts";
 import { evaluate, evaluateExternalSpelling } from "./evaluate.ts";
 import { createLocalEventEmitter, type PermissionEventEmitter } from "./events.ts";
-import { canonicalPathCase } from "./external-pattern.ts";
+import { decideExternalPaths } from "./external-spellings.ts";
 import { approvedFileVersion, approvedStoreRealPath, loadApproved } from "./storage.ts";
 import {
 	CorrectedError,
@@ -88,8 +87,9 @@ export class PermissionService {
 	/**
 	 * The one decision for a call, used when it is asked and again whenever an "Always" reply re-checks
 	 * the requests still pending. External paths use last-match-wins separately for the absolute
-	 * lexical spelling, its proven on-disk case, and the resolved target; the most restrictive
-	 * decision wins (deny > ask > allow). Raw originalPaths are display-only. Remembered approvals
+	 * lexical path, every partial symlink resolution and their proven on-disk case; the most restrictive
+	 * decision wins (deny > ask > allow). More than 16 spellings or 40 hops asks instead.
+	 * Raw originalPaths are display-only. Remembered approvals
 	 * match the resolved target and cannot override a deny from any spelling.
 	 * Without `presetBound` it is last-match-wins over every rule. With
 	 * `presetBound` the preset's rules and the user's settings and CLI rules are evaluated apart and
@@ -109,21 +109,9 @@ export class PermissionService {
 	): { readonly action: Rule["action"]; readonly rules: readonly Rule[] } {
 		this.refreshApproved();
 		if (permission === "external_directory") {
-			const targets = typeof target === "string" ? [target] : target;
-			let action: Rule["action"] = "allow";
-			const rules: Rule[] = [];
-			for (const value of new Set([...targets, ...(options.ruleAliases ?? [])])) {
-				const resolved = realpathWithoutOpen(value);
-				const spellings = new Set([value, canonicalPathCase(value)]);
-				for (const spelling of new Set([...spellings, resolved])) {
-					const decision = this.decideTarget(permission, spelling, options, resolved, spelling !== resolved);
-					if (PermissionService.RESTRICTIVENESS[decision.action] > PermissionService.RESTRICTIVENESS[action]) {
-						action = decision.action;
-					}
-					rules.push(...decision.rules);
-				}
-			}
-			return { action, rules };
+			return decideExternalPaths(target, options.ruleAliases ?? [], (spelling, resolved, canonicalCase) =>
+				this.decideTarget(permission, spelling, options, resolved, spelling !== resolved, canonicalCase),
+			);
 		}
 		return this.decideTarget(permission, options.ruleAliases ?? target, options);
 	}
@@ -134,9 +122,12 @@ export class PermissionService {
 		options: DecisionOptions,
 		approvedTarget = target,
 		preserveAncestry = false,
+		canonicalCase?: (value: string) => string,
 	): { readonly action: Rule["action"]; readonly rules: readonly Rule[] } {
 		const evaluateTarget = (ruleset: Ruleset) =>
-			preserveAncestry ? evaluateExternalSpelling(target, ruleset) : evaluate(permission, target, ruleset);
+			preserveAncestry
+				? evaluateExternalSpelling(target, ruleset, canonicalCase)
+				: evaluate(permission, target, ruleset);
 		// Defence in depth (HIGH 1): the agent's own tools never touch the approvals store, whatever
 		// rules say. The target's real path is compared against the store's real path.
 		if (this.protectedStorePath !== undefined && this.targetIsProtectedStore(target)) {
