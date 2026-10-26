@@ -1,0 +1,25 @@
+# crates/senpi-socket-secret
+
+Rust/N-API Windows adapter for the socket-secret lifecycle of sisyphuslabs/omo-desktop-app#4199: the storage-locality classification and the kernel-session identity that decide when presence-lock and process evidence may count.
+
+## STRUCTURE
+
+```text
+src/classify.rs           Pure Revision 8 locality rule over the volume facts (unit-tested with fakes)
+src/session.rs            PID-4 creation FILETIME; `Unverified` never matches anything
+src/volume.rs             Volume facts read from ONE handle that follows reparse points
+src/lib.rs                N-API exports and the `__senpiSocketSecretAbi1` ABI sentinel
+tests/native_receipts.rs  Native receipts 27 and 28; real Windows only
+```
+
+## CONTRACTS
+
+- Locality comes from the kernel driver in the volume's I/O path (`FileFsDriverPathInformation`), never from the reported file-system name alone. Any query failure is `not_local`.
+- The classifying handle follows reparse points. Never open it with `FILE_FLAG_OPEN_REPARSE_POINT`.
+- `SessionIdentity` has no `PartialEq` on purpose; compare with `same_session`, under which `Unverified` matches nothing.
+- Prebuilds and the loader are not wired yet; this crate ships no artifact until the packaging change lands.
+
+## VALIDATION
+
+- `cargo test -p senpi-socket-secret --locked` (classifier and session units on every host; the receipts are ignored off Windows).
+- Native receipts run only in `ci.yml` `socket-secret-native-windows`, which mounts the WinFsp, Dokany, SMB and VHDX fixtures and runs the ignored cases; its `RECEIPT_` lines are the receipt. Never run them in a VM.
