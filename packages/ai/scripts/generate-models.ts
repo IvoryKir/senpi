@@ -58,6 +58,7 @@ const packageRoot = join(__dirname, "..");
 
 function readGeneratorOptions(args: string[]): {
 	strict: boolean;
+	keepLastGoodOpenGateway: boolean;
 	dataOnly: boolean;
 	jsonOnly: boolean;
 	jsonOutputDir: string | undefined;
@@ -66,6 +67,7 @@ function readGeneratorOptions(args: string[]): {
 	generatedAt: string | undefined;
 } {
 	let strict = false;
+	let keepLastGoodOpenGateway = false;
 	let dataOnly = false;
 	let jsonOnly = false;
 	let jsonOutputDir: string | undefined;
@@ -77,6 +79,11 @@ function readGeneratorOptions(args: string[]): {
 		const arg = args[index];
 		if (arg === "--strict") {
 			strict = true;
+			continue;
+		}
+		// senpi#4067: release generation keeps the committed OpenGateway catalog when the feed fails.
+		if (arg === "--keep-last-good-opengateway") {
+			keepLastGoodOpenGateway = true;
 			continue;
 		}
 		if (arg === "--data-only") {
@@ -122,7 +129,15 @@ function readGeneratorOptions(args: string[]): {
 	if (providerIds && (dataOnly || jsonOnly || jsonOutputDir)) {
 		throw new Error("--providers cannot be combined with --data-only or JSON catalog output");
 	}
-	return { strict, dataOnly, jsonOnly, jsonOutputDir, pretty, providerIds, generatedAt };
+	// A provider-scoped run is a refresh whose failure must stay visible, never a release regeneration.
+	if (providerIds && keepLastGoodOpenGateway) {
+		throw new Error("--keep-last-good-opengateway cannot be combined with --providers");
+	}
+	// Without --strict every OpenGateway failure already keeps the committed catalog, so the flag would be a no-op.
+	if (keepLastGoodOpenGateway && !strict) {
+		throw new Error("--keep-last-good-opengateway requires --strict");
+	}
+	return { strict, keepLastGoodOpenGateway, dataOnly, jsonOnly, jsonOutputDir, pretty, providerIds, generatedAt };
 }
 
 const generatorOptions = readGeneratorOptions(process.argv.slice(2));
@@ -446,6 +461,8 @@ const KIMI_CODING_STABLE_MODELS = {
 // equivalent Moonshot API rates to estimate the value of subscription usage.
 const KIMI_CODING_IMPLIED_COSTS: Record<string, Model<Api>["cost"]> = {
 	k3: KIMI_K3_COST,
+	"k3.1-pro": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 },
+	"k3.1-pro-highspeed": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 4 },
 	"kimi-for-coding": { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0 },
 	"kimi-for-coding-highspeed": { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 0 },
 	"kimi-k2-thinking": { input: 0.6, output: 2.5, cacheRead: 0.15, cacheWrite: 0 },
@@ -3434,7 +3451,7 @@ async function generateModels() {
 	const radiusModels = await fetchRadiusModels();
 	const openGatewayModels = await fetchOpenGatewayModels(
 		(id, source) => recordModelsDevReasoningOptions("opengateway", id, withXaiThinkingPin(id, source)),
-		{ strict: generatorOptions.strict },
+		{ strict: generatorOptions.strict, keepLastGoodOnFailure: generatorOptions.keepLastGoodOpenGateway },
 	);
 
 	// Combine chat models (models.dev has priority where sources overlap).

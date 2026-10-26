@@ -8,7 +8,9 @@
  * - Interact with the user via UI primitives
  */
 
+import type { PromptSizeReport } from "../prompt-size-report.ts";
 import type { InputOrigin } from "../input-origin.ts";
+import type { LifecycleApi } from "../session-lifecycle-types.ts";
 import type { UploadRedaction, UploadRedactionOptions } from "../share/upload-redaction.ts";
 import type { ContextEvent } from "./context-event.ts";
 
@@ -71,6 +73,7 @@ import type { BashResult } from "../bash-executor.ts";
 import type { BrowserEngine } from "../browser-engine.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
 import type { WarmAnchorSnapshot } from "../compaction/warm-anchor.ts";
+import type { DynamicSystemPromptPart } from "../dynamic-prompt/build.ts";
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
@@ -145,6 +148,8 @@ export type CompactionRejectionCause =
 
 /** Options for extension UI dialogs. */
 export interface ExtensionUIDialogOptions {
+	/** Private local dialog: emits no generic blocked event or pending marker. Not an RPC field. */
+	ephemeral?: boolean;
 	/** AbortSignal to programmatically dismiss the dialog. */
 	signal?: AbortSignal;
 	/** Timeout in milliseconds. Dialog auto-dismisses with live countdown display. */
@@ -248,6 +253,11 @@ export interface ExtensionUIContext {
 		request: QuestionRequest,
 		opts?: ExtensionUIDialogOptions & {
 			onProgress?: (draft: { answers?: QuestionResponse["answers"]; comment?: string }) => void;
+			/**
+			 * How the answer reaches the model. A "user-message" answer is reported as a person's input when it
+			 * is delivered, so a UI adapter must not report it again.
+			 */
+			deliver?: "tool-result" | "user-message";
 		},
 	): Promise<QuestionResponse>;
 
@@ -259,6 +269,14 @@ export interface ExtensionUIContext {
 
 	/** Set status text in the footer/status bar. Pass undefined to clear. */
 	setStatus(key: string, text: string | undefined): void;
+
+	/**
+	 * Report the USD the subagent tree under this session has spent (every child, nested child and
+	 * background child, each counted once). The footer shows it after the session's own cost, as
+	 * `$0.380 (+1.270)`. Pass undefined to clear; a negative or non-finite figure clears it too.
+	 * Optional so UI contexts written before it keep compiling; call it as `ctx.ui.setSubagentCost?.(x)`.
+	 */
+	setSubagentCost?(costUsd: number | undefined): void;
 
 	/** Set the working/loading message shown during streaming. Call with no argument to restore default. */
 	setWorkingMessage(message?: string): void;
@@ -694,9 +712,13 @@ export interface PromptCachePrefixRequest {
 	readonly model: Model<Api>;
 	readonly context: Context;
 	readonly options: SimpleStreamOptions;
+	/** Sizes of the exact preview composition; never includes prompt or tool content. */
+	readonly sizeReport?: PromptSizeReport;
 }
 
 export interface PromptCachePrefixRequestOptions {
+	/** Inspect composition without resolving credentials (which may refresh over the network). */
+	readonly sizesOnly?: boolean;
 	/** Aborting stops the preview pass before its next handler and resolves the build as `skipped`. */
 	readonly signal?: AbortSignal;
 }
@@ -1279,6 +1301,8 @@ export interface ResourcesDiscoverResult {
 /** Fired when a session is started, loaded, or reloaded */
 export interface SessionStartEvent {
 	type: "session_start";
+	/** Diagnostic startup: built-in MCP attach and cache prewarm are skipped; every other handler runs; no turn starts. */
+	readonly sizesOnly?: boolean;
 	/** Why this session start happened. */
 	reason: "startup" | "reload" | "new" | "resume" | "fork";
 	/** Initial model resolver branch, when the session was resolved during this startup. */
@@ -2238,9 +2262,14 @@ export interface MessageEndEventResult {
 }
 
 export interface BeforeAgentStartEventResult {
-	message?: Pick<CustomMessage, "customType" | "content" | "display" | "details">;
+	message?: Pick<CustomMessage, "customType" | "content" | "display" | "details"> & {
+		/** Insert before this turn's triggering prompt instead of appending after it. */
+		placement?: "before-prompt";
+	};
 	/** Replace the complete system prompt for this turn. Later handlers observe this exact override. */
 	systemPrompt?: string;
+	/** Exact render parts of a complete replacement, used only by preview accounting. */
+	readonly systemPromptParts?: readonly DynamicSystemPromptPart[];
 }
 
 export interface SessionBeforeSwitchResult {
@@ -2419,6 +2448,8 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
  * ExtensionAPI passed to extension factory functions.
  */
 export interface ExtensionAPI {
+	/** Durable engine custody and generation-fenced child/workflow reporting. */
+	readonly lifecycle: LifecycleApi;
 	// =========================================================================
 	// Session Context
 	// =========================================================================
@@ -3124,6 +3155,8 @@ type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 export interface SendMessageOptions {
 	triggerTurn?: boolean;
 	deliverAs?: "steer" | "followUp" | "nextTurn";
+	/** A delivery ticket from `pi.lifecycle.obligations` (senpi#3864). */
+	ticket?: string;
 }
 
 /** One wake inside an itemized `sendMessage` batch (senpi#3811 design 4.5). */
@@ -3328,6 +3361,7 @@ export interface ExtensionRuntimeState {
  * Provided to runner.initialize(), copied into the shared runtime.
  */
 export interface ExtensionActions {
+	lifecycle?: LifecycleApi;
 	sendMessage: SendMessageHandler;
 	/** Hosts without itemized custody omit it: an itemized send is then delivered plainly and answers no receipts. */
 	sendItemizedMessage?: SendItemizedMessageHandler;

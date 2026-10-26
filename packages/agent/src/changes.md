@@ -1,3 +1,42 @@
+## 2026-10-24 - Settle response stop reasons before message_end (senpi#3029)
+
+### What changed
+
+- `packages/agent/src/assistant-terminal-state.ts`: `settleStopReason` promotes stops with pending tool calls and demotes tool use without tool calls.
+- `packages/agent/src/agent-loop.ts`: settle the stop reason before storing the terminal response and emitting `message_end` on normal, stream-end, and idle-finalization paths. Preserve response timing stamps and pass the same object to `finishTurn` and `turn_end`.
+
+### Why
+
+- Normalizing after `message_end` created an unpersisted copy. Identity-based entry lookup then failed and skipped every `turn_end` extension handler for that turn.
+
+### Why an extension could not handle it
+
+- The copy was made inside the loop between persistence and turn completion, with no extension hook between them.
+
+### Expected merge conflict zones
+
+- MEDIUM: `packages/agent/src/agent-loop.ts`, the response handling in `runLoop` and terminal branches in `streamAssistantResponse`.
+- LOW: `packages/agent/src/assistant-terminal-state.ts`, stop-reason normalization helpers.
+
+## 2026-10-23 - Product copy punctuation (senpi#4040)
+
+### What changed
+
+- `packages/agent/src/agent-loop.ts`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+
+### Why
+
+- The product-copy oxlint rule rejects em dashes in strings, templates and JSX text. Existing copy must pass it without changing control flow or punctuation matching.
+
+### Why an extension could not handle it
+
+- These source strings and lint directives are read before runtime extensions can rewrite them.
+
+### Expected merge conflict zones
+
+- The listed copy strings and adjacent lint comments only.
+
+
 ## 2026-10-21 - The agent loop stamps each response's timing (senpi#3879)
 
 ### What changed
@@ -39,6 +78,24 @@
 
 - LOW: `packages/agent/src/harness/compaction/compaction.ts`, `calculateContextTokens`. Preserve the existing fallback for providers without request measurements.
 
+## 2026-10-22 - Inspect both message queues (senpi#3864)
+
+### What changed
+
+- `packages/agent/src/agent.ts`: `peekQueuedMessages({ all: true })` returns steering and follow-up queues without consuming them.
+
+### Why
+
+- `packages/agent/src/agent.ts`: delivery-ticket retries must see every queued copy.
+
+### Why an extension could not handle it
+
+- `packages/agent/src/agent.ts`: the queues are private to `Agent`.
+
+### Expected merge conflict zones
+
+- `packages/agent/src/agent.ts`: `peekQueuedMessages`.
+
 ## 2026-10-21 - A run that failed in the queued-input port is marked local (senpi#3866)
 
 ### What changed
@@ -56,6 +113,24 @@
 ### Expected merge conflict zones
 
 - LOW: `packages/agent/src/agent.ts`, the import block, the `port` line in `takeQueuedMessages`, the `queuedInputPort` line in `createLoopConfig`, and the spread list of `handleRunFailure`'s failure message.
+
+## 2026-10-21 - Inspect both message queues for delivery-ticket retries (senpi#3864)
+
+### What changed
+
+`packages/agent/src/agent.ts`: `peekQueuedMessages({ all: true })` snapshots both steering and follow-up queues. Without the option it still previews only the next selected queue.
+
+### Why
+
+`packages/coding-agent/src/core/agent-session.ts` must detect a retained ticket in either queue before retrying admission; a pending steer must not hide an already queued follow-up.
+
+### Why an extension could not handle it
+
+The native agent owns both queues and their message identities.
+
+### Expected merge conflict zones
+
+`packages/agent/src/agent.ts`: queue preview methods.
 
 ## 2026-10-17 - Queued input's consumption is committed before a provider sees it (senpi#3549)
 

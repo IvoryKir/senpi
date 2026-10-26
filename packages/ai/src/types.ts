@@ -57,7 +57,7 @@ export type KnownImageApi = "openrouter-images" | "openai-images";
 
 export type ImageApi = KnownImageApi | (string & {});
 
-export type KnownClassifierApi = "typesafe-system-one" | "cloudflare-workers-ai-system-one" | "llama-cpp-classify";
+export type KnownClassifierApi = "typesafe-system-one" | "cloudflare-workers-ai-system-one";
 
 export type ClassifierApi = KnownClassifierApi | (string & {});
 
@@ -186,6 +186,8 @@ export interface ProviderResponse {
 /** Authentication, HTTP transport, and lifecycle callbacks shared by provider requests. */
 export interface ProviderRequestOptions<TModel = Model<Api>> {
 	signal?: AbortSignal;
+	/** Originating session working directory for subprocess-backed providers. */
+	cwd?: string;
 	/**
 	 * Abort the request when the provider reports that a safety classifier
 	 * declined the requested model and a substitute model served the turn
@@ -596,6 +598,8 @@ export interface Usage {
 		cacheWrite: number;
 		total: number;
 	};
+	/** The model has no known price, so `cost` is not a real amount; consumers must not report it as $0. */
+	costUnknown?: true;
 }
 
 /**
@@ -1390,6 +1394,8 @@ export interface ModelCostEffectiveRate extends ModelCostCard {
 export interface ModelCost extends ModelCostCard {
 	/** Scheduled list-price changes, each billed for requests at or after its `effectiveFrom`. */
 	effectiveRates?: ModelCostEffectiveRate[];
+	/** No price is known for this model (rates are placeholders): usage on it reports `costUnknown`, not a $0 cost. */
+	unknown?: true;
 }
 
 export interface ModelImageResizeOptions {

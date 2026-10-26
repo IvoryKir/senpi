@@ -1,22 +1,63 @@
-## 2026-10-23 - Exhausted extra usage downgrades only a requested legacy window (senpi#4065)
+## 2026-10-25 - Keep Claude Code auto memory out of subscription sessions (senpi#4219)
 
 ### What changed
 
-- `errors.ts`: recognizes Claude's exact `400 You're out of extra usage. Add more at claude.ai/settings/usage and keep going.` response as non-retryable billing by default, or a long-context refusal when the attempt requested `[1m]`.
-- `long-context-retry.ts`: passes the actual attempt's legacy-window flag to the shared classifier. Both the ambient retry and managed failover reuse their existing once-only, pre-content refusal path, recording the refusal before rebuilding options at 200k.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/auth-attempt.ts`: the shared resident and auxiliary dispatch boundary forces `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` after environment merging and sets inline SDK `autoMemoryEnabled` to false. Neither caller options nor inherited environment can enable Claude Code auto memory.
 
 ### Why
 
-The response does not mention long context, so the existing refusal matcher missed it. Treating it unconditionally as a refusal would incorrectly downgrade requests that never asked for the legacy tier.
+- Claude Code loads its private auto-memory index independently of `settingSources`, injecting notes from another tool into the subscription session. The policy is permanently off without a user-facing switch.
 
 ### Why an extension could not handle it
 
-This is the builtin extension's request-scoped SDK failure classification.
+- The bundled subscription adapter owns the final child environment and SDK dispatch for every authentication lane.
 
 ### Expected merge conflict zones
 
-- `errors.ts`: `classifySdkError` and the start of `classifyErrorKind`.
-- `long-context-retry.ts`: the classifier call in `classifyForRequest`.
+- LOW: `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/auth-attempt.ts`, immediately before the resident/auxiliary dispatch split.
+
+## 2026-10-24 - An assistant_rewritten decision names the first diverged path (senpi#1975)
+
+### What changed
+
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-commit-divergence.ts` (new): the semantic projection type, a depth-capped snapshot of the provider-final projection, and a bounded walk that returns the first diverged path: `content.length`, then per block `type`, its semantic fields (`text`, `thinking` / `thinkingSignature`, `id` / `name`), then toolCall `arguments.<path>` (objects dot-separated, arrays `[n]`), then `api` / `provider` / `model`. Only the path leaves the walk, never a value.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-commit-boundary.ts`: `captureProviderFinal` keeps a snapshot of the projection next to its digest, and `commit()` returns `{ outcome, divergedPath? }`. The digest input is unchanged, so stored and sidecar hashes stay comparable.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-registry-wiring.ts`: on `rewritten`, the path goes to `recordPendingFork` and onto the binding-invalidation ledger record.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-registry.ts`, `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-entry-annotations.ts`: entries carry `pendingForkDivergedPath`; a pending fork recorded without a path (compaction) clears it.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-observability.ts`: `ContinuityObservation.divergedPath`, passed through `observeSessionSyncDecision` and logged on `claude_sdk_oauth_session_continuity` when present.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-stream.ts`: the resident attempt passes the entry's path into the observation only when the observed reason is `assistant_rewritten`.
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/session-binding.ts`: `BindingInvalidation.divergedPath?` (records without it still validate).
+
+### Why
+
+- The decision said only that the committed assistant differed from what the provider streamed, not where. Each new member of the rewrite class (#691, #1472) had to be found by hand-diffing transcripts; the path turns the next one into a one-line diagnosis.
+
+### Why an extension could not handle it
+
+- The comparison happens inside the `message_end` commit boundary against the in-flight provider-final capture, which no other extension can see; only the boundary can compute the path.
+
+### Expected merge conflict zones
+
+- LOW: `session-commit-boundary.ts` (`AssistantCommitBoundary`), the `message_end` hunk in `session-registry-wiring.ts`, `annotatePendingFork`, the observation type and log line in `session-observability.ts`, one pass-through in `session-stream.ts`, the `BindingInvalidation` type.
+- MEDIUM: the 7925 / 691 / 1472 regressions assert the `{ outcome, divergedPath }` shape.
+
+## 2026-10-24 - Claude SDK requests use their session project (senpi#2848)
+
+### What changed
+
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/stream.ts`: resident and auxiliary requests, option construction, SDK query dispatch, and lane-settings reads share a strict session-cwd validator. Missing or relative directories fail clearly instead of selecting the host project. Provider registration uses the extension session's directory, and `/btw` and `look_at` forward their context's directory.
+
+### Why
+
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/stream.ts`: the host directory could select another project's Claude Code memory and disagree with the session's compaction-owner policy. Reported by @jaeheungahn in code-yeongyu/oh-my-openagent#11189.
+
+### Why an extension could not handle it
+
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/stream.ts`: this is the bundled SDK adapter's own query-options construction.
+
+### Expected merge conflict zones
+
+- `packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/stream.ts`: provider settings resolution and `buildAnthropicSubscriptionQueryOptions` arguments.
 
 ## 2026-10-22 - All-accounts refusals are pool verdicts, not auth failures (senpi#2081)
 
