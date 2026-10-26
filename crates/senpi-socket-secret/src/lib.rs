@@ -2,6 +2,8 @@ use napi_derive::napi;
 
 pub mod answers;
 pub mod classify;
+pub mod process_handle;
+pub mod process_identity;
 pub mod session;
 pub mod volume;
 
@@ -11,6 +13,10 @@ pub use answers::{
 };
 pub use classify::{
     classify, DriverPath, Locality, NotLocalReason, RemoteDevice, RemoteProtocol, VolumeFacts,
+};
+pub use process_handle::{observe_pid, ExitWait, OpenError, RetainedProcess};
+pub use process_identity::{
+    observe, GoneReason, Liveness, Observation, ProcessFacts, ProcessRecord, UnknownReason,
 };
 pub use session::{read_kernel_session_identity, SessionIdentity, UnverifiedReason};
 pub use volume::{probe_volume, ProbeError};
