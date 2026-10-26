@@ -294,6 +294,7 @@ export class PermissionService {
 			...entry.info,
 			patterns: [...entry.info.patterns],
 			always: [...entry.info.always],
+			...(entry.info.originalPaths ? { originalPaths: [...entry.info.originalPaths] } : {}),
 			metadata: { ...entry.info.metadata },
 			tool: entry.info.tool ? { ...entry.info.tool } : undefined,
 		}));

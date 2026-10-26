@@ -7,7 +7,7 @@ import { analyzeBashCommand, bestEffortCommandLines } from "../permission-system
 import {
 	type AlwaysScope,
 	extractExternalPaths,
-	isExternalPath,
+	resolveExternalPath,
 	toParentDirectoryPattern,
 } from "../permission-system/external-dir.ts";
 import type { Request } from "../permission-system/types.ts";
@@ -16,7 +16,10 @@ import { urlOriginAlias, widerAlwaysScope } from "./always-scope.ts";
 import { parseReadPermission } from "./read-permission.ts";
 
 /** Simplified permission request without ID/session metadata */
-export type PermissionRequest = Pick<Request, "permission" | "patterns" | "always" | "widerAlways"> & {
+export type PermissionRequest = Pick<
+	Request,
+	"permission" | "patterns" | "always" | "widerAlways" | "originalPaths"
+> & {
 	readonly autoApproveAsk?: true;
 	readonly ruleAliases?: readonly string[];
 };
@@ -90,7 +93,10 @@ function withExternalDirectoryRequests(
 	cwd: string,
 	scope: AlwaysScope,
 ): PermissionRequest[] {
-	const externalPaths = paths.filter((inputPath) => isExternalPath(inputPath, cwd));
+	const externalPaths = paths.flatMap((inputPath) => {
+		const target = resolveExternalPath(inputPath, cwd);
+		return target === undefined ? [] : [{ inputPath, target }];
+	});
 	if (externalPaths.length === 0) {
 		return requests;
 	}
@@ -99,8 +105,11 @@ function withExternalDirectoryRequests(
 		...requests,
 		{
 			permission: "external_directory",
-			patterns: externalPaths,
-			always: externalPaths.map((externalPath) => toParentDirectoryPattern(externalPath, scope)),
+			patterns: externalPaths.map(({ target }) => target),
+			always: externalPaths.map(({ target }) => toParentDirectoryPattern(target, scope)),
+			...(externalPaths.some(({ inputPath, target }) => inputPath !== target)
+				? { originalPaths: externalPaths.map(({ inputPath }) => inputPath) }
+				: {}),
 		},
 	];
 }
@@ -236,15 +245,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 
 			const requests = bashCommandRequests(command);
 			const externalPaths = extractExternalPaths(command, cwd);
-			if (externalPaths.length > 0) {
-				requests.push({
-					permission: "external_directory",
-					patterns: externalPaths,
-					always: externalPaths.map((externalPath) => toParentDirectoryPattern(externalPath, "file")),
-				});
-			}
-
-			return requests;
+			return withExternalDirectoryRequests(requests, externalPaths, cwd, "file");
 		};
 
 	registry.register("bash", parseBashLikePermission("command"));
