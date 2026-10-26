@@ -18,6 +18,13 @@ const HTML_ENTITIES: readonly (readonly [entity: string, character: number])[] =
 
 const MAX_SEPARATOR_LENGTH = 32;
 const MAX_SCHEME_GAP = 8;
+const PERCENT_WINDOW = 64;
+
+interface Unit {
+	character: number;
+	length: number;
+	refusal?: "percent-window";
+}
 
 export const isDigit = (c: number): boolean => c >= 48 && c <= 57;
 export const isUpper = (c: number): boolean => c >= 65 && c <= 90;
@@ -50,26 +57,72 @@ export function tokenUnitLength(text: string, i: number): number {
 	if (isTokenChar(c)) return 1;
 	if (c !== 37) return 0;
 	const unit = readUnit(text, i);
+	if (unit.refusal !== undefined) return 0;
 	return isTokenChar(unit.character) || unit.length === 1 ? unit.length : 0;
 }
 
+/**
+ * Repeated full-window percent decoding to a fixpoint, keeping each character's original source end.
+ * A pass shrinks the 64-character window by at least two, so both work and storage here are bounded.
+ * Malformed escapes are literal, but an unfinished escape at the window edge is not a proven boundary.
+ */
+function percentWindow(text: string, start: number, prefixEnd: number): Unit {
+	const characters = [37];
+	const ends = [prefixEnd];
+	const limit = Math.min(text.length, prefixEnd + PERCENT_WINDOW - 1);
+	for (let p = prefixEnd; p < limit; p++) {
+		characters.push(text.charCodeAt(p));
+		ends.push(p + 1);
+	}
+	let changed: boolean;
+	do {
+		changed = false;
+		let written = 0;
+		for (let p = 0; p < characters.length; p++) {
+			let c = characters[p] ?? 0;
+			const high = hexValue(characters[p + 1] ?? -1);
+			const low = hexValue(characters[p + 2] ?? -1);
+			if (c === 37 && high >= 0 && low >= 0) {
+				c = high * 16 + low;
+				p += 2;
+				changed = true;
+			}
+			characters[written] = c;
+			ends[written++] = ends[p] ?? prefixEnd;
+		}
+		characters.length = written;
+		ends.length = written;
+	} while (changed);
+
+	const character = characters[0] ?? 37;
+	if (character === 37 && limit < text.length) {
+		const second = characters[1] ?? 37;
+		const third = characters[2] ?? 37;
+		// A later pass could turn an unresolved "%" into a hex digit and complete this escape.
+		if (second === 37 || (hexValue(second) >= 0 && third === 37)) {
+			return { character, length: limit - start, refusal: "percent-window" };
+		}
+	}
+	return { character, length: (ends[0] ?? prefixEnd) - start };
+}
+
 /** One logical character and its full source width, shared by token, delimiter and word-boundary scans. */
-export function readUnit(text: string, i: number): { character: number; length: number } {
+export function readUnit(text: string, i: number): Unit {
 	const c = text.charCodeAt(i);
 	if (c === 37) {
 		let end = i + 1;
 		let decoded = c;
-		// %25252F is one "/", not "%" followed by the word "252F". Each encoding layer contributes "25".
-		// Walk those layers once, without allocating a decoded string or rescanning any prefix.
+		// Collapse literal %25 layers in one forward walk before the bounded full-window decoder.
+		// This is the fixpoint of that prefix, not a depth cap: even million-layer canonical chains stay linear.
 		while (end + 1 < text.length) {
 			const high = hexValue(text.charCodeAt(end));
 			const low = hexValue(text.charCodeAt(end + 1));
 			if (high < 0 || low < 0) break;
 			decoded = high * 16 + low;
 			end += 2;
-			if (decoded !== 37) break;
+			if (decoded !== 37) return { character: decoded, length: end - i };
 		}
-		return { character: decoded, length: end - i };
+		return percentWindow(text, i, end);
 	}
 	if (c === 38) {
 		for (const [entity, character] of HTML_ENTITIES) {
@@ -84,6 +137,8 @@ export function readUnit(text: string, i: number): { character: number; length: 
 
 export interface Delimiter {
 	end: number;
+	/** The first unresolved percent window; callers conservatively redact from here to the end. */
+	refusalStart: number;
 	/** One ":" or "=" between quotes, escapes and spaces, then an optional "[" or "{". */
 	separator: boolean;
 	opensObject: boolean;
@@ -107,6 +162,7 @@ export interface Delimiter {
 export function emptyDelimiter(): Delimiter {
 	return {
 		end: 0,
+		refusalStart: -1,
 		separator: false,
 		opensObject: false,
 		braceDepth: 0,
@@ -145,8 +201,14 @@ export function readDelimiter(text: string, i: number, d: Delimiter): void {
 	d.endsUserinfo = false;
 	d.quote = -1;
 	d.quoteBackslashes = 0;
+	d.refusalStart = -1;
 	while (position < text.length && tokenUnitLength(text, position) === 0) {
 		const unit = readUnit(text, position);
+		if (unit.refusal !== undefined) {
+			d.refusalStart = position;
+			position = text.length;
+			break;
+		}
 		const c = unit.character;
 		if (units === 0) first = c;
 		else if (!isSpace(c)) tagShape = false;
@@ -201,6 +263,7 @@ export function quotedValueEnd(text: string, i: number, quote: number, depth: nu
 			continue;
 		}
 		const unit = readUnit(text, position);
+		if (unit.refusal !== undefined) return text.length;
 		if (unit.character === quote && backslashes <= depth) return position - backslashes;
 		backslashes = 0;
 		position += unit.length;

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
-import { redactSecrets } from "../src/utils/provider-error.ts";
+import { redactCredentialShapes, redactSecrets } from "../src/utils/provider-error.ts";
 import { characterReads } from "./redaction-work.ts";
 
 const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
@@ -40,6 +40,11 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 	["one arbitrarily deep encoded boundary", (size) => `x%${"25".repeat(size)}2Fsk-abcd`],
 	["deep encoded delimiter", (size) => `api_key%${"25".repeat(size)}3Dx`],
 	["repeated nested escapes", (size) => fill("%25252Fsk-abcd", size)],
+	["independently encoded hex digits", (size) => fill("%25%32%46sk-abcd", size)],
+	["mixed-depth encoded hex digits", (size) => fill("%2525%32Fsk-abcd", size)],
+	["encoded JWT dots", (size) => fill("/eyJaaaaaaaa%25%32%45bbbbb%2Eccccc", size)],
+	["unresolved percent window", (size) => `${"%".repeat(size)}32Fsk-abcd`],
+	["deep encoded hex digit", (size) => `x%25%${"25".repeat(size)}32Fsk-abcd`],
 	["HTML entities", (size) => fill("&quot;", size)],
 	["130-character names", (size) => fill(`${"a".repeat(130)}_api_key: x `, size)],
 	["model-not-found prose heads", (size) => fill("the model ", size)],
@@ -74,6 +79,10 @@ describe("redactSecrets grows linearly", () => {
 	for (const [label, make] of SHAPES) {
 		it(`on ${label}`, () => {
 			for (const ratio of growth((text) => redactSecrets(text), make)) expect(ratio).toBeLessThan(MAX_GROWTH);
+		});
+		it(`in shapes mode on ${label}`, () => {
+			for (const ratio of growth((text) => redactCredentialShapes(text), make))
+				expect(ratio).toBeLessThan(MAX_GROWTH);
 		});
 	}
 

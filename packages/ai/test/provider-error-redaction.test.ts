@@ -43,6 +43,37 @@ const ENCODING_CELLS = ["/", ":", "@", "=", "?", "&", "#", " ", "+", "~", "-", "
 	),
 );
 
+// Encode any of the three characters of an escape independently, including at different depths.
+// The same matrix owns positives and ordinary URL controls through both public redactors.
+for (const separator of ["/", ":", "@", "=", "?", "&", "#", " ", "+", "~", "-", "."]) {
+	for (const hexCase of ENCODING_CASES) {
+		const escape = encoded(separator, 1, hexCase);
+		for (const depths of [
+			...[0, 1, 2].flatMap((a) => [0, 1, 2].flatMap((b) => [0, 1, 2].map((c) => [a, b, c]))),
+			[3, 2, 1],
+			[1, 3, 2],
+		]) {
+			const boundary = [...escape].map((c, index) => encoded(c, depths[index] ?? 0, hexCase)).join("");
+			for (const [kind, value, shaped] of [
+				["sk-proj", sk, true],
+				["ghp", ghp, true],
+				["JWT", jwt, true],
+				["encoded JWT dots", jwt.split(".").join(boundary), separator === "."],
+				["AWS", `AKIA${"FIXTURE"}000000010`, true],
+				["ordinary URL", "example.test/tasks-abc?model=faux-1&stream=true", false],
+			] as const) {
+				if (kind === "encoded JWT dots" && separator !== ".") continue;
+				ENCODING_CELLS.push({
+					label: `${JSON.stringify(separator)} independent depths ${depths.join("/")} ${hexCase} ${kind}`,
+					text: `x${boundary}${value}`,
+					value,
+					shaped,
+				});
+			}
+		}
+	}
+}
+
 describe("encoded separator equivalence", () => {
 	it.each(ENCODING_CELLS)("$label", ({ text, value, shaped }) => {
 		const full = redactSecrets(text);
@@ -77,6 +108,43 @@ describe("encoded separator equivalence", () => {
 			]) {
 				expect(redactSecrets(text)).toBe(text);
 				expect(redactCredentialShapes(text)).toBe(text);
+			}
+		}
+	});
+
+	it.each([0, 1, 2, 3])("interprets URL passwords only in full mode at depth %i", (depth) => {
+		const e = (c: string): string => encoded(c, depth, "mixed");
+		const text = `https${e(":")}${e("/")}${e("/")}user${e(":")}hunter2pass${e("@")}example.test`;
+		expect(redactSecrets(text)).toBe(`https${e(":")}${e("/")}${e("/")}user${e(":")}[REDACTED]${e("@")}example.test`);
+		expect(redactCredentialShapes(text)).toBe(text);
+	});
+
+	it.each([":x //user:hunter2pass@host", ":x y //user:hunter2pass@host"])(
+		"does not carry stale userinfo state into shapes mode: %s",
+		(text) => {
+			expect(redactSecrets(text)).toBe(text);
+			expect(redactCredentialShapes(text)).toBe(text);
+		},
+	);
+
+	it.each([redactSecrets, redactCredentialShapes])("redacts conservatively on an unresolved window: %s", (redact) => {
+		for (const head of ["", `x/${sk} `, "api_key"]) {
+			const text = `${head}%${"%25".repeat(80)}%33%44${secret}`;
+			const result = redact(text);
+			expect(result).toContain("[REDACTED]");
+			expect(result).not.toContain(secret);
+			expect(result).not.toContain(sk);
+			expect(redact(result)).toBe(result);
+		}
+	});
+
+	it.each([1, 32, 4096])("joins canonical depth %i to independently encoded hex digits", (depth) => {
+		for (const suffix of ["%32%46", "%32F", "2%46", "%2532%2546"]) {
+			const boundary = `%${"25".repeat(depth)}${suffix}`;
+			for (const redact of [redactSecrets, redactCredentialShapes]) {
+				expect(redact(`x${boundary}${sk}`)).toBe(`x${boundary}[REDACTED]`);
+				const ordinary = `https://example.test/${boundary}tasks-abc?model=faux-1`;
+				expect(redact(ordinary)).toBe(ordinary);
 			}
 		}
 	});

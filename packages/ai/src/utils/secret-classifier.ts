@@ -183,17 +183,19 @@ function jwtAt(text: string, p: number, end: number): number {
 	let length = 0;
 	let firstDot = -1;
 	let i = p;
-	for (; i < end; i++) {
-		const c = text.charCodeAt(i);
+	for (; i < end;) {
+		const unit = readUnit(text, i);
+		const c = unit.character;
 		if (c === 46) {
 			if (firstDot < 0) firstDot = i;
-			const next = i + 1 < end ? text.charCodeAt(i + 1) : 0;
+			const next = i + unit.length < end ? readUnit(text, i + unit.length).character : 0;
 			if (segments === 3) return length >= 5 && !isBase64Url(next) ? -1 : firstDot;
 			if (length < (segments === 1 ? 8 : 5)) return firstDot;
 			segments++;
 			length = 0;
 		} else if (isBase64Url(c)) length++;
 		else break;
+		i += unit.length;
 	}
 	if (segments === 3 && length >= 5) return -1;
 	return firstDot >= 0 ? firstDot : i;

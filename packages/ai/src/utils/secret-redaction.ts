@@ -22,9 +22,9 @@ import {
 import {
 	bareValueEnd,
 	emptyDelimiter,
-	matchesAt,
 	quotedValueEnd,
 	readDelimiter,
+	readUnit,
 	tokenUnitLength,
 } from "./secret-lexer.ts";
 
@@ -54,6 +54,7 @@ function secretRanges(text: string, shapesOnly = false): number[] {
 	let before = emptyDelimiter();
 	let after = emptyDelimiter();
 	readDelimiter(text, 0, before);
+	if (before.refusalStart >= 0) return [before.refusalStart, text.length];
 	let i = before.end;
 	let mode: Mode = "none";
 	let strict = false;
@@ -71,7 +72,7 @@ function secretRanges(text: string, shapesOnly = false): number[] {
 		while (i < text.length) {
 			const length = tokenUnitLength(text, i);
 			if (length === 0) break;
-			if (text.charCodeAt(i) === 47) slashes++;
+			if (readUnit(text, i).character === 47) slashes++;
 			i += length;
 		}
 		const end = i;
@@ -79,16 +80,23 @@ function secretRanges(text: string, shapesOnly = false): number[] {
 		i = after.end;
 		const valueEnd = after.paddingEnd;
 		const valueLength = valueEnd - start;
+		if (after.refusalStart >= 0) {
+			// Do not let a bounded decoder refusal expose either an earlier shape or an unknown named value.
+			addRange(ranges, start, text.length);
+			break;
+		}
 
-		if (userinfoStart >= 0) {
+		if (!shapesOnly && userinfoStart >= 0) {
 			if (slashes > 0 || end - userinfoStart > MAX_USERINFO_LENGTH) userinfoStart = -1;
 			else if (after.at >= 0) {
 				if (after.at > userinfoStart) addRange(ranges, userinfoStart, after.at);
 				userinfoStart = -1;
 			} else if (after.endsUserinfo) userinfoStart = -1;
 		}
-		const authority = slashes === 2 && matchesAt(text, start, "//", end);
-		if (authority && before.colonOnly && after.colonOnly) userinfoStart = after.end;
+		const first = readUnit(text, start);
+		const authority =
+			slashes === 2 && first.character === 47 && readUnit(text, start + first.length).character === 47;
+		if (!shapesOnly && authority && before.colonOnly && after.colonOnly) userinfoStart = after.end;
 
 		const shape = credentialShapeStart(text, start, end);
 		if (shape >= 0) addRange(ranges, shape, end);
