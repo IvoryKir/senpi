@@ -1,8 +1,8 @@
 // Every sink of provider error text runs the session's redaction (sensitive-output.ts) synchronously, so its work
-// must grow linearly with the input (senpi#4283). Timing is never compared with a fixed budget, only how it grows from
-// 1x to 10x to 100x of the same shape.
+// must grow linearly with the input (senpi#4283). Count scanner character reads from 1x to 10x to 100x, not wall time.
 
 import { describe, expect, it } from "vitest";
+import { characterReads } from "../../../ai/test/redaction-work.ts";
 import { redactSecrets, redactSensitiveOutput } from "../../src/core/sensitive-output.ts";
 
 const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
@@ -21,26 +21,15 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 ];
 
 const BASE = 10_000;
-// A linear pass grows about 10x per step; a quadratic one grows 100x. Timings under a millisecond are noise.
+// A linear pass grows about 10x per step; a quadratic one grows 100x.
 const MAX_GROWTH = 30;
-const NOISE_FLOOR_MS = 1;
-
-function fastestMs(run: () => void): number {
-	let best = Number.POSITIVE_INFINITY;
-	for (let attempt = 0; attempt < 3; attempt++) {
-		const start = performance.now();
-		run();
-		best = Math.min(best, performance.now() - start);
-	}
-	return best;
-}
 
 function growth(run: (text: string) => void, make: (size: number) => string): readonly number[] {
-	const times = [BASE, BASE * 10, BASE * 100].map((size) => {
+	const reads = [BASE, BASE * 10, BASE * 100].map((size) => {
 		const text = make(size);
-		return fastestMs(() => run(text));
+		return characterReads(() => run(text));
 	});
-	return [1, 2].map((step) => (times[step] ?? 0) / Math.max(times[step - 1] ?? 0, NOISE_FLOOR_MS));
+	return [1, 2].map((step) => (reads[step] ?? 0) / Math.max(reads[step - 1] ?? 0, 1));
 }
 
 describe("the session redaction grows linearly", () => {

@@ -38,20 +38,6 @@ function hexValue(c: number): number {
 	return -1;
 }
 
-function percentDecoded(text: string, i: number): number {
-	if (i + 2 >= text.length) return -1;
-	const high = hexValue(text.charCodeAt(i + 1));
-	const low = hexValue(text.charCodeAt(i + 2));
-	return high < 0 || low < 0 ? -1 : high * 16 + low;
-}
-
-/** Whether the three-character percent unit at i is token punctuation that starts a new word. */
-export function isEncodedWordBoundary(text: string, i: number): boolean {
-	if (text.charCodeAt(i) !== 37) return false;
-	const decoded = percentDecoded(text, i);
-	return decoded === 47 || decoded === 43 || decoded === 126 || decoded === 45 || decoded === 46;
-}
-
 export function matchesAt(text: string, i: number, literal: string, limit = text.length): boolean {
 	if (i + literal.length > limit) return false;
 	for (let k = 0; k < literal.length; k++) if (text.charCodeAt(i + k) !== literal.charCodeAt(k)) return false;
@@ -63,27 +49,37 @@ export function tokenUnitLength(text: string, i: number): number {
 	const c = text.charCodeAt(i);
 	if (isTokenChar(c)) return 1;
 	if (c !== 37) return 0;
-	const decoded = percentDecoded(text, i);
-	if (decoded < 0) return 1;
-	return isTokenChar(decoded) ? 3 : 0;
+	const unit = readUnit(text, i);
+	return isTokenChar(unit.character) || unit.length === 1 ? unit.length : 0;
 }
 
-/** The delimiter unit at i, packed as (logical character << 3) | length: escapes and entities read as what they encode. */
-function delimiterUnit(text: string, i: number): number {
+/** One logical character and its full source width, shared by token, delimiter and word-boundary scans. */
+export function readUnit(text: string, i: number): { character: number; length: number } {
 	const c = text.charCodeAt(i);
 	if (c === 37) {
-		const decoded = percentDecoded(text, i);
-		return decoded < 0 ? (c << 3) | 1 : (decoded << 3) | 3;
+		let end = i + 1;
+		let decoded = c;
+		// %25252F is one "/", not "%" followed by the word "252F". Each encoding layer contributes "25".
+		// Walk those layers once, without allocating a decoded string or rescanning any prefix.
+		while (end + 1 < text.length) {
+			const high = hexValue(text.charCodeAt(end));
+			const low = hexValue(text.charCodeAt(end + 1));
+			if (high < 0 || low < 0) break;
+			decoded = high * 16 + low;
+			end += 2;
+			if (decoded !== 37) break;
+		}
+		return { character: decoded, length: end - i };
 	}
 	if (c === 38) {
 		for (const [entity, character] of HTML_ENTITIES) {
-			if (matchesAt(text, i, entity)) return (character << 3) | entity.length;
+			if (matchesAt(text, i, entity)) return { character, length: entity.length };
 		}
 	}
-	if (c === 0xff1a) return (58 << 3) | 1;
-	if (c === 0x201c || c === 0x201d) return (34 << 3) | 1;
-	if (c === 0x2018 || c === 0x2019) return (39 << 3) | 1;
-	return (c << 3) | 1;
+	if (c === 0xff1a) return { character: 58, length: 1 };
+	if (c === 0x201c || c === 0x201d) return { character: 34, length: 1 };
+	if (c === 0x2018 || c === 0x2019) return { character: 39, length: 1 };
+	return { character: c, length: 1 };
 }
 
 export interface Delimiter {
@@ -150,11 +146,11 @@ export function readDelimiter(text: string, i: number, d: Delimiter): void {
 	d.quote = -1;
 	d.quoteBackslashes = 0;
 	while (position < text.length && tokenUnitLength(text, position) === 0) {
-		const unit = delimiterUnit(text, position);
-		const c = unit >> 3;
+		const unit = readUnit(text, position);
+		const c = unit.character;
 		if (units === 0) first = c;
 		else if (!isSpace(c)) tagShape = false;
-		if (padding && c === 61) d.paddingEnd = position + (unit & 7);
+		if (padding && c === 61) d.paddingEnd = position + unit.length;
 		else {
 			padding = false;
 			if (c === 59 || c === 44) gapMarks++;
@@ -177,13 +173,12 @@ export function readDelimiter(text: string, i: number, d: Delimiter): void {
 		backslashes = c === 92 ? backslashes + 1 : 0;
 		last = c;
 		units++;
-		position += unit & 7;
+		position += unit.length;
 	}
-	const length = position - i;
 	d.end = position;
-	d.separator = separators === 1 && separatorShape && length <= MAX_SEPARATOR_LENGTH;
+	d.separator = separators === 1 && separatorShape && units <= MAX_SEPARATOR_LENGTH;
 	d.pairEquals = units === 1 && first === 61;
-	d.cookieGap = gapMarks === 1 && gapShape && length <= MAX_SEPARATOR_LENGTH;
+	d.cookieGap = gapMarks === 1 && gapShape && units <= MAX_SEPARATOR_LENGTH;
 	d.spaceOnly = units > 0 && spaces === units && units <= MAX_SCHEME_GAP;
 	d.endsWithLt = last === 60;
 	d.closesTag = first === 62 && tagShape;
@@ -205,10 +200,10 @@ export function quotedValueEnd(text: string, i: number, quote: number, depth: nu
 			position++;
 			continue;
 		}
-		const unit = delimiterUnit(text, position);
-		if (unit >> 3 === quote && backslashes <= depth) return position - backslashes;
+		const unit = readUnit(text, position);
+		if (unit.character === quote && backslashes <= depth) return position - backslashes;
 		backslashes = 0;
-		position += unit & 7;
+		position += unit.length;
 	}
 	return position;
 }

@@ -49,7 +49,7 @@ function addRange(ranges: number[], start: number, end: number): void {
 type Mode = "none" | "scheme" | "value" | "cookie" | "cookie-value" | "object";
 
 /** The [start, end) ranges of every credential in text, found in one left-to-right pass. */
-function secretRanges(text: string): number[] {
+function secretRanges(text: string, shapesOnly = false): number[] {
 	const ranges: number[] = [];
 	let before = emptyDelimiter();
 	let after = emptyDelimiter();
@@ -92,6 +92,7 @@ function secretRanges(text: string): number[] {
 
 		const shape = credentialShapeStart(text, start, end);
 		if (shape >= 0) addRange(ranges, shape, end);
+		if (shapesOnly) continue;
 		if (bearerArmed && valueLength >= MIN_BEARER_LENGTH && !isInert(text, start, end)) {
 			addRange(ranges, start, valueEnd);
 		}
@@ -184,14 +185,5 @@ export function redactSecrets(text: string, replacement = "[REDACTED]"): string 
 
 /** Mask only credential-shaped runs (known key prefixes and JWTs), whatever surrounds them. One linear pass. */
 export function redactCredentialShapes(text: string, replacement = "[REDACTED]"): string {
-	const ranges: number[] = [];
-	let i = 0;
-	while (i < text.length) {
-		const start = i;
-		for (let length = tokenUnitLength(text, i); length > 0; length = tokenUnitLength(text, i)) i += length;
-		const shape = i > start ? credentialShapeStart(text, start, i) : -1;
-		if (shape >= 0) ranges.push(shape, i);
-		if (i === start) i++;
-	}
-	return replaceRanges(text, ranges, replacement);
+	return replaceRanges(text, secretRanges(text, true), replacement);
 }

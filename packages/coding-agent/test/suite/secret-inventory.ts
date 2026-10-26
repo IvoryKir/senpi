@@ -245,6 +245,25 @@ export const SECRET_CELLS: readonly SecretCell[] = [
 	...ROUND_4_CELLS,
 	...ROUND_6_CELLS,
 	...ROUND_8_CELLS,
+	// Nested lexical units must survive the full provider -> session -> sink path, not just the exported helpers.
+	...[2, 3].flatMap((depth) => {
+		const e = (hex: string): string => `%${"25".repeat(depth - 1)}${hex}`;
+		return [
+			{
+				name: `review: depth ${depth} encoded remote`,
+				secret: ghp,
+				text: `https${e("3A")}${e("2f")}${e("2F")}${ghp}${e("40")}github.com`,
+			},
+			{ name: `review: depth ${depth} encoded key`, secret: sk, text: `x${e("2f")}${sk}` },
+			{ name: `review: depth ${depth} encoded JWT`, secret: jwt, text: `redirect%3D${e("2F")}cb${e("2f")}${jwt}` },
+			{ name: `review: depth ${depth} encoded AWS`, secret: akia, text: `x${e("2F")}${akia}` },
+			{
+				name: `review: depth ${depth} encoded generic value`,
+				secret: secretFor(9400 + depth),
+				text: `api_key${e("3d")}${secretFor(9400 + depth)}`,
+			},
+		];
+	}),
 	...named,
 	...prefixed,
 ];

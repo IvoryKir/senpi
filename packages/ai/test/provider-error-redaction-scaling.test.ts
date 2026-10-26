@@ -1,12 +1,13 @@
 // The credential redactor runs synchronously on every provider error (the stream boundary) and every log line, so its
-// work must grow linearly with the input (senpi#4283). Each shape stresses one path of the scanner; timing is never
-// compared with a fixed budget, only how it grows from 1x to 10x to 100x of the same shape.
+// work must grow linearly with the input (senpi#4283). Each shape stresses one path of the scanner; count character
+// reads at 1x, 10x and 100x, independent of host load or GC.
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 import { redactSecrets } from "../src/utils/provider-error.ts";
+import { characterReads } from "./redaction-work.ts";
 
 const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
 
@@ -36,6 +37,9 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 	["escaped quotes after a name", (size) => `key${fill('\\"', size)}`],
 	["percent escapes", (size) => fill("%41", size)],
 	["encoded / and near misses inside one token", (size) => fill("%2Fsk-abcd%2FeyJ", size)],
+	["one arbitrarily deep encoded boundary", (size) => `x%${"25".repeat(size)}2Fsk-abcd`],
+	["deep encoded delimiter", (size) => `api_key%${"25".repeat(size)}3Dx`],
+	["repeated nested escapes", (size) => fill("%25252Fsk-abcd", size)],
 	["HTML entities", (size) => fill("&quot;", size)],
 	["130-character names", (size) => fill(`${"a".repeat(130)}_api_key: x `, size)],
 	["model-not-found prose heads", (size) => fill("the model ", size)],
@@ -55,26 +59,15 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 ];
 
 const BASE = 10_000;
-// A linear pass grows about 10x per step; a quadratic one grows 100x. Timings under a millisecond are noise.
+// A linear pass grows about 10x per step; a quadratic one grows 100x.
 const MAX_GROWTH = 30;
-const NOISE_FLOOR_MS = 1;
-
-function fastestMs(run: () => void): number {
-	let best = Number.POSITIVE_INFINITY;
-	for (let attempt = 0; attempt < 3; attempt++) {
-		const start = performance.now();
-		run();
-		best = Math.min(best, performance.now() - start);
-	}
-	return best;
-}
 
 function growth(run: (text: string) => void, make: (size: number) => string): readonly number[] {
-	const times = [BASE, BASE * 10, BASE * 100].map((size) => {
+	const reads = [BASE, BASE * 10, BASE * 100].map((size) => {
 		const text = make(size);
-		return fastestMs(() => run(text));
+		return characterReads(() => run(text));
 	});
-	return [1, 2].map((step) => (times[step] ?? 0) / Math.max(times[step - 1] ?? 0, NOISE_FLOOR_MS));
+	return [1, 2].map((step) => (reads[step] ?? 0) / Math.max(reads[step - 1] ?? 0, 1));
 }
 
 describe("redactSecrets grows linearly", () => {
@@ -189,7 +182,7 @@ const REDACTOR_SOURCES = [
 
 // An architecture contract, not a behavior test: the redactor runs synchronously on every provider error and log line,
 // so it must stay linear by construction (senpi#4283). The secret-* scanner modules hold no regular expression at all,
-// and the remaining redactor sources hold none with a nested quantifier, the shape that backtracks. Timing tests only
+// and the remaining redactor sources hold none with a nested quantifier, the shape that backtracks. Work-count tests only
 // sample shapes; this guard keeps a new pattern from reintroducing the class they cannot all cover.
 
 describe("the redactor sources", () => {

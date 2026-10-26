@@ -6,12 +6,81 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { redactSecrets, sanitizeProviderErrorMessage } from "../src/utils/provider-error.ts";
+import { redactCredentialShapes } from "../src/utils/secret-redaction.ts";
 
 const secret = ["zzfixture", "4283", "valueQ"].join("");
 const json = (value: unknown): string => JSON.stringify(value);
 const ghp = `ghp_${"FIXTURE".repeat(3)}0008`;
 const sk = `sk-${"proj"}FIXTURE0006`;
 const jwt = ["eyJhbGciOiJub25lIn0", "eyJzdWIiOiJmaXh0dXJlIn0", "Zml4dHVyZS1zaWcx"].join(".");
+
+// senpi#4283: both public paths must consume the same logical separator, never its hex suffix. Generic values
+// without a credential name remain readable in both; only the full redactor interprets credential names.
+const ENCODING_CASES = ["upper", "lower", "mixed"] as const;
+function encoded(separator: string, depth: number, hexCase: (typeof ENCODING_CASES)[number]): string {
+	if (depth === 0) return separator;
+	const hex = separator.charCodeAt(0).toString(16).padStart(2, "0");
+	const digits = hexCase === "upper" || (hexCase === "mixed" && depth % 2 === 0) ? hex.toUpperCase() : hex;
+	return `%${"25".repeat(depth - 1)}${digits}`;
+}
+
+const ENCODING_CELLS = ["/", ":", "@", "=", "?", "&", "#", " ", "+", "~", "-", "."].flatMap((separator) =>
+	[0, 1, 2, 3].flatMap((depth) =>
+		ENCODING_CASES.flatMap((hexCase) =>
+			[
+				["sk-proj", `sk-${"proj-"}FIXTURE0006`, true],
+				["ghp", ghp, true],
+				["JWT", jwt, true],
+				["AWS", `AKIA${"FIXTURE"}000000010`, true],
+				["generic", secret, false],
+			].map(([kind, value, shaped]) => ({
+				label: `${JSON.stringify(separator)} depth ${depth} ${hexCase} ${kind}`,
+				text: `x${encoded(separator, depth, hexCase)}${value}`,
+				value: String(value),
+				shaped: Boolean(shaped),
+			})),
+		),
+	),
+);
+
+describe("encoded separator equivalence", () => {
+	it.each(ENCODING_CELLS)("$label", ({ text, value, shaped }) => {
+		const full = redactSecrets(text);
+		const shapes = redactCredentialShapes(text);
+		expect(shapes).toBe(full);
+		if (shaped) {
+			expect(full).toContain("[REDACTED]");
+			expect(full).not.toContain(value);
+		} else expect(full).toBe(text);
+	});
+
+	it.each([1, 2, 3, 32, 4096])("consumes depth %i once in URLs and named values", (depth) => {
+		const e = (c: string): string => encoded(c, depth, "mixed");
+		for (const text of [
+			`https${e(":")}${e("/")}${e("/")}${ghp}${e("@")}github.com`,
+			`redirect${e("=")}${e("/")}cb${e("/")}${jwt}`,
+		]) {
+			expect(redactCredentialShapes(text)).toBe(redactSecrets(text));
+			expect(redactSecrets(text)).toContain("[REDACTED]");
+		}
+		expect(redactSecrets(`api_key${e("=")}${secret}`)).toBe(`api_key${e("=")}[REDACTED]`);
+		expect(redactCredentialShapes(`api_key${e("=")}${secret}`)).toBe(`api_key${e("=")}${secret}`);
+	});
+
+	it.each([0, 1, 2, 3])("keeps ordinary encoded URLs readable at depth %i", (depth) => {
+		for (const hexCase of ENCODING_CASES) {
+			const e = (c: string): string => encoded(c, depth, hexCase);
+			for (const text of [
+				`https${e(":")}${e("/")}${e("/")}example.test${e("/")}tasks-abc${e("?")}model${e("=")}faux-1${e("&")}stream${e("=")}true${e("#")}cb`,
+				...["A", "_", "0"].map((c) => `x${e(c)}${sk}`),
+				`x%GG${sk}`,
+			]) {
+				expect(redactSecrets(text)).toBe(text);
+				expect(redactCredentialShapes(text)).toBe(text);
+			}
+		}
+	});
+});
 
 const REDACTED_SHAPES: readonly (readonly [label: string, text: string, leaked: string])[] = [
 	["header line", `x-api-key: ${secret}`, secret],
