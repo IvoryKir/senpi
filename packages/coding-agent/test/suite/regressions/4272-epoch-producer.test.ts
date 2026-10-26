@@ -5,11 +5,36 @@ import {
 	type RecoveryCarrier,
 	recoveryCarrier,
 	SessionRecoveryIdentity,
+	setSessionRecoveryEpoch,
 } from "../../../src/core/session-recovery-identity.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { within } from "./4272-worker-acceptance-support.ts";
 
 type Frame = { record: { type: string; message: { role: string; content: string } }; recovery: RecoveryCarrier };
+
+it("same-epoch rebind preserves open messages, while a new epoch clears them", () => {
+	const session = {};
+	const identity = new SessionRecoveryIdentity("epoch", session);
+	const assistant = { type: "message_start", message: { role: "assistant" } };
+	const user = { type: "message_start", message: { role: "user" } };
+	identity.observe(assistant);
+	identity.observe(user);
+	setSessionRecoveryEpoch(session, "epoch");
+	const update = { type: "message_update", message: { role: "assistant" } };
+	const userEnd = { type: "message_end", message: user.message };
+	identity.observe(update);
+	identity.observe(userEnd);
+	expect(recoveryCarrier(update)).toEqual(recoveryCarrier(assistant));
+	expect(recoveryCarrier(userEnd)).toEqual(recoveryCarrier(user));
+	setSessionRecoveryEpoch(session, "new-epoch");
+	const orphan = { type: "message_update", message: { role: "assistant" } };
+	const newUserEnd = { type: "message_end", message: user.message };
+	identity.observe(orphan);
+	identity.observe(newUserEnd);
+	expect(recoveryCarrier(orphan)).toBeUndefined();
+	expect(recoveryCarrier(newUserEnd)?.epoch).toBe("new-epoch");
+	expect(recoveryCarrier(newUserEnd)?.messageId).not.toBe(recoveryCarrier(user)?.messageId);
+});
 
 async function mint(epoch: string, workerFrame: boolean): Promise<Frame> {
 	const record = { type: "message_end", message: { role: "user", content: "a direct terminal" } };

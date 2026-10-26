@@ -14,6 +14,7 @@ it("T1 R24.1 R24.2 Q7 worker terminals join, failures survive, and replacement f
 	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
 	const host = await workerAcceptanceHost();
 	let file: string | undefined;
+	let releaseSnapshot: (() => void) | undefined;
 	try {
 		const { sessionId, worker } = await host.open();
 		const lane = worker.acceptance;
@@ -22,7 +23,10 @@ it("T1 R24.1 R24.2 Q7 worker terminals join, failures survive, and replacement f
 		if (!file) throw new Error("no worker file");
 		const cuts: FrozenAcceptedRoot[] = [];
 		const enqueue = host.writer.enqueue.bind(host.writer);
+		let stateResponse = false;
 		vi.spyOn(host.writer, "enqueue").mockImplementation((id, record) => {
+			if ("type" in record && record.type === "response" && "command" in record && record.command === "get_state")
+				stateResponse = true;
 			if ("type" in record && record.type === "message_end" && "message" in record) {
 				const role = Reflect.get(Object(record.message), "role");
 				if (role === "user" || role === "assistant") cuts.push(lane.freeze());
@@ -65,10 +69,18 @@ it("T1 R24.1 R24.2 Q7 worker terminals join, failures survive, and replacement f
 			.filter(({ frame }) => "type" in frame.record && frame.record.type === "message_end");
 		expect(newEnds.length).toBeGreaterThan(0);
 		expect(newEnds.every(({ frame }) => frame.recovery?.epoch === lane.recoveryEpoch)).toBe(true);
+		// Hold the snapshot after get_state's response: exchange() blocks the actual worker on this
+		// unreturned credit, so it cannot race synthetic output. Terminate it before releasing the hold.
+		const held = host.holdReconcile((message) => stateResponse && message?.type === "snapshot");
+		releaseSnapshot = held.release;
+		expect((await host.request({ type: "get_state", sessionId })).success).toBe(true);
+		await held.reached;
 		const deliver = async (record: object, recovery: OutputFrame["recovery"]) => {
+			const ordinal: unknown = Reflect.get(worker, "expectedOrdinal");
+			if (typeof ordinal !== "number") throw new Error("missing client ordinal seam");
 			const frame: OutputFrame = {
 				type: "output",
-				ordinal: host.frames.length,
+				ordinal,
 				record,
 				recovery,
 				signal: new SharedArrayBuffer(4),
@@ -92,5 +104,6 @@ it("T1 R24.1 R24.2 Q7 worker terminals join, failures survive, and replacement f
 	} finally {
 		if (file) chmodSync(file, 0o644);
 		await host.dispose();
+		releaseSnapshot?.();
 	}
 }, 90000);

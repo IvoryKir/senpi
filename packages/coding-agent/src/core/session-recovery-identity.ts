@@ -45,6 +45,7 @@ export class SessionRecoveryIdentity {
 	}
 
 	reset(epoch: string): void {
+		if (epoch === this.epoch) return;
 		this.epoch = epoch;
 		this.openAssistant = undefined;
 		this.byMessage = new WeakMap();

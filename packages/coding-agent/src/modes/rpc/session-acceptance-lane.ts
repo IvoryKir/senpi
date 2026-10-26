@@ -140,8 +140,7 @@ export class SessionAcceptanceLane {
 		for (const transition of transitions) {
 			this.sequence += 1;
 			this.transcript.apply(transition);
-			if (transition.kind === "append" && this.transcript.freeze().unavailable === null)
-				this.settled.append(transition);
+			if (transition.kind === "append" && this.transcript.available) this.settled.append(transition);
 		}
 	}
 
