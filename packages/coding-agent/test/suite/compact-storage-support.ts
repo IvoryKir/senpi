@@ -14,11 +14,18 @@ export interface IoHold {
  * Real filesystem I/O with deterministic hold points: each `hold(kind)` parks the next operation of
  * that kind until the test releases or fails it, so spill and reclamation schedules need no timers.
  */
-export function controlledIo(): { io: CompactStorageIo; hold(kind: "write" | "unlink"): IoHold } {
+export function controlledIo(): {
+	io: CompactStorageIo;
+	hold(kind: "write" | "unlink", match?: (path: string) => boolean): IoHold;
+} {
 	const holds: Record<"write" | "unlink", IoHold[]> = { write: [], unlink: [] };
-	const gates = new Map<IoHold, { entered: (path: string) => void; gate: Promise<void> }>();
+	const gates = new Map<
+		IoHold,
+		{ entered: (path: string) => void; gate: Promise<void>; match: (path: string) => boolean }
+	>();
 	const pass = async (kind: "write" | "unlink", path: string) => {
-		const hold = holds[kind].shift();
+		const index = holds[kind].findIndex((hold) => gates.get(hold)?.match(path));
+		const hold = index < 0 ? undefined : holds[kind].splice(index, 1)[0];
 		const gate = hold && gates.get(hold);
 		if (!gate) return;
 		gate.entered(path);
@@ -36,7 +43,7 @@ export function controlledIo(): { io: CompactStorageIo; hold(kind: "write" | "un
 				await unlink(path);
 			},
 		},
-		hold(kind) {
+		hold(kind, match = () => true) {
 			const entered = Promise.withResolvers<string>();
 			const gate = Promise.withResolvers<void>();
 			const hold: IoHold = {
@@ -44,7 +51,7 @@ export function controlledIo(): { io: CompactStorageIo; hold(kind: "write" | "un
 				release: () => gate.resolve(),
 				fail: (cause) => gate.reject(cause),
 			};
-			gates.set(hold, { entered: entered.resolve, gate: gate.promise });
+			gates.set(hold, { entered: entered.resolve, gate: gate.promise, match });
 			holds[kind].push(hold);
 			return hold;
 		},

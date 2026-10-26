@@ -16,9 +16,12 @@ afterEach(async () => {
 
 async function setup(options: Partial<CompactSessionStateOptions> = {}) {
 	const root = await spoolRoot();
-	cleanups.push(root.cleanup);
 	const control = controlledIo();
 	const state = new CompactSessionState({ dir: root.dir, io: control.io, compactAboveRows: 3, ...options });
+	cleanups.push(async () => {
+		await state.retire();
+		await root.cleanup();
+	});
 	return { state, control, dir: root.dir };
 }
 
@@ -52,7 +55,7 @@ async function compactionInFlight() {
 	settle(state, "m1", "a1");
 	settle(state, "m2", "b2");
 	await state.idle();
-	const pageWrite = control.hold("write");
+	const pageWrite = control.hold("write", (path) => /[/\\]page-/.test(path));
 	settle(state, "m3", "");
 	expect(await pageWrite.entered).toContain("page-");
 	return { ...setupResult, pageWrite };
@@ -86,6 +89,7 @@ describe("compact content index: transitions racing a compaction", () => {
 
 		expect(state.storageStatus()).toMatchObject({ failures: [], overrideSlots: 1 });
 		expect(await texts(state)).toEqual({ m1: "a1", m2: "new2", m3: "" });
+		expect(state.storageStatus().spilledLiveBytes).toBe(12);
 
 		for (const id of ["m4", "m5"]) settle(state, id, "");
 		await state.idle();
@@ -96,7 +100,7 @@ describe("compact content index: transitions racing a compaction", () => {
 
 	it("keeps the previous index after a failed page write, and the next compaction publishes", async () => {
 		const { state, control } = await setup();
-		const pageWrite = control.hold("write");
+		const pageWrite = control.hold("write", (path) => /[/\\]page-/.test(path));
 		for (const id of ["m1", "m2", "m3"]) settle(state, id, "");
 		await pageWrite.entered;
 		pageWrite.fail(new Error("disk full"));
@@ -109,13 +113,14 @@ describe("compact content index: transitions racing a compaction", () => {
 
 		settle(state, "m4", "");
 		await state.idle();
-		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 4, overrideSlots: 0 });
+		// m4's newly owned value is not committed when the three older eligible rows are selected.
+		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 3, overrideSlots: 1 });
 		expect(Object.keys(await texts(state))).toEqual(["m1", "m2", "m3", "m4"]);
 	});
 
 	it("publishes nothing once retirement started", async () => {
 		const { state, control, dir } = await setup();
-		const pageWrite = control.hold("write");
+		const pageWrite = control.hold("write", (path) => /[/\\]page-/.test(path));
 		for (const id of ["m1", "m2", "m3"]) settle(state, id, "");
 		await pageWrite.entered;
 		const retired = state.retire();

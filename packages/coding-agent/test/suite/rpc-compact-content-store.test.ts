@@ -15,9 +15,9 @@ afterEach(async () => {
 
 async function setup(options: Partial<CompactSessionStateOptions> = {}) {
 	const root = await spoolRoot();
-	cleanups.push(root.cleanup);
 	const control = controlledIo();
 	const state = new CompactSessionState({ dir: root.dir, io: control.io, ...options });
+	cleanups.push(() => state.retire().then(root.cleanup));
 	return { state, control, dir: root.dir };
 }
 
@@ -148,7 +148,7 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 	it("never lets an old compaction erase a newer override or resurrect a removed row", async () => {
 		const { state, control } = await setup({ compactAboveRows: 3 });
 		for (const id of ["m1", "m2", "m3"]) state.accept(start(id, ""));
-		const pageWrite = control.hold("write");
+		const pageWrite = control.hold("write", (path) => /[/\\]page-/.test(path));
 		for (const id of ["m1", "m2", "m3"])
 			state.accept({ type: "message_status", messageId: id, persistence: "pending" });
 		await pageWrite.entered;
@@ -159,7 +159,8 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 		pageWrite.release();
 		await state.idle();
 
-		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 1, overrideSlots: 1, deletionMasks: 0 });
+		// The immutable old body remains a valid base beneath the newer field-reference override.
+		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 2, overrideSlots: 1, deletionMasks: 0 });
 		const persistence = async (cut = state.freeze()) => {
 			const view = await state.read(cut);
 			state.release(cut);
@@ -258,7 +259,7 @@ describe("compact content store: reclamation and retirement (ruling 08 condition
 		await state.idle();
 		expect(state.storageStatus()).toMatchObject({ spilledLiveBytes: 131_072, reclaimDebtBytes: 0 });
 
-		const firstUnlink = control.hold("unlink");
+		const firstUnlink = control.hold("unlink", (path) => /[/\\]leaf-/.test(path));
 		state.accept({ type: "message_remove", messageId: "m1" });
 		await firstUnlink.entered;
 		expect(state.storageStatus()).toMatchObject({ spilledLiveBytes: 0, reclaimDebtBytes: 131_072 });

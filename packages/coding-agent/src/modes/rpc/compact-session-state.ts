@@ -45,7 +45,7 @@ interface SettledRow {
 interface FrozenCompactState {
 	readonly sequence: number;
 	readonly active: ReadonlyMap<string, readonly FrozenBlock[]>;
-	readonly settled: FrozenIndex<SettledRow>;
+	readonly settled: FrozenIndex;
 }
 
 export interface CompactSessionStateOptions extends CompactContentStoreOptions {
