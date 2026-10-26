@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
+import { correlatedRecord } from "./client-message-events.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
 interface AcceptedRef {
@@ -10,11 +11,14 @@ interface AcceptedRef {
 	readonly turnId: string | null;
 }
 
-/** Accepted transcript appends since bootstrap: `entries` is shared append-only storage, read up to `count`. */
+/**
+ * Accepted transcript appends since bootstrap, named by entry id (never a copy of the content): `entryIds` is
+ * shared append-only storage, read up to `count`.
+ */
 interface TranscriptRoot {
 	readonly historyVersion: number;
 	readonly leafId: string | null;
-	readonly entries: readonly string[];
+	readonly entryIds: readonly string[];
 	readonly count: number;
 }
 
@@ -76,7 +80,7 @@ export class SessionAcceptanceLane {
 	private sequence = 0;
 	private historyVersion = 0;
 	private leafId: string | null = null;
-	private entries: string[] = [];
+	private entryIds: string[] = [];
 	private activeMessageId: string | null = null;
 	private turnId: string | null = null;
 	private correlation: AcceptedCorrelation | null = null;
@@ -97,7 +101,7 @@ export class SessionAcceptanceLane {
 		this.sequence = 0;
 		this.historyVersion = 0;
 		this.leafId = input.leafId;
-		this.entries = [];
+		this.entryIds = [];
 		this.activeMessageId = null;
 		this.turnId = null;
 		this.correlation = null;
@@ -134,8 +138,8 @@ export class SessionAcceptanceLane {
 			transcript: Object.freeze({
 				historyVersion: this.historyVersion,
 				leafId: this.leafId,
-				entries: this.entries,
-				count: this.entries.length,
+				entryIds: this.entryIds,
+				count: this.entryIds.length,
 			}),
 		});
 		this.live.add(root);
@@ -154,7 +158,9 @@ export class SessionAcceptanceLane {
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
 	private acceptCorrelation(record: object): void {
-		if (!("clientMessageId" in record) && !("clientTurnId" in record)) return;
+		// A correlated kind with no identity (a trigger turn, an extension steer) ends a standing correlation.
+		const identified = "clientMessageId" in record || "clientTurnId" in record;
+		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
 		const next = {
 			clientMessageId: field(record, "clientMessageId"),
 			clientTurnId: field(record, "clientTurnId"),
@@ -172,12 +178,12 @@ export class SessionAcceptanceLane {
 		this.correlation = Object.freeze({ sequence: this.sequence, ...next });
 	}
 
-	/** The root owns a serialized value: the manager may later mutate the entry object (mirror trimming). */
+	/** The host keeps the id only: no content copy or serialization per append, and nothing aliases the entry. */
 	private acceptAppend(entry: unknown): void {
-		if (typeof entry !== "object" || entry === null) return;
+		const id = typeof entry === "object" && entry !== null ? field(entry, "id") : undefined;
+		if (typeof id !== "string") return;
 		this.historyVersion += 1;
-		const id = field(entry, "id");
-		this.leafId = typeof id === "string" ? id : this.leafId;
-		this.entries.push(JSON.stringify(entry));
+		this.leafId = id;
+		this.entryIds.push(id);
 	}
 }

@@ -188,6 +188,35 @@ it("mints opaque message and turn ids at their start, at a start-less terminal, 
 	});
 });
 
+// Part of #4272, review MEDIUM-2: the host keeps each accepted append's id, never a serialized copy of its content.
+it("keeps host retention per accepted append bounded: entry ids only, no stringify on the host loop", () => {
+	const lane = new SessionAcceptanceLane();
+	lane.bootstrap({ leafId: null });
+	const content = "x".repeat(256 * 1024);
+	const appends = 64;
+	const entries = Array.from({ length: appends }, (_, index) => ({
+		type: "message",
+		id: `e${index}`,
+		parentId: index === 0 ? null : `e${index - 1}`,
+		message: { role: "toolResult", content },
+	}));
+	const stringify = vi.spyOn(JSON, "stringify");
+	const refs = entries.map((entry) => lane.accept({ type: "entry_appended", entry }, undefined));
+	const calls = stringify.mock.calls.length;
+	stringify.mockRestore();
+	expect(calls, "no serialization per append on the host loop").toBe(0);
+	expect(refs.map((ref) => ref?.historyVersion)).toEqual(entries.map((_, index) => index + 1));
+	// Mirror trimming mutates the manager's entry objects later; the root names entries, it does not alias them.
+	for (const entry of entries) entry.parentId = "trimmed";
+	const root = lane.freeze();
+	expect(root.transcript.count).toBe(appends);
+	expect(root.transcript.leafId).toBe(`e${appends - 1}`);
+	expect(root.transcript.entryIds.slice(0, root.transcript.count)).toEqual(entries.map((entry) => entry.id));
+	const retained = JSON.stringify(root.transcript).length;
+	expect(retained, "retention is the ids, independent of entry size").toBeLessThan(appends * 16 + 128);
+	lane.release(root);
+});
+
 // Part of #4272, ruling 10: the accepted baseline exists before the router admits a connection to the session.
 it.each([true, false])("bootstrap precedes in-process admission (flag on: %s)", async (flag) => {
 	if (flag) vi.stubEnv(FLAG, "1");

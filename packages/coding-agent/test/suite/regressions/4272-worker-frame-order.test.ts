@@ -6,6 +6,7 @@ const FLAG = "SENPI_ENGINE_SOCKET_COMPACT_UPDATES";
 
 afterEach(() => {
 	vi.unstubAllEnvs();
+	vi.restoreAllMocks();
 });
 
 function frame(ordinal: number): OutputFrame {
@@ -22,11 +23,11 @@ function frame(ordinal: number): OutputFrame {
  * Opens one real worker session, then hands the host the frames `build` returns for the next expected ordinal,
  * as if the isolate had sent them. Every wait is bounded, so a hang fails the test instead of stalling it.
  */
-async function deliver(build: (expected: number) => readonly OutputFrame[], refuseWrites = false) {
+async function deliver(build: (expected: number) => readonly OutputFrame[]) {
 	vi.stubEnv(FLAG, "1");
 	const host = await workerAcceptanceHost();
 	try {
-		const { sessionId, worker } = await host.open();
+		const { worker } = await host.open();
 		const lane = worker.acceptance;
 		if (!lane) throw new Error("flag on: the worker client owns an acceptance lane");
 		const before = lane.freeze();
@@ -34,8 +35,6 @@ async function deliver(build: (expected: number) => readonly OutputFrame[], refu
 		const expected = host.frames.length;
 		expect(expected, "the isolate already sent ordered frames, so a duplicate ordinal exists").toBeGreaterThan(0);
 		const sent = build(expected);
-		if (refuseWrites)
-			host.writer.closeSession(sessionId, { type: "response", command: "close_session", success: true });
 		for (const message of sent) worker.worker.emit("message", message);
 		const credits = await within("credits", Promise.all(sent.map((message) => creditOf(message.signal))));
 		await within("worker incarnation exits", worker.exited);
@@ -76,11 +75,38 @@ it("Q4 reorder: frames arriving out of order are both denied credit and fail the
 	expect(result.after.sessionEpoch).toBe(result.before.sessionEpoch);
 }, 60_000);
 
-it("Q4 writer refusal: an in-order frame the writer refuses gets no credit and publishes no partial root", async () => {
-	const result = await deliver((expected) => [frame(expected)], true);
-	expect(result.credits).toEqual([WORKER_CREDIT_CODES.conflict]);
-	expect(result.failures).toEqual(["session_output_overflow_or_closed"]);
-	expect(result.retired).toBe(true);
-	expect(result.after.sequence, "no partial acceptance").toBe(result.before.sequence);
-	expect(result.after.sessionEpoch).toBe(result.before.sessionEpoch);
+// The session stays open: the frame is accepted first, then the writer refuses it (the real order).
+it("Q4 writer refusal: an in-order frame the writer refuses gets no credit, retires the lane and publishes no root past it", async () => {
+	vi.stubEnv(FLAG, "1");
+	const host = await workerAcceptanceHost();
+	try {
+		const { worker } = await host.open();
+		const lane = worker.acceptance;
+		if (!lane) throw new Error("flag on: the worker client owns an acceptance lane");
+		const held = lane.freeze();
+		const sent = frame(host.frames.length);
+		const enqueue = host.writer.enqueue.bind(host.writer);
+		let atRefusal: { sequence: number; retired: boolean } | undefined;
+		vi.spyOn(host.writer, "enqueue").mockImplementation((sessionId, record) => {
+			if (record !== sent.record) return enqueue(sessionId, record);
+			const root = lane.freeze();
+			lane.release(root);
+			atRefusal = { sequence: root.sequence, retired: lane.retired };
+			return false;
+		});
+		worker.worker.emit("message", sent);
+		const credit = await within("credit", creditOf(sent.signal));
+		expect(atRefusal, "the lane accepted the frame before the writer refused it").toEqual({
+			sequence: held.sequence + 1,
+			retired: false,
+		});
+		expect(credit, "a refused frame gets no credit").toBe(WORKER_CREDIT_CODES.conflict);
+		await within("worker incarnation exits", worker.exited);
+		expect(host.failures).toEqual(["session_output_overflow_or_closed"]);
+		expect(lane.retired, "the refusal retires the incarnation's lane").toBe(true);
+		expect(lane.liveRoots, "the root published before the refused frame was released").toBe(0);
+		expect(lane.accept({ type: "agent_start" }, undefined), "the retired lane accepts nothing more").toBe(undefined);
+	} finally {
+		await host.dispose();
+	}
 }, 60_000);
