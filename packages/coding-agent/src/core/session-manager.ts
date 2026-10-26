@@ -24,7 +24,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { appendFile, type FileHandle, open, readdir, rm } from "fs/promises";
+import { appendFile, type FileHandle, open, readdir, rm, truncate } from "fs/promises";
 import { basename, join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
@@ -1172,6 +1172,8 @@ export class SessionManager {
 	private ownedHeaderFile: string | undefined;
 	// Set when an append to the flushed file failed and may have left a partial last line.
 	private tailMayBeTorn = false;
+	/** The file entries a failed header catch-up left off disk (from `from` on); written before the next append. */
+	private unwritten: { readonly entries: FileEntry[]; from: number } | undefined;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	// Runtime-only identity tracking lets AgentSession compare messages to a
@@ -1676,12 +1678,15 @@ export class SessionManager {
 		const serialize = (batch: readonly FileEntry[]): string =>
 			batch.map((e) => `${JSON.stringify(this.residentStore.materialize(e))}\n`).join("");
 		let written = 0;
+		let durable = { entries: 0, bytes: 0 };
 		let handle: FileHandle | undefined = await open(sessionFile, "wx");
 		try {
 			while (written < entries.length) {
 				const batch = entries.slice(written);
 				written += batch.length;
-				await handle.writeFile(serialize(batch));
+				const text = serialize(batch);
+				await handle.writeFile(text);
+				durable = { entries: written, bytes: durable.bytes + Buffer.byteLength(text) };
 			}
 			const closing = handle;
 			handle = undefined;
@@ -1690,18 +1695,41 @@ export class SessionManager {
 			while (written < entries.length && this.sessionFile === sessionFile && this.fileEntries === entries) {
 				const batch = entries.slice(written);
 				written += batch.length;
-				await appendFile(sessionFile, serialize(batch));
+				const text = serialize(batch);
+				await appendFile(sessionFile, text);
+				durable = { entries: written, bytes: durable.bytes + Buffer.byteLength(text) };
 			}
 		} catch (error) {
-			// This write created the file: a part-written one would fail every later first flush with
-			// EEXIST while the entries it was carrying stayed in memory only. Nothing counts as flushed yet.
-			return discardFailedFirstFlushAsync(sessionFile, handle, error);
+			// While the exclusive handle is open nothing is whole yet: a part-written file would fail every later first
+			// flush with EEXIST, so it is removed and nothing counts as flushed.
+			if (handle !== undefined) return discardFailedFirstFlushAsync(sessionFile, handle, error);
+			// The header and the first entries are on disk and closed: keep them (senpi#4295). Cut what the failed
+			// append landed, and write the entries it carried before this session's next append.
+			await this._keepCaughtUpPrefix(sessionFile, entries, durable);
+			throw error;
 		}
 		// Synchronous with the last check above: no entry can land between it and the flag.
 		if (this.sessionFile === sessionFile && this.fileEntries === entries && written === entries.length) {
 			this.flushed = true;
 			this.ownedHeaderFile = sessionFile;
 		}
+	}
+
+	private async _keepCaughtUpPrefix(
+		sessionFile: string,
+		entries: FileEntry[],
+		durable: { readonly entries: number; readonly bytes: number },
+	): Promise<void> {
+		try {
+			await truncate(sessionFile, durable.bytes);
+		} catch (cutError) {
+			if (!(cutError instanceof Error)) throw cutError;
+			this.tailMayBeTorn = true;
+		}
+		if (this.sessionFile !== sessionFile || this.fileEntries !== entries) return;
+		this.unwritten = { entries, from: durable.entries };
+		this.flushed = true;
+		this.ownedHeaderFile = sessionFile;
 	}
 
 	/**
@@ -1733,6 +1761,13 @@ export class SessionManager {
 				this.tailMayBeTorn = false;
 			}
 			try {
+				// Entries a failed header catch-up left off disk go first, one line each, so a later failure resumes there.
+				const unwritten = this.unwritten?.entries === this.fileEntries ? this.unwritten : undefined;
+				for (const pending of unwritten?.entries.slice(unwritten.from) ?? []) {
+					appendFileSync(this.sessionFile, `${JSON.stringify(this.residentStore.materialize(pending))}\n`);
+					if (unwritten) unwritten.from++;
+				}
+				this.unwritten = undefined;
 				appendFileSync(this.sessionFile, `${JSON.stringify(persistedEntry)}\n`);
 			} catch (error) {
 				this.tailMayBeTorn = true;
@@ -3088,14 +3123,14 @@ export class SessionManager {
 			parentSession: resolvedSourcePath,
 		};
 		reserveSessionWrite(newSessionFile);
-		writeFileSync(newSessionFile, `${JSON.stringify(newHeader)}\n`, { flag: "wx" });
-
-		// Copy all non-header entries from source
-		for (const entry of sourceEntries) {
-			if (entry.type !== "session") {
-				appendFileSync(newSessionFile, `${JSON.stringify(entry)}\n`);
-			}
+		if (existsSync(newSessionFile)) {
+			throw Object.assign(new Error(`EEXIST: file already exists, open '${newSessionFile}'`), { code: "EEXIST" });
 		}
+		// Built in a temp file and renamed into place: a full disk part-way leaves no partial fork in the session list.
+		const forkLines = [newHeader, ...sourceEntries.filter((entry) => entry.type !== "session")].map(
+			(entry) => `${JSON.stringify(entry)}\n`,
+		);
+		replaceFileAtomically(newSessionFile, forkLines);
 
 		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
 	}

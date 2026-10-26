@@ -8,12 +8,20 @@ import { SessionManager } from "../src/core/session-manager.ts";
 const hooks = vi.hoisted(() => ({
 	beforeClose: undefined as (() => void) | undefined,
 	writeFails: undefined as Error | undefined,
+	appendFails: undefined as Error | undefined,
 }));
 
 vi.mock("fs/promises", async (importOriginal) => {
 	const real = await importOriginal<typeof import("fs/promises")>();
 	return {
 		...real,
+		appendFile: async (...args: Parameters<typeof real.appendFile>) => {
+			const failure = hooks.appendFails;
+			if (failure === undefined || typeof args[1] !== "string") return real.appendFile(...args);
+			hooks.appendFails = undefined;
+			await real.appendFile(args[0], args[1].slice(0, Math.floor(args[1].length / 2)));
+			throw failure;
+		},
 		open: async (...args: Parameters<typeof real.open>) => {
 			const handle = await real.open(...args);
 			const writeFile = handle.writeFile.bind(handle);
@@ -39,6 +47,7 @@ const roots: string[] = [];
 afterEach(() => {
 	hooks.beforeClose = undefined;
 	hooks.writeFails = undefined;
+	hooks.appendFails = undefined;
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -139,5 +148,34 @@ describe("persistHeaderNow's asynchronous header write", () => {
 		expect(manager.isTranscriptFlushed()).toBe(true);
 		expect(idsOnDisk(file)).toEqual(manager.getEntries().map((entry) => entry.id));
 		expect(manager.getEntries()).toHaveLength(4);
+	});
+
+	it("keeps the header and entries already on disk when only the catch-up append fails, and writes the rest next", async () => {
+		// Given a header write whose catch-up append (entries persisted while its handle closed) runs out of space
+		const { manager, file } = freshSession();
+		manager.appendCustomEntry("before", { n: 0 });
+		hooks.beforeClose = () => {
+			hooks.beforeClose = undefined;
+			manager.appendCustomEntry("during-close", { n: 1 });
+			hooks.appendFails = Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+		};
+
+		// When the header write settles and, once there is space, the next entry is appended
+		await expect(manager.persistHeaderNow()).rejects.toMatchObject({ code: "ENOSPC" });
+		const kept = existsSync(file)
+			? linesOnDisk(file).map((line) => (line.type === "session" ? "session" : line.customType))
+			: [];
+		manager.appendCustomEntry("after", { n: 2 });
+
+		// Then the written prefix stayed on disk, and the file then holds every entry memory holds, once, in order
+		expect(kept).toEqual(["session", "before"]);
+		expect(manager.isTranscriptFlushed()).toBe(true);
+		expect(linesOnDisk(file).map((line) => (line.type === "session" ? "session" : line.customType))).toEqual([
+			"session",
+			"before",
+			"during-close",
+			"after",
+		]);
+		expect(idsOnDisk(file)).toEqual(manager.getEntries().map((entry) => entry.id));
 	});
 });
