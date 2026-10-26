@@ -3,9 +3,9 @@
 //! receipt. Fixture-dependent cases are `#[ignore]` and run there with `--ignored`; every case is
 //! ignored off Windows, with the reason in its attribute.
 
-use senpi_socket_secret::{
-    classify, probe_volume, read_kernel_session_identity, Locality, NotLocalReason, SessionIdentity,
-};
+#[cfg(windows)]
+use senpi_socket_secret::{classify, probe_volume, Locality, NotLocalReason};
+use senpi_socket_secret::{read_kernel_session_identity, SessionIdentity};
 
 #[cfg(windows)]
 fn receipt_volume(label: &str, path: &str) -> Locality {
