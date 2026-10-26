@@ -20,7 +20,7 @@ tests/native_receipts.rs  Native receipts 27 and 28; real Windows only
 - Locality comes from the kernel driver in the volume's I/O path (`FileFsDriverPathInformation`), never from the reported file-system name alone. Local needs the full conjunction (driver in path, `FILE_REMOTE_DEVICE` clear, no remote-protocol information, neither driver query failed). Any query failure, from either driver query included, is `not_local`; only the exact codes in `src/answers.rs` (design Revisions 8.2/8.3) are answers, and a new code joins that list only with a primary-source meaning and a receipt.
 - The classifying handle follows reparse points. Never open it with `FILE_FLAG_OPEN_REPARSE_POINT`.
 - `SessionIdentity` has no `PartialEq` on purpose; compare with `same_session`, under which `Unverified` matches nothing.
-- Publication never writes the final path, never copies or truncates, and a collision is only ERROR_ALREADY_EXISTS/ERROR_FILE_EXISTS; staging is deleted through its own handle.
+- Publication never writes the final path, never copies or truncates, and a collision is only ERROR_ALREADY_EXISTS/ERROR_FILE_EXISTS. One handle (`GENERIC_WRITE | DELETE`, share read only) writes, flushes and renames the staging file, and on any outcome but `Published` deletes it through that handle; nothing is reopened or deleted by path, and a failed delete is reported.
 - Prebuilds and the loader are not wired yet; this crate ships no artifact until the packaging change lands.
 
 ## VALIDATION

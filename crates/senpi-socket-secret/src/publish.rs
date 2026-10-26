@@ -1,8 +1,10 @@
 //! First publication of the public socket secret on Windows (#4199 design 4.3 and 4.5): a private
 //! same-directory staging file created with `CREATE_NEW` and an explicit protected DACL, written in
-//! full and flushed, then renamed onto the final name with `ReplaceIfExists = FALSE`. A destination
-//! collision loses to the winner; every other failure keeps its own cause and never falls back to a
-//! copy, truncate or direct final-path write.
+//! full and flushed, then renamed onto the final name with `ReplaceIfExists = FALSE`. One handle does
+//! all of it, so the object renamed is the object written, and on any outcome but `Published` that
+//! same handle deletes it; nothing is ever reopened or deleted by path. A destination collision loses
+//! to the winner; every other failure keeps its own cause and never falls back to a copy, truncate or
+//! direct final-path write.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublishOutcome {
@@ -45,7 +47,7 @@ mod windows_publish {
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, FileDispositionInfo, FileRenameInfo, FlushFileBuffers, SetFileInformationByHandle,
         WriteFile, CREATE_NEW, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_DISPOSITION_INFO, FILE_RENAME_INFO,
-        FILE_SHARE_DELETE, FILE_SHARE_READ, OPEN_EXISTING, SYNCHRONIZE,
+        FILE_SHARE_READ,
     };
 
     struct OwnedHandle(HANDLE);
@@ -103,35 +105,32 @@ mod windows_publish {
             lpSecurityDescriptor: descriptor.as_ptr(),
             bInheritHandle: 0,
         };
-        let staging_wide = wide(staging);
-        {
-            let writer = open(&staging_wide, GENERIC_WRITE, 0, CREATE_NEW, &attributes)
-                .ok_or_else(|| last_error("create_staging"))?;
-            let written = write_all(&writer, bytes).and_then(|()| {
-                // SAFETY: `writer` is a live handle opened for writing.
-                (unsafe { FlushFileBuffers(writer.0) } != 0)
-                    .then_some(())
-                    .ok_or_else(|| last_error("flush"))
-            });
-            if let Err(error) = written {
-                drop(writer);
-                remove_staging(&staging_wide);
-                return Err(error);
+        // FILE_SHARE_READ admits readers of the final name between the rename and this handle's close;
+        // no other process may write to or delete the object while this handle holds it.
+        let writer = open(
+            &wide(staging),
+            GENERIC_WRITE | DELETE,
+            FILE_SHARE_READ,
+            CREATE_NEW,
+            &attributes,
+        )
+        .ok_or_else(|| last_error("create_staging"))?;
+        let outcome = write_all(&writer, bytes)
+            .and_then(|()| flush(&writer))
+            .and_then(|()| rename_no_replace(&writer, final_path));
+        if !matches!(outcome, Ok(PublishOutcome::Published)) {
+            if let Err(code) = mark_for_deletion(&writer) {
+                eprintln!("senpi-socket-secret: staging file was not deleted (Windows error {code})");
             }
         }
-        let mover = open(
-            &staging_wide,
-            DELETE | SYNCHRONIZE,
-            FILE_SHARE_READ | FILE_SHARE_DELETE,
-            OPEN_EXISTING,
-            std::ptr::null(),
-        )
-        .ok_or_else(|| last_error("reopen_staging"))?;
-        let outcome = rename_no_replace(&mover, final_path);
-        if !matches!(outcome, Ok(PublishOutcome::Published)) {
-            mark_for_deletion(&mover);
-        }
         outcome
+    }
+
+    fn flush(handle: &OwnedHandle) -> Result<(), PublishError> {
+        // SAFETY: `handle` is a live handle opened for writing.
+        (unsafe { FlushFileBuffers(handle.0) } != 0)
+            .then_some(())
+            .ok_or_else(|| last_error("flush"))
     }
 
     fn write_all(handle: &OwnedHandle, bytes: &[u8]) -> Result<(), PublishError> {
@@ -144,7 +143,7 @@ mod windows_publish {
                 WriteFile(
                     handle.0,
                     remaining.as_ptr(),
-                    remaining.len() as u32,
+                    u32::try_from(remaining.len()).unwrap_or(u32::MAX),
                     &mut written,
                     std::ptr::null_mut(),
                 )
@@ -191,11 +190,12 @@ mod windows_publish {
         }
     }
 
-    /// Deletes this exact staging object through its own handle, never by path.
-    fn mark_for_deletion(handle: &OwnedHandle) {
+    /// Deletes this exact staging object through its own handle, never by path; `Err` carries the
+    /// `GetLastError` value when the disposition could not be set.
+    fn mark_for_deletion(handle: &OwnedHandle) -> Result<(), u32> {
         let info = FILE_DISPOSITION_INFO { DeleteFile: true };
         // SAFETY: `info` is a valid FILE_DISPOSITION_INFO and its exact size is passed.
-        unsafe {
+        let ok = unsafe {
             SetFileInformationByHandle(
                 handle.0,
                 FileDispositionInfo,
@@ -203,17 +203,7 @@ mod windows_publish {
                 std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
             )
         };
-    }
-
-    fn remove_staging(staging: &[u16]) {
-        if let Some(handle) = open(
-            staging,
-            DELETE,
-            FILE_SHARE_READ | FILE_SHARE_DELETE,
-            OPEN_EXISTING,
-            std::ptr::null(),
-        ) {
-            mark_for_deletion(&handle);
-        }
+        // SAFETY: reads this thread's last-error value, set by the failed call above.
+        (ok != 0).then_some(()).ok_or_else(|| unsafe { GetLastError() })
     }
 }

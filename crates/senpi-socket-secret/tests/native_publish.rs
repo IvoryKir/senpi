@@ -4,7 +4,7 @@
 
 #[cfg(windows)]
 mod windows {
-    use senpi_socket_secret::{publish_no_replace, PublishOutcome};
+    use senpi_socket_secret::{publish_no_replace, PublishError, PublishOutcome};
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier};
 
@@ -125,7 +125,14 @@ mod windows {
         std::fs::write(&staging, b"someone else's").expect("staging");
         let outcome = publish_no_replace(&s(&staging), &s(&dir.join("rpc.sock.secret")), &[5u8; 32]);
         println!("RECEIPT_PUBLISH staging_exists outcome={outcome:?}");
-        assert!(outcome.is_err());
+        assert_eq!(
+            outcome,
+            Err(PublishError::Os {
+                step: "create_staging",
+                code: 80
+            }),
+            "ERROR_FILE_EXISTS on the staging name is an error, never a collision"
+        );
         assert!(!dir.join("rpc.sock.secret").exists());
         assert_eq!(std::fs::read(&staging).expect("staging kept"), b"someone else's");
     }
@@ -142,15 +149,93 @@ mod windows {
             ),
             Ok(PublishOutcome::Published)
         );
-        let output = std::process::Command::new("icacls")
-            .arg(&final_path)
+        let sddl = dacl_sddl(&final_path);
+        let user = current_user_sid();
+        println!("RECEIPT_PUBLISH dacl sddl={sddl} user={user}");
+        let (flags, aces) = sddl
+            .strip_prefix("D:")
+            .and_then(|rest| rest.split_once('('))
+            .map(|(flags, aces)| (flags.to_string(), format!("({aces}")))
+            .unwrap_or_else(|| panic!("not a DACL SDDL: {sddl}"));
+        assert!(flags.contains('P'), "DACL must be protected: {sddl}");
+        let mut found: Vec<&str> = aces
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .split(")(")
+            .collect();
+        found.sort_unstable();
+        let owner = format!("A;;FA;;;{user}");
+        let mut expected = vec![owner.as_str(), "A;;FA;;;BA", "A;;FA;;;SY"];
+        expected.sort_unstable();
+        assert_eq!(
+            found, expected,
+            "exactly owner, SYSTEM and Administrators: {sddl}"
+        );
+    }
+
+    fn current_user_sid() -> String {
+        let output = std::process::Command::new("whoami")
+            .args(["/user", "/fo", "csv", "/nh"])
             .output()
-            .expect("icacls");
-        let acl = String::from_utf8_lossy(&output.stdout).to_string();
-        println!("RECEIPT_PUBLISH dacl {}", acl.replace(['\r', '\n'], " "));
-        assert!(!acl.contains("(I)"), "no inherited ACE: {acl}");
-        for broad in ["Everyone", "BUILTIN\\Users", "Authenticated Users"] {
-            assert!(!acl.contains(broad), "{broad} must not appear: {acl}");
+            .expect("whoami");
+        assert!(output.status.success(), "whoami failed: {output:?}");
+        let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let sid = line.rsplit(',').next().unwrap_or_default().trim_matches('"');
+        assert!(sid.starts_with("S-1-"), "no SID in whoami output: {line}");
+        sid.to_string()
+    }
+
+    /// The file's DACL as SDDL, read with `GetNamedSecurityInfoW` (no localized account names).
+    fn dacl_sddl(path: &Path) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
+            SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+        let wide: Vec<u16> = s(path).encode_utf16().chain(std::iter::once(0)).collect();
+        let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated; only the descriptor out-pointer is requested.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW failed");
+        let mut text: *mut u16 = std::ptr::null_mut();
+        // SAFETY: `descriptor` came from GetNamedSecurityInfoW; `text` receives a LocalAlloc string.
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(
+            ok, 0,
+            "ConvertSecurityDescriptorToStringSecurityDescriptorW failed"
+        );
+        // SAFETY: `text` is a NUL-terminated UTF-16 string from the conversion above.
+        let length = (0..)
+            .take_while(|&index| unsafe { *text.add(index) } != 0)
+            .count();
+        // SAFETY: `text` holds `length` readable units before its terminator.
+        let sddl = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+        // SAFETY: both allocations came from the calls above and are freed exactly once.
+        unsafe {
+            LocalFree(text.cast());
+            LocalFree(descriptor.cast());
         }
+        sddl
     }
 }
