@@ -20,7 +20,7 @@ export type ProviderAccountSummary = {
 	readonly source: AccountSlot["source"];
 	readonly blocked: boolean;
 	/** Same meaning as the generic account listing's fields (senpi#4327); present only while blocked. */
-	readonly blockedReason?: "auth_error" | "rate_limit";
+	readonly blockedReason?: "auth_error" | "rate_limit" | "disabled";
 	readonly blockedUntil?: number;
 	readonly pinned: boolean;
 };
@@ -30,6 +30,8 @@ function timedBlock(
 	now: number,
 ): Pick<ProviderAccountSummary, "blocked" | "blockedReason" | "blockedUntil"> {
 	const { blockedUntil, blockReason } = account;
+	// Like the generic listing: a disabled account never lifts on its own and has no end time.
+	if (blockReason === "account_disabled") return { blocked: true, blockedReason: "disabled" };
 	if (blockedUntil === undefined || blockedUntil <= now) return { blocked: false };
 	const blockedReason = blockReason === "auth_error" || blockReason === "rate_limit" ? blockReason : undefined;
 	return { blocked: true, ...(blockedReason === undefined ? {} : { blockedReason }), blockedUntil };

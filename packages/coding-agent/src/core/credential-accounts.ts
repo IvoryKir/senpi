@@ -115,7 +115,13 @@ function slotBlocked(slot: object, sidecar: CredentialSlotState | undefined, now
 	const fromSlot = liveBlock(stringField(slot, "blockReason"), numberField(slot, "blockedUntil"), now);
 	// A disabled account outranks a timed block from the other source: it never lifts on its own.
 	if (fromSlot.blockedReason === "disabled") return fromSlot;
-	return fromSidecar.blocked ? fromSidecar : fromSlot;
+	if (fromSidecar.blockedReason === "disabled" || !fromSlot.blocked) return fromSidecar;
+	if (!fromSidecar.blocked) return fromSlot;
+	// Both sources hold a timed block: the account is usable only once the later one lifts, and a
+	// rejected key stays the reason so a client still skips it.
+	const later = (fromSlot.blockedUntil ?? 0) > (fromSidecar.blockedUntil ?? 0) ? fromSlot : fromSidecar;
+	const rejected = [fromSidecar, fromSlot].some((block) => block.blockedReason === "auth_error");
+	return rejected ? { ...later, blockedReason: "auth_error" } : later;
 }
 
 function storedModelBlocks(slot: object): ModelBlocks | undefined {

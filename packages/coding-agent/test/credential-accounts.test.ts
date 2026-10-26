@@ -9,6 +9,8 @@ import {
 	removeCredentialAccount,
 } from "../src/core/credential-accounts.ts";
 import { CredentialSlotRepository } from "../src/core/credential-pool/state-store.ts";
+import { getProviderAccounts } from "../src/core/extensions/builtin/anthropic-subscription/account-management.ts";
+import { emptyCredential } from "../src/core/extensions/builtin/anthropic-subscription/accounts.ts";
 
 const NOW_FAR_FUTURE = 4_102_444_800_000;
 
@@ -112,6 +114,28 @@ describe("provider-neutral credential accounts", () => {
 		]);
 	});
 
+	test("a slot blocked in both sources reports the later expiry (senpi#4365 review)", async () => {
+		const slotUntil = NOW_FAR_FUTURE + 60_000;
+		await storage.modify("openai", async () => ({
+			type: "api_key",
+			key: "key-default",
+			accounts: [
+				{ name: "default", key: "key-default", source: "login", blockedUntil: slotUntil, blockReason: "rate_limit" },
+			],
+		}));
+		const credentialRevision = await repository.storedCredentialRevision("openai", "default", { key: "key-default" });
+		await repository.mutateSlotState("openai", "stored", "default", () => ({
+			blockedUntil: NOW_FAR_FUTURE,
+			blockReason: "auth_error",
+			credentialRevision,
+		}));
+
+		const [account] = await getCredentialAccounts(storage, "openai", {}, repository);
+
+		// The rejected key stays the reason: the account is usable only once both blocks lift.
+		expect(account).toMatchObject({ blocked: true, blockedReason: "auth_error", blockedUntil: slotUntil });
+	});
+
 	test("a disabled account reports disabled with no re-probe time", async () => {
 		await storage.modify("openai", async () => ({
 			type: "api_key",
@@ -123,6 +147,27 @@ describe("provider-neutral credential accounts", () => {
 
 		expect(account).toMatchObject({ blocked: true, blockedReason: "disabled" });
 		expect(account).not.toHaveProperty("blockedUntil");
+	});
+
+	test("the Claude lane listing agrees with the generic one for a disabled account", async () => {
+		await storage.modify("anthropic-subscription", async () => ({
+			...emptyCredential(),
+			accounts: [
+				{
+					name: "default",
+					access: "fake-a",
+					refresh: "fake-r",
+					expires: NOW_FAR_FUTURE,
+					source: "login",
+					blockReason: "account_disabled",
+				},
+			],
+		}));
+
+		const generic = await getCredentialAccounts(storage, "anthropic-subscription", {}, repository);
+
+		expect(generic[0]).toMatchObject({ blocked: true, blockedReason: "disabled" });
+		expect(getProviderAccounts(storage, "anthropic-subscription", {})).toEqual(generic);
 	});
 
 	test("an env key blocked for auth reports auth_error; an expired block reports no reason", async () => {
