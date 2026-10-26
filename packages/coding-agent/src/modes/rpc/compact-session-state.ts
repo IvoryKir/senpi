@@ -1,4 +1,4 @@
-import { type ActiveBlock, appendBlock, deltaBlock } from "./compact-active-block.ts";
+import { type ActiveBlock, type ActiveMessage, adjustBlock, appendBlock, deltaBlock } from "./compact-active-block.ts";
 import { CompactComponentRoots, type ComponentRoot } from "./compact-component-roots.ts";
 import { CompactContentIndex, type FrozenIndex } from "./compact-content-index.ts";
 import { CompactContentStore, type CompactContentStoreOptions } from "./compact-content-store.ts";
@@ -16,13 +16,6 @@ import type { ValueRef } from "./compact-values.ts";
 interface MessageRoot {
 	readonly messageId: string;
 	readonly blocks: ValueRef | undefined;
-}
-interface ActiveMessage {
-	readonly order: string;
-	readonly blocks: Map<number, ActiveBlock>;
-	root: ComponentRoot<FrozenBlock>;
-	tailBytes: number;
-	witnessBytes: number;
 }
 interface SettledRow extends MessageRoot {
 	readonly persistence: CompactPersistence;
@@ -53,7 +46,7 @@ export class CompactSessionState {
 
 	constructor(options: CompactSessionStateOptions) {
 		this.store = new CompactContentStore(options);
-		this.blockRoots = new CompactComponentRoots(this.store, (block) => [block.root]);
+		this.blockRoots = new CompactComponentRoots(this.store, (block) => [block.root, block.tailRoot ?? 0]);
 		this.messageRoots = new CompactComponentRoots(this.store, (row) => [row.blocks?.owner ?? 0]);
 		this.settled = new CompactContentIndex(
 			this.store,
@@ -74,21 +67,29 @@ export class CompactSessionState {
 				break;
 			case "block_delta": {
 				const block = { ...this.block(t) };
-				this.store.adjust(block.root, 1, 0);
+				adjustBlock(this.store, block, 1);
 				try {
 					deltaBlock(this.store, block, t.offset, t.text);
 					this.publish(t, block);
 				} finally {
-					this.store.adjust(block.root, -1, 0);
+					adjustBlock(this.store, block, -1);
 				}
 				break;
 			}
 			case "block_replace": {
-				const block: ActiveBlock = { ...this.block(t), root: 0, tail: "", units: 0, covered: 0, witness: "" };
+				const block: ActiveBlock = {
+					...this.block(t),
+					root: 0,
+					tail: "",
+					tailRoot: 0,
+					units: 0,
+					covered: 0,
+					witness: "",
+				};
 				appendBlock(this.store, block, t.text);
 				block.emitted = block.units;
 				this.publish(t, block);
-				this.store.adjust(block.root, -1, 0);
+				adjustBlock(this.store, block, -1);
 				break;
 			}
 			case "message_status":
@@ -207,6 +208,7 @@ export class CompactSessionState {
 			kind: t.kind,
 			root: 0,
 			tail: "",
+			tailRoot: 0,
 			units: 0,
 			emitted: covered > 0 ? 0 : t.seed.length,
 			covered,
@@ -214,7 +216,7 @@ export class CompactSessionState {
 		};
 		appendBlock(this.store, block, t.seed);
 		this.publish(t, block);
-		this.store.adjust(block.root, -1, 0);
+		adjustBlock(this.store, block, -1);
 		this.identity.commit(t.epoch, t.ordinal);
 	}
 
@@ -233,7 +235,8 @@ export class CompactSessionState {
 			contentIndex: address.contentIndex,
 			kind: block.kind,
 			root: block.root,
-			tail: block.tail,
+			tail: "",
+			tailRoot: block.tailRoot,
 		});
 		this.messages = this.messageRoots.set(this.messages, message.order, {
 			messageId: address.messageId,

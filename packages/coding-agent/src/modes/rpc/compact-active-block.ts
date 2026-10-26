@@ -1,14 +1,25 @@
 import { COMPACT_LEAF_CODE_UNITS, type CompactContentStore, type LeafId } from "./compact-content-store.ts";
+import type { ComponentRoot } from "./compact-component-roots.ts";
+import type { FrozenBlock } from "./compact-text-view.ts";
 import { type CompactBlockKind, CompactTransitionError } from "./compact-transition.ts";
 
 export interface ActiveBlock {
 	readonly kind: CompactBlockKind;
 	root: LeafId;
 	tail: string;
+	tailRoot: LeafId;
 	units: number;
 	emitted: number;
 	covered: number;
 	witness: string;
+}
+
+export interface ActiveMessage {
+	readonly order: string;
+	readonly blocks: Map<number, ActiveBlock>;
+	root: ComponentRoot<FrozenBlock>;
+	tailBytes: number;
+	witnessBytes: number;
 }
 
 export function appendBlock(store: CompactContentStore, block: ActiveBlock, text: string): void {
@@ -17,10 +28,19 @@ export function appendBlock(store: CompactContentStore, block: ActiveBlock, text
 	while (block.tail.length + rest.length >= COMPACT_LEAF_CODE_UNITS) {
 		const take = COMPACT_LEAF_CODE_UNITS - block.tail.length;
 		block.root = store.text.append(block.root, block.tail + rest.slice(0, take));
+		store.adjust(block.tailRoot, -1, 0);
+		block.tailRoot = 0;
 		block.tail = "";
 		rest = rest.slice(take);
 	}
+	// Only the suffix enters structural storage; sealing coalesces it into one payload leaf.
+	if (rest.length) block.tailRoot = store.text.append(block.tailRoot, rest, true);
 	block.tail += rest;
+}
+
+export function adjustBlock(store: CompactContentStore, block: ActiveBlock, live: number): void {
+	store.adjust(block.root, live, 0);
+	store.adjust(block.tailRoot, live, 0);
 }
 
 /** Validate before touching the live text owner or its replay witness. */
