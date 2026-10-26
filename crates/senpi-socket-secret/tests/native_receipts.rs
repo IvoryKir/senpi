@@ -3,7 +3,9 @@
 //! receipt. Fixture-dependent cases are `#[ignore]` and run there with `--ignored`; every case is
 //! ignored off Windows, with the reason in its attribute.
 
-use senpi_socket_secret::{classify, probe_volume, read_kernel_session_identity, Locality, SessionIdentity};
+use senpi_socket_secret::{
+    classify, probe_volume, read_kernel_session_identity, Locality, NotLocalReason, SessionIdentity,
+};
 
 #[cfg(windows)]
 fn receipt_volume(label: &str, path: &str) -> Locality {
@@ -80,14 +82,14 @@ fn receipt_28_fixed_ntfs_system_volume_is_local() {
 }
 
 macro_rules! fixture_receipt {
-    ($name:ident, $variable:literal, $local:expr) => {
+    ($name:ident, $variable:literal, $expected:expr) => {
         #[test]
         #[ignore = "native receipt 28: needs the Windows fixtures of ci.yml socket-secret-native-windows"]
         fn $name() {
             #[cfg(windows)]
             {
                 let locality = receipt_volume(stringify!($name), &fixture($variable));
-                assert_eq!(locality == Locality::Local, $local, "{locality:?}");
+                assert_eq!(locality, $expected);
             }
         }
     };
@@ -96,28 +98,32 @@ macro_rules! fixture_receipt {
 fixture_receipt!(
     receipt_28_winfsp_disk_volume_reporting_ntfs_is_not_local,
     "RECEIPT_WINFSP_DISK_NTFS",
-    false
+    Locality::NotLocal(NotLocalReason::DriverNotInPath)
 );
 fixture_receipt!(
     receipt_28_winfsp_network_volume_is_not_local,
     "RECEIPT_WINFSP_NETWORK",
-    false
+    Locality::NotLocal(NotLocalReason::RemoteDevice)
 );
 fixture_receipt!(
     receipt_28_dokany_disk_mirror_of_ntfs_is_not_local,
     "RECEIPT_DOKANY_DISK_MIRROR",
-    false
+    Locality::NotLocal(NotLocalReason::DriverNotInPath)
 );
 fixture_receipt!(
     receipt_28_mapped_smb_drive_is_not_local,
     "RECEIPT_SMB_MAPPED_DRIVE",
-    false
+    Locality::NotLocal(NotLocalReason::RemoteDevice)
 );
-fixture_receipt!(receipt_28_unc_path_is_not_local, "RECEIPT_SMB_UNC", false);
+fixture_receipt!(
+    receipt_28_unc_path_is_not_local,
+    "RECEIPT_SMB_UNC",
+    Locality::NotLocal(NotLocalReason::RemoteDevice)
+);
 fixture_receipt!(
     receipt_28_vhdx_mounted_ntfs_volume_is_local,
     "RECEIPT_VHDX_NTFS",
-    true
+    Locality::Local
 );
 
 #[cfg(windows)]

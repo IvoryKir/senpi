@@ -6,7 +6,7 @@ pub mod session;
 pub mod volume;
 
 pub use answers::{
-    driver_path_from_query, remote_protocol_from_query, ProbeCodes, REMOTE_PROTOCOL_ABSENT_ERRORS,
+    driver_path_from_query, remote_protocol_from_query, ProbeCodes, REMOTE_PROTOCOL_NO_INFORMATION_ERRORS,
     STATUS_OBJECT_NAME_NOT_FOUND,
 };
 pub use classify::{
