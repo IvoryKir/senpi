@@ -13,8 +13,22 @@ declare global {
 }
 
 export function evaluate(permission: string, pattern: string | readonly string[], ...rulesets: Ruleset[]): Rule {
-	const patterns = typeof pattern === "string" ? [pattern] : pattern;
 	const matchesExternalPath = permission === "external_directory" ? createExternalPathMatcher() : undefined;
+	return evaluatePatterns(permission, pattern, rulesets, matchesExternalPath);
+}
+
+/** Evaluate a lexical spelling without letting a resolved rule erase its ancestry. */
+export function evaluateExternalSpelling(pattern: string | readonly string[], ...rulesets: Ruleset[]): Rule {
+	return evaluatePatterns("external_directory", pattern, rulesets, createExternalPathMatcher(true));
+}
+
+function evaluatePatterns(
+	permission: string,
+	pattern: string | readonly string[],
+	rulesets: Ruleset[],
+	matchesExternalPath?: (value: string, pattern: string) => boolean,
+): Rule {
+	const patterns = typeof pattern === "string" ? [pattern] : pattern;
 	const matchedRule = rulesets.flat().findLast((rule) => {
 		return (
 			Wildcard.match(permission, rule.permission) &&

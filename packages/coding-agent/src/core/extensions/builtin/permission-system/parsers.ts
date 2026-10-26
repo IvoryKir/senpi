@@ -22,7 +22,7 @@ export type PermissionRequest = Pick<
 	"permission" | "patterns" | "always" | "widerAlways" | "originalPaths"
 > & {
 	readonly autoApproveAsk?: true;
-	/** External-directory aliases are deny-only; other permissions use them for all rules. */
+	/** Absolute external lexical spellings restrict the resolved decision; other aliases share rule order. */
 	readonly ruleAliases?: readonly string[];
 };
 

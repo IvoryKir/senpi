@@ -41,6 +41,8 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 Senpi includes a built-in permission system for tool calls. It evaluates a preset first, then applies explicit rules from global settings, project settings, and CLI flags. The last matching rule wins.
 
+For `external_directory`, this order applies separately to each path spelling: the absolute lexical path, its on-disk case spelling for existing components, and the symlink-resolved target. The most restrictive result wins across spellings (`deny` > `ask` > `allow`). Thus a blanket deny followed by an allow for a shared directory still allows that directory, but an allow on a symlink's destination cannot override a deny on its lexical path. Missing path components retain their supplied case. "Allow always" scopes remain tied to the resolved directory and cannot override a deny.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `permissionPreset` | string | `"full-access"` | Permission preset: `"full-access"`, `"workspace"`, `"accept-edits"`, `"auto"`, `"read-only"`, or `"ask"` |

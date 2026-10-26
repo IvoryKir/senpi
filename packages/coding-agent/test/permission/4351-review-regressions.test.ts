@@ -33,6 +33,128 @@ describe("4351 binding review regressions", () => {
 		return request;
 	};
 
+	it("lets a later shared-directory allow override a blanket deny for every spelling", async () => {
+		const shared = join(root, "shared");
+		mkdirSync(shared);
+		const target = join(shared, "f.txt");
+		writeFileSync(target, "fixture");
+		const service = new PermissionService(
+			[
+				{ permission: "external_directory", pattern: "*", action: "deny" },
+				{ permission: "external_directory", pattern: `${shared}/*`, action: "allow" },
+			],
+			[],
+		);
+		for (const inputPath of [target, relative(cwd, target)]) {
+			const request = external("write", { path: inputPath }, cwd);
+			expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe("allow");
+			await expect(
+				service.ask({ ...request, sessionID: "precedence", metadata: {} }, request),
+			).resolves.toBeUndefined();
+		}
+	});
+
+	for (const variant of ["rule-case", "input-case", "prefix-case", "suffix-case"]) {
+		for (const allowTarget of [false, true]) {
+			it(`retains lexical ancestry for ${variant} with target allow=${allowTarget}`, async (context) => {
+				const modules = join(root, "node_modules");
+				const scope = join(modules, "@earendil-works");
+				mkdirSync(scope, { recursive: true });
+				symlinkSync(outside, join(scope, "pi-ai"), process.platform === "win32" ? "junction" : "dir");
+				writeFileSync(join(outside, "package.json"), "{}");
+				const lexical = join(scope, "pi-ai", "package.json");
+				try {
+					const actual = statSync(lexical, { bigint: true });
+					const alias = statSync(join(root, "NODE_MODULES", "@earendil-works", "PI-AI", "PACKAGE.JSON"), {
+						bigint: true,
+					});
+					if (actual.dev !== alias.dev || actual.ino !== alias.ino) return context.skip();
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					return context.skip();
+				}
+				const pattern =
+					variant === "rule-case"
+						? `${modules}/*/PI-AI/*`
+						: variant === "prefix-case"
+							? `${root}/NODE_MODULES/*/pi-ai/*`
+							: variant === "suffix-case"
+								? `${modules}/*/pi-ai/*.JSON`
+								: `${modules}/*/pi-ai/*`;
+				const input = { path: variant === "input-case" ? join(scope, "PI-AI", "package.json") : lexical };
+				const request = external("read", input, cwd);
+				const emitter = createLocalEventEmitter();
+				const service = new PermissionService(
+					[
+						{ permission: "*", pattern: "*", action: "allow" },
+						{ permission: "external_directory", pattern: "*", action: "ask" },
+						{ permission: "external_directory", pattern, action: "deny" },
+						...(allowTarget
+							? [{ permission: "external_directory", pattern: `${outside}/*`, action: "allow" as const }]
+							: []),
+					],
+					[],
+					emitter,
+				);
+				emitter.onAsked((pending) => service.reply({ requestID: pending.id, reply: "once" }));
+				await expect(
+					service.ask({ ...request, sessionID: "case-symlink", metadata: {} }, request),
+				).rejects.toMatchObject({ _tag: "PermissionDeniedError" });
+				const authorizer = createDispatchAuthorizer(
+					{ getAllTools: () => [] },
+					() => ({ service, parsers: registry, preset: "workspace", setupError: null }),
+					async () => undefined,
+				);
+				expect(
+					authorizer.policy(
+						{ toolName: "read", toolCallId: "case-symlink", input, identity: { owner: registry, metadata: "" } },
+						{ cwd, sessionManager: { getSessionId: () => "case-symlink" } } as ExtensionContext,
+					).action,
+				).toBe("deny");
+			});
+		}
+	}
+
+	it("uses absolute rule aliases rather than raw relative display paths", () => {
+		const request = external("write", { path: relative(cwd, join(outside, "File.txt")) }, cwd);
+		const service = new PermissionService(
+			[
+				{ permission: "external_directory", pattern: "*", action: "allow" },
+				{ permission: "external_directory", pattern: "../*", action: "deny" },
+			],
+			[],
+		);
+		expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe("allow");
+	});
+
+	it.each([
+		["allow", "allow", "allow"],
+		["allow", "ask", "ask"],
+		["allow", "deny", "deny"],
+		["ask", "allow", "ask"],
+		["ask", "ask", "ask"],
+		["ask", "deny", "deny"],
+		["deny", "allow", "deny"],
+		["deny", "ask", "deny"],
+		["deny", "deny", "deny"],
+	] as const)("combines lexical %s and resolved %s as %s regardless of rule order", (lexical, resolved, expected) => {
+		const data = join(root, "data");
+		mkdirSync(join(data, "a"), { recursive: true });
+		symlinkSync(outside, join(data, "a", "secret"), process.platform === "win32" ? "junction" : "dir");
+		const request = external("read", { path: join(data, "a", "secret", "File.txt") }, cwd);
+		const rules: Ruleset = [
+			{ permission: "external_directory", pattern: `${data}/*/secret/*`, action: lexical },
+			{ permission: "external_directory", pattern: `${outside}/*`, action: resolved },
+		];
+		for (const ordered of [rules, [...rules].reverse()]) {
+			const service = new PermissionService(
+				[{ permission: "external_directory", pattern: "*", action: "deny" }, ...ordered],
+				[],
+			);
+			expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe(expected);
+		}
+	});
+
 	// senpi#4351: a wildcard before a symlink must not erase a lexical deny.
 	for (const tool of [
 		"read",

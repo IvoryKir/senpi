@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPresetRule } from "./config.ts";
-import { evaluate } from "./evaluate.ts";
+import { realpathWithoutOpen } from "../../../../utils/paths.ts";
+import { evaluate, evaluateExternalSpelling } from "./evaluate.ts";
 import { createLocalEventEmitter, type PermissionEventEmitter } from "./events.ts";
+import { canonicalPathCase } from "./external-pattern.ts";
 import { approvedFileVersion, approvedStoreRealPath, loadApproved } from "./storage.ts";
 import {
 	CorrectedError,
@@ -85,7 +87,11 @@ export class PermissionService {
 
 	/**
 	 * The one decision for a call, used when it is asked and again whenever an "Always" reply re-checks
-	 * the requests still pending. Without `presetBound` it is last-match-wins over every rule. With
+	 * the requests still pending. External paths use last-match-wins separately for the absolute
+	 * lexical spelling, its proven on-disk case, and the resolved target; the most restrictive
+	 * decision wins (deny > ask > allow). Raw originalPaths are display-only. Remembered approvals
+	 * match the resolved target and cannot override a deny from any spelling.
+	 * Without `presetBound` it is last-match-wins over every rule. With
 	 * `presetBound` the preset's rules and the user's settings and CLI rules are evaluated apart and
 	 * the more restrictive wins, so no configured rule, in any order or layer, can widen the preset;
 	 * only an "Always" answer given in this or an earlier session (`permissions-approved.jsonl`,
@@ -103,18 +109,34 @@ export class PermissionService {
 	): { readonly action: Rule["action"]; readonly rules: readonly Rule[] } {
 		this.refreshApproved();
 		if (permission === "external_directory") {
-			// Lexical spellings may only restrict access. A wildcard before a symlink
-			// cannot be resolved in the rule's literal prefix, but its deny must still win.
 			const targets = typeof target === "string" ? [target] : target;
-			const denied = evaluate(
-				permission,
-				[...targets, ...(options.originalPaths ?? []), ...(options.ruleAliases ?? [])],
-				this.staticRuleset.filter((rule) => rule.action === "deny"),
-			);
-			if (denied.action === "deny") return { action: "deny", rules: [{ ...denied }] };
-		} else {
-			target = options.ruleAliases ?? target;
+			let action: Rule["action"] = "allow";
+			const rules: Rule[] = [];
+			for (const value of new Set([...targets, ...(options.ruleAliases ?? [])])) {
+				const resolved = realpathWithoutOpen(value);
+				const spellings = new Set([value, canonicalPathCase(value)]);
+				for (const spelling of new Set([...spellings, resolved])) {
+					const decision = this.decideTarget(permission, spelling, options, resolved, spelling !== resolved);
+					if (PermissionService.RESTRICTIVENESS[decision.action] > PermissionService.RESTRICTIVENESS[action]) {
+						action = decision.action;
+					}
+					rules.push(...decision.rules);
+				}
+			}
+			return { action, rules };
 		}
+		return this.decideTarget(permission, options.ruleAliases ?? target, options);
+	}
+
+	private decideTarget(
+		permission: string,
+		target: string | readonly string[],
+		options: DecisionOptions,
+		approvedTarget = target,
+		preserveAncestry = false,
+	): { readonly action: Rule["action"]; readonly rules: readonly Rule[] } {
+		const evaluateTarget = (ruleset: Ruleset) =>
+			preserveAncestry ? evaluateExternalSpelling(target, ruleset) : evaluate(permission, target, ruleset);
 		// Defence in depth (HIGH 1): the agent's own tools never touch the approvals store, whatever
 		// rules say. The target's real path is compared against the store's real path.
 		if (this.protectedStorePath !== undefined && this.targetIsProtectedStore(target)) {
@@ -126,13 +148,13 @@ export class PermissionService {
 			// decision is a deny it wins outright, and a preset wildcard-ask never masks it. The preset
 			// only fills the gap the user left (no user rule matched, or the user decision is an ask).
 			const userRules = this.staticRuleset.filter((rule) => !isPresetRule(rule));
-			const userRule = evaluate(permission, target, userRules);
+			const userRule = evaluateTarget(userRules);
 			if (userRules.includes(userRule) && userRule.action === "deny") {
 				return { action: "deny", rules: [{ ...userRule }] };
 			}
-			const configured = evaluate(permission, target, this.staticRuleset);
+			const configured = evaluateTarget(this.staticRuleset);
 			if (configured.action === "deny") return { action: "deny", rules: [{ ...configured }] };
-			const approvedRule = evaluate(permission, target, this.approved);
+			const approvedRule = evaluate(permission, approvedTarget, this.approved);
 			if (this.approved.includes(approvedRule) && approvedRule.action === "allow") {
 				return { action: "allow", rules: [{ ...approvedRule }] };
 			}
@@ -143,9 +165,9 @@ export class PermissionService {
 		}
 		const presetRules = this.staticRuleset.filter((rule) => isPresetRule(rule));
 		const userRules = this.staticRuleset.filter((rule) => !isPresetRule(rule));
-		const presetRule = evaluate(permission, target, presetRules);
+		const presetRule = evaluateTarget(presetRules);
 		const preset = presetRule.action === "ask" && options.approveBlanketAsk ? "allow" : presetRule.action;
-		const userRule = evaluate(permission, target, userRules);
+		const userRule = evaluateTarget(userRules);
 		const user = userRules.includes(userRule) ? userRule.action : undefined;
 		const combined =
 			user === undefined || PermissionService.RESTRICTIVENESS[preset] >= PermissionService.RESTRICTIVENESS[user]
@@ -153,7 +175,7 @@ export class PermissionService {
 				: user;
 		const rules = [presetRule, ...(user === undefined ? [] : [userRule])].map((rule) => ({ ...rule }));
 		if (combined !== "ask") return { action: combined, rules };
-		const remembered = evaluate(permission, target, this.approved);
+		const remembered = evaluate(permission, approvedTarget, this.approved);
 		if (this.approved.includes(remembered) && remembered.action === "allow") {
 			return { action: "allow", rules: [...rules, { ...remembered }] };
 		}

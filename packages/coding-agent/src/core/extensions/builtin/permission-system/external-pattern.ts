@@ -1,16 +1,44 @@
-import { type BigIntStats, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import { type BigIntStats, lstatSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, parse, sep } from "node:path";
 import { realpathWithoutOpen } from "../../../../utils/paths.ts";
 import { Wildcard } from "./wildcard.ts";
 
+/** Recover on-disk case without replacing any lexical ancestor with its symlink target. */
+export function canonicalPathCase(value: string): string {
+	if (!isAbsolute(value)) return value;
+	const root = parse(value).root;
+	const parts = value.slice(root.length).split(sep).filter(Boolean);
+	let parent = root;
+	for (let index = 0; index < parts.length; index++) {
+		const part = parts[index];
+		try {
+			const entries = readdirSync(parent);
+			if (!entries.includes(part)) {
+				const identity = lstatSync(join(parent, part), { bigint: true });
+				const spelling = entries.find((entry) => {
+					if (entry.toLowerCase() !== part.toLowerCase()) return false;
+					const candidate = lstatSync(join(parent, entry), { bigint: true });
+					return candidate.dev === identity.dev && candidate.ino === identity.ino;
+				});
+				if (spelling !== undefined) parts[index] = spelling;
+			}
+		} catch {
+			// Missing or unreadable components have no proven alternative spelling.
+			return join(parent, ...parts.slice(index));
+		}
+		parent = join(parent, parts[index]);
+	}
+	return parent;
+}
+
 /** Keep filesystem observations within one evaluation, never across permission decisions. */
-export function createExternalPathMatcher(): (value: string, pattern: string) => boolean {
+export function createExternalPathMatcher(preserveAncestry = false): (value: string, pattern: string) => boolean {
 	const resolved = new Map<string, string>();
 	const identities = new Map<string, BigIntStats | Error>();
 	const realpath = (value: string): string => {
 		let result = resolved.get(value);
 		if (result === undefined) {
-			result = realpathWithoutOpen(value);
+			result = preserveAncestry ? canonicalPathCase(value) : realpathWithoutOpen(value);
 			resolved.set(value, result);
 		}
 		return result;
@@ -28,19 +56,21 @@ export function createExternalPathMatcher(): (value: string, pattern: string) =>
 		if (result instanceof Error) throw result;
 		return result;
 	};
-	return (value, pattern) => matchesExternalPath(value, pattern, realpath, stat);
+	return (value, pattern) => matchesExternalPath(value, pattern, realpath, stat, preserveAncestry);
 }
 
 /**
  * Match the literal prefix and glob components by filesystem identity.
- * This also covers remembered scopes and missing descendants without folding case or opening
- * directories. A case-sensitive filesystem gives distinct prefixes distinct device/inode pairs.
+ * This also covers remembered scopes and missing descendants. Lexical matching keeps ancestry
+ * and canonicalizes case through directory entries; resolved matching follows literal prefixes.
+ * A case-sensitive filesystem gives distinct prefixes distinct device/inode pairs.
  */
 function matchesExternalPath(
 	value: string,
 	pattern: string,
 	realpath: (value: string) => string,
 	stat: (value: string) => BigIntStats,
+	preserveAncestry: boolean,
 ): boolean {
 	if (!isAbsolute(value) || !isAbsolute(pattern)) return false;
 	const wildcard = pattern.search(/[*?]/);
@@ -69,7 +99,11 @@ function matchesExternalPath(
 	for (;;) {
 		try {
 			const candidate = stat(ancestor);
-			if (candidate.dev === identity.dev && candidate.ino === identity.ino) {
+			if (
+				candidate.dev === identity.dev &&
+				candidate.ino === identity.ino &&
+				(!preserveAncestry || ancestor === prefix)
+			) {
 				if (tail.length === 0 && suffix.length > 0) return false;
 				return matchesSuffix(ancestor, tail, suffix.join("/").split(sep).join("/"), stat);
 			}
