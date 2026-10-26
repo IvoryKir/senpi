@@ -10,8 +10,8 @@ import type { CliRuntimeConfiguration } from "../../main.ts";
 import type { RpcConnectionOptions } from "./connection-handler.ts";
 import { roleConnection } from "./connection-roles.ts";
 import { answeredUiRequestId } from "./extension-ui-response.ts";
-import type { RpcExtensionUIResponse } from "./rpc-types.ts";
 import type { RpcSessionBinding } from "./session-binding.ts";
+import type { RpcExtensionUIResponse } from "./rpc-types.ts";
 import type { SessionEventWriter } from "./session-event-writer.ts";
 import type { RpcSessionLaunchProfile } from "./session-registry.ts";
 import type {
