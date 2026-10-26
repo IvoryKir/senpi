@@ -55,6 +55,10 @@ export interface RpcProviderAccount {
 	displayName?: string;
 	source: "login" | "import" | "env";
 	blocked: boolean;
+	/** Present only while `blocked`: `auth_error` = key rejected, skip it until `blockedUntil` (senpi#4327). */
+	blockedReason?: "auth_error" | "rate_limit" | "disabled";
+	/** Epoch ms when the block lifts; absent for `disabled` and for a block that names no time. */
+	blockedUntil?: number;
 	pinned: boolean;
 }
 

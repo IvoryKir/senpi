@@ -19,8 +19,21 @@ export type ProviderAccountSummary = {
 	readonly displayName?: string;
 	readonly source: AccountSlot["source"];
 	readonly blocked: boolean;
+	/** Same meaning as the generic account listing's fields (senpi#4327); present only while blocked. */
+	readonly blockedReason?: "auth_error" | "rate_limit";
+	readonly blockedUntil?: number;
 	readonly pinned: boolean;
 };
+
+function timedBlock(
+	account: Pick<AccountSlot, "blockedUntil" | "blockReason">,
+	now: number,
+): Pick<ProviderAccountSummary, "blocked" | "blockedReason" | "blockedUntil"> {
+	const { blockedUntil, blockReason } = account;
+	if (blockedUntil === undefined || blockedUntil <= now) return { blocked: false };
+	const blockedReason = blockReason === "auth_error" || blockReason === "rate_limit" ? blockReason : undefined;
+	return { blocked: true, ...(blockedReason === undefined ? {} : { blockedReason }), blockedUntil };
+}
 
 export function getProviderAccounts(
 	storage: AuthStorage,
@@ -36,7 +49,7 @@ export function getProviderAccounts(
 			name: account.name,
 			...(displayName === undefined ? {} : { displayName }),
 			source: account.source,
-			blocked: account.blockedUntil !== undefined && account.blockedUntil > now,
+			...timedBlock(account, now),
 			pinned: credential.pinned === account.name,
 		};
 	});

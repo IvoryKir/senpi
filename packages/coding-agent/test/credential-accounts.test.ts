@@ -76,6 +76,76 @@ describe("provider-neutral credential accounts", () => {
 		expect(readFileSync(join(dir, "auth.json"), "utf-8")).not.toContain("blockedUntil");
 	});
 
+	test("a known-bad key reports auth_error with its re-probe time, apart from a cooldown (senpi#4327)", async () => {
+		await seedPool("openai");
+		for (const [name, key, blockReason] of [
+			["default", "key-default", "auth_error"],
+			["work", "key-work", "rate_limit"],
+		] as const) {
+			const credentialRevision = await repository.storedCredentialRevision("openai", name, { key });
+			await repository.mutateSlotState("openai", "stored", name, () => ({
+				blockedUntil: NOW_FAR_FUTURE,
+				blockReason,
+				credentialRevision,
+			}));
+		}
+
+		const accounts = await getCredentialAccounts(storage, "openai", {}, repository);
+
+		expect(accounts).toEqual([
+			{
+				name: "default",
+				source: "login",
+				blocked: true,
+				blockedReason: "auth_error",
+				blockedUntil: NOW_FAR_FUTURE,
+				pinned: false,
+			},
+			{
+				name: "work",
+				source: "login",
+				blocked: true,
+				blockedReason: "rate_limit",
+				blockedUntil: NOW_FAR_FUTURE,
+				pinned: false,
+			},
+		]);
+	});
+
+	test("a disabled account reports disabled with no re-probe time", async () => {
+		await storage.modify("openai", async () => ({
+			type: "api_key",
+			key: "key-default",
+			accounts: [{ name: "default", key: "key-default", source: "login", blockReason: "account_disabled" }],
+		}));
+
+		const [account] = await getCredentialAccounts(storage, "openai", {}, repository);
+
+		expect(account).toMatchObject({ blocked: true, blockedReason: "disabled" });
+		expect(account).not.toHaveProperty("blockedUntil");
+	});
+
+	test("an env key blocked for auth reports auth_error; an expired block reports no reason", async () => {
+		const env = { OPENAI_API_KEY: "sk-one", OPENAI_API_KEY_2: "sk-two" };
+		const bad = await repository.envCredentialRevision("OPENAI_API_KEY", "sk-one");
+		await repository.mutateSlotState("openai", "env", "env", () => ({
+			blockedUntil: NOW_FAR_FUTURE,
+			blockReason: "auth_error",
+			credentialRevision: bad,
+		}));
+		const lapsed = await repository.envCredentialRevision("OPENAI_API_KEY_2", "sk-two");
+		await repository.mutateSlotState("openai", "env", "env-2", () => ({
+			blockedUntil: 1,
+			blockReason: "auth_error",
+			credentialRevision: lapsed,
+		}));
+
+		const accounts = await getCredentialAccounts(storage, "openai", env, repository);
+
+		expect(accounts[0]).toMatchObject({ blocked: true, blockedReason: "auth_error", blockedUntil: NOW_FAR_FUTURE });
+		expect(Object.keys(accounts[1] ?? {}).sort()).toEqual(["blocked", "name", "pinned", "source"]);
+	});
+
 	test("pinning marks exactly one account and unpinning clears it", async () => {
 		await seedPool("openai");
 
