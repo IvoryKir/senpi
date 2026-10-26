@@ -12649,7 +12649,7 @@ export class AgentSession {
 		);
 		if (degraded.kind === "fail") {
 			const waitSeconds = Math.ceil(degraded.hintMs / 1000);
-			const until = new Date(Date.now() + degraded.hintMs).toLocaleString(undefined, {
+			const until = new Date(Date.now() + degraded.hintMs).toLocaleString("en-US", {
 				year: "numeric",
 				month: "short",
 				day: "numeric",

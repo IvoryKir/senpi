@@ -57,7 +57,7 @@ export function describeProviderFailure(diagnostic: ProviderDiagnostic | undefin
 		...(resetsAt === undefined
 			? {}
 			: {
-					reason: `${detail.reason} until ${new Date(resetsAt).toLocaleString(undefined, {
+					reason: `${detail.reason} until ${new Date(resetsAt).toLocaleString("en-US", {
 						year: "numeric",
 						month: "short",
 						day: "numeric",

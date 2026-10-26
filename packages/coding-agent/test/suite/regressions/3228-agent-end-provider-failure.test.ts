@@ -1,5 +1,5 @@
 import { type AssistantMessage, fauxAssistantMessage, type ProviderDiagnostic } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import { describeProviderFailure, formatProviderFailure } from "../../../src/core/provider-failure.ts";
 import { createHarness, type Harness } from "../harness.ts";
@@ -24,6 +24,7 @@ describe("agent_end provider failure", () => {
 	const harnesses: Harness[] = [];
 	afterEach(async () => {
 		while (harnesses.length > 0) await harnesses.pop()?.cleanup();
+		vi.unstubAllEnvs();
 	});
 
 	async function agentEndOf(response: AssistantMessage): Promise<Extract<AgentSessionEvent, { type: "agent_end" }>> {
@@ -98,6 +99,25 @@ describe("agent_end provider failure", () => {
 	it("omits failure on a successful turn", async () => {
 		const end = await agentEndOf(fauxAssistantMessage("fine"));
 		expect(end.failure).toBeUndefined();
+	});
+
+	it("publishes the reset in local time with its zone while preserving the epoch timestamp", async () => {
+		vi.stubEnv("TZ", "America/New_York");
+		const end = await agentEndOf(
+			failedTurn("provider failed", {
+				category: "quota",
+				code: "usage_limit_reached",
+				evidence: "structured_code",
+				resetsAt: 1_792_540_800_000,
+			}),
+		);
+		expect(end.failure).toMatchObject({
+			category: "quota",
+			code: "usage_limit_reached",
+			resetsAt: 1_792_540_800_000,
+		});
+		expect(end.failure?.reason).toMatch(/\b8:00\s*PM\b/);
+		expect(end.failure?.reason).toMatch(/\bEDT\b/);
 	});
 
 	it("omits failure on an aborted turn", async () => {

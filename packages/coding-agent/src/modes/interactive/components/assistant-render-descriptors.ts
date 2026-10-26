@@ -221,10 +221,16 @@ export function createAssistantRenderDescriptors(
 							model: `${message.provider}/${message.model}`,
 							usageLimit: usageLimitScope(message),
 						});
-			const commandHint = message.errorMessage?.includes("Provider is not configured: ")
+			// Auth resolution is not a public pi-ai subpath. The component test feeds this boundary
+			// providerNotConfiguredMessage output so its classifier sentinel cannot drift.
+			const commandHint = stripTurnRetrySuppressionPrefix(message.errorMessage ?? "").startsWith(
+				"Provider is not configured: ",
+			)
 				? " Use /login to connect it, or /model to choose another model."
 				: usageLimitScope(message) === "account"
-					? " Use /model to choose another provider."
+					? message.provider === "anthropic"
+						? " Use /login to connect Anthropic Subscription, or /model to choose another provider."
+						: " Use /model to choose another provider."
 					: "";
 			addError(
 				described === undefined

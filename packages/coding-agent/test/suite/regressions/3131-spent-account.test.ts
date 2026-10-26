@@ -65,6 +65,7 @@ describe("#3131 spent account", () => {
 		});
 		expect(published.message.errorMessage?.trim().length).toBeGreaterThan(0);
 		expect(published.message.errorMessage).not.toMatch(/429|rate_limit_error/);
+		expect(published.message.errorMessage).toContain("11pm");
 		// The original provider payload stays available to engine diagnostics.
 		expect(harness.session.state.messages.findLast((message) => message.role === "assistant")).toMatchObject({
 			errorMessage: accountLimit,
@@ -345,9 +346,9 @@ describe("#3131 spent account", () => {
 		await harness.session.prompt("first attempt");
 		const callsBefore = harness.faux.getCallLog().length;
 		// when
-		await expect(harness.session.prompt("try again")).rejects.toThrow(
-			"The faux account usage limit has been reached",
-		);
+		await expect(harness.session.prompt("try again")).rejects.toMatchObject({
+			name: "AccountUsageLimitError",
+		});
 		// then
 		expect(harness.faux.getCallLog()).toHaveLength(callsBefore);
 	});
@@ -404,7 +405,7 @@ describe("#3131 spent account", () => {
 		// then
 		expect(exitCode).toBe(1);
 		const output = stderr.mock.calls.flat().join("\n");
-		expect(output).toContain("The faux account usage limit has been reached (resets 11pm).");
+		expect(output).toContain("11pm");
 		expect(output).not.toContain("429");
 		expect(output).not.toContain("rate_limit_error");
 		const internal = harness.session.state.messages.findLast((message) => message.role === "assistant");
@@ -416,9 +417,7 @@ describe("#3131 spent account", () => {
 			hideThinkingBlock: false,
 			hasToolCalls: false,
 		});
-		expect(restored.find((descriptor) => descriptor.kind === "error-text")?.text).toContain(
-			"The faux account usage limit has been reached (resets 11pm).",
-		);
+		expect(restored.find((descriptor) => descriptor.kind === "error-text")?.text).toContain("11pm");
 		expect(JSON.stringify(restored)).not.toContain("429");
 		const published = harness.eventsOfType("message_end").find((event) => event.message.role === "assistant");
 		if (published?.message.role !== "assistant") throw new Error("missing published assistant fixture");

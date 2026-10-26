@@ -27,6 +27,7 @@ describe("describeProviderFailureForUser", () => {
 		// then
 		expect(text?.length).toBeGreaterThan(0);
 		expect(text).not.toContain("429");
+		expect(text).toContain("11pm");
 	});
 
 	it("keeps the ChatGPT adapter's own limit wording, which already names the next step (#3615)", () => {
