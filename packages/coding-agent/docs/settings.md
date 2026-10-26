@@ -521,15 +521,25 @@ To opt in, set:
 The default is off. When enabled, bash replaces GitHub, Slack, OpenAI/Anthropic,
 AWS access-key, Google API-key and JWT-shaped tokens, PEM private-key blocks,
 Bearer credentials, and secret-named `KEY=VALUE` values with `<redacted>`.
-Assignment names are retained. This applies to core bash and persistent terminal
+Assignment names are retained; `AUTH` and `AUTHORIZATION` match complete name
+segments, not `AUTHOR`. Quoted assignment values end at their closing quote or
+the next newline. Bearer values must be token-shaped (at least eight characters,
+including a digit or token punctuation), so ordinary prose is retained.
+This applies to core bash, user `!cmd`/`!!cmd`, and persistent terminal
 bash, including streamed updates, background completion notices, terminal screen
 reads, structured results, output spill files and resulting transcript entries.
 The tool-child runtime uses the same setting.
-ANSI styling does not split credential detection; hidden OSC payloads (such as
+Credential prefixes are recognized after non-alphanumeric boundaries inside
+URLs, paths and compound tokens. ANSI styling and charset designations do not
+split credential detection; hidden OSC payloads (such as
 terminal titles and hyperlink targets) are omitted while redaction is enabled.
 
-An incomplete token is held until its delimiter or process exit, so partial words
-may appear later while streaming. Tokens longer than 8,192 characters are
+An incomplete token is held until its delimiter or process exit. Persistent
+terminals also flush after 50 ms without output so idle prompts and complete
+cursor-control sequences reach screen reads. A fragment that could become a
+credential is conservatively redacted at that point, with its continuation
+suppressed until the next delimiter. Ordinary partial words may appear later
+while streaming. Tokens longer than 8,192 characters are
 conservatively redacted to bound memory. Enabling the setting affects newly
 started commands; it does not rewrite existing terminal sessions, transcripts,
 command arguments, or files created by commands. This is shape detection, not a

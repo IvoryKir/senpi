@@ -2,11 +2,93 @@ import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { type BashToolDetails, createBashTool } from "../../src/core/tools/bash.ts";
+import { executeBashWithOperations } from "../../src/core/bash-executor.ts";
+import { type BashOperations, type BashToolDetails, createBashTool } from "../../src/core/tools/bash.ts";
 import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 import { createHarness, getMessageText } from "./harness.ts";
 
 describe("opt-in bash output redaction", () => {
+	it("redacts user-command spill files and observes final-token callback failures", async () => {
+		const fixture = secretOutputCases()[0];
+		assert(fixture);
+		const padding = "ordinary output\n".repeat(6000);
+		const operations: BashOperations = {
+			async exec(_command, _cwd, { onData }) {
+				onData(Buffer.from(`${fixture.input}\n${padding}${fixture.input}`), "stdout");
+				return { exitCode: 0 };
+			},
+		};
+		const result = await executeBashWithOperations("synthetic", process.cwd(), operations, {
+			redactSecretsInOutput: true,
+		});
+		assert(result.fullOutputPath);
+		try {
+			expect(readFileSync(result.fullOutputPath, "utf8")).toBe(`<redacted>\n${padding}<redacted>`);
+		} finally {
+			rmSync(result.fullOutputPath, { force: true });
+		}
+		const callbackError = new Error("final token observer failed");
+		await expect(
+			executeBashWithOperations(
+				"synthetic",
+				process.cwd(),
+				{
+					async exec(_command, _cwd, { onData }) {
+						onData(Buffer.from(fixture.input));
+						return { exitCode: 0 };
+					},
+				},
+				{
+					redactSecretsInOutput: true,
+					async onChunk() {
+						throw callbackError;
+					},
+				},
+			),
+		).rejects.toBe(callbackError);
+	});
+	it.each([undefined, false, true])(
+		"applies the setting to user !cmd output and persistence (%s)",
+		async (enabled) => {
+			const harness = await createHarness({
+				persistSession: true,
+				settings: enabled === undefined ? {} : { tools: { bash: { redactSecretsInOutput: enabled } } },
+			});
+			const fixture = secretOutputCases()[0];
+			assert(fixture);
+			const observed: string[] = [];
+			try {
+				harness.setResponses([fauxAssistantMessage("ready")]);
+				await harness.session.prompt("Initialize the synthetic session.");
+				const result = await harness.session.executeBash("synthetic", (chunk) => observed.push(chunk), {
+					operations: {
+						async exec(_command, _cwd, { onData }) {
+							onData(Buffer.from(fixture.input.slice(0, 2)), "stdout");
+							onData(Buffer.from("diagnostic\n"), "stderr");
+							onData(Buffer.from(fixture.input.slice(2)), "stdout");
+							return { exitCode: 0 };
+						},
+					},
+				});
+				const expected = enabled
+					? "diagnostic\n<redacted>"
+					: `${fixture.input.slice(0, 2)}diagnostic\n${fixture.input.slice(2)}`;
+				expect(result.output).toBe(expected);
+				expect(observed.join("")).toBe(expected);
+				const message = harness.session.messages.find((entry) => entry.role === "bashExecution");
+				expect(message).toMatchObject({ output: expected });
+				const sessionFile = harness.sessionManager.getSessionFile();
+				assert(sessionFile);
+				const entries = readFileSync(sessionFile, "utf8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line));
+				expect(entries.find((entry) => entry.message?.role === "bashExecution")?.message.output).toBe(expected);
+			} finally {
+				harness.cleanup();
+			}
+		},
+	);
 	it("keeps stdout and stderr token boundaries independent", async () => {
 		const fixture = secretOutputCases()[0];
 		assert(fixture);

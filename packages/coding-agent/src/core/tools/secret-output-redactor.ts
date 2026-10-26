@@ -1,8 +1,23 @@
 const REDACTED = "<redacted>";
 const TOKEN_CHAR = /[A-Za-z0-9_./+~=-]/;
-const SECRET_KEY = /(?:^|_)(?:KEY|TOKEN|SECRET)$|PASSWORD|(?:^|_)AUTH/i;
-const PREFIX = /^(?:gh[pors]_|github_pat_|xox[abpors]-|sk-)[A-Za-z0-9_./+~=-]+$/;
-const CLOUD_KEY = /^(?:AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35})/;
+const SECRET_KEY = /(?:^|_)(?:KEY|TOKEN|SECRET|AUTH|AUTHORIZATION)$|PASSWORD/i;
+const SECRET_PREFIXES = [
+	"ghp_",
+	"gho_",
+	"ghr_",
+	"ghs_",
+	"github_pat_",
+	"xoxa-",
+	"xoxb-",
+	"xoxp-",
+	"xoxo-",
+	"xoxr-",
+	"xoxs-",
+	"sk-",
+];
+const PREFIX = new RegExp(`(?:^|[^A-Za-z0-9])(?:${SECRET_PREFIXES.join("|")})[A-Za-z0-9_./+~=-]+`);
+const CLOUD_KEY = /(?:^|[^A-Za-z0-9])(?:AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35})/;
+const BEARER_VALUE = /^(?=.{8,}$)(?=.*[0-9_./+~=-])[A-Za-z0-9_./+~=-]+$/;
 const JWT = /^([A-Za-z0-9_-]+)\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\.?$/;
 const PRIVATE_HEADER = /^-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----$/;
 const PRIVATE_END = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----$/;
@@ -28,7 +43,7 @@ export class SecretOutputRedactor {
 	private token = "";
 	private rawToken = "";
 	private controls = "";
-	private escape: "start" | "csi" | "osc" | "osc-end" | undefined;
+	private escape: "start" | "charset" | "csi" | "osc" | "osc-end" | undefined;
 	private escapeText = "";
 	private oversized = false;
 	private bearer = false;
@@ -59,10 +74,22 @@ export class SecretOutputRedactor {
 					this.escape = "csi";
 					continue;
 				}
-				if (this.escape === "start" || /[@-~]/.test(character) || this.escapeText.length > 64) {
-					if (this.pem === undefined && this.value === undefined && !this.oversized) {
-						this.rawToken += this.escapeText;
-						this.controls += this.escapeText;
+				if (this.escape === "start" && /[()*+]/.test(character)) {
+					this.escape = "charset";
+					continue;
+				}
+				if (
+					this.escape === "start" ||
+					this.escape === "charset" ||
+					/[@-~]/.test(character) ||
+					this.escapeText.length > 64
+				) {
+					if (this.pem === undefined && this.value === undefined) {
+						if (this.oversized) output += this.escapeText;
+						else {
+							this.rawToken += this.escapeText;
+							this.controls += this.escapeText;
+						}
 						if (this.rawToken.length > MAX_TOKEN_CHARS) {
 							this.token = "";
 							this.rawToken = "";
@@ -123,7 +150,11 @@ export class SecretOutputRedactor {
 					output += REDACTED;
 				}
 				if (this.value === "quoted") {
-					if (this.escaped) this.escaped = false;
+					if (character === "\n" || character === "\r") {
+						this.value = undefined;
+						this.escaped = false;
+						output += character;
+					} else if (this.escaped) this.escaped = false;
 					else if (character === "\\") this.escaped = true;
 					else if (character === this.quote) {
 						output += character;
@@ -144,7 +175,7 @@ export class SecretOutputRedactor {
 				if (this.oversized) continue;
 				this.token += character;
 				this.rawToken += character;
-				if (this.rawToken.length > MAX_TOKEN_CHARS) {
+				if (this.rawToken.length > MAX_TOKEN_CHARS || this.token.length > MAX_TOKEN_CHARS) {
 					this.token = "";
 					this.rawToken = "";
 					this.controls = "";
@@ -165,6 +196,42 @@ export class SecretOutputRedactor {
 			output += character;
 			if (!/\s/.test(character)) this.bearer = false;
 		}
+		return output;
+	}
+
+	/**
+	 * Publish an idle prompt without treating the pause as a token boundary. A possible
+	 * credential is masked now and its continuation remains suppressed until a delimiter.
+	 */
+	flushIdle(): string {
+		if (this.finished || this.oversized) return "";
+		const token = this.token;
+		// A PEM opener has spaces: keep parsing it rather than suppressing only its
+		// first word and accidentally releasing the following private-key body.
+		if (token.length > 0 && "-----BEGIN".startsWith(token)) return "";
+		let possibleSecret = this.bearer || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
+		for (let i = 0; !possibleSecret && i < token.length; i++) {
+			if (i > 0 && /[A-Za-z0-9]/.test(token.charAt(i - 1))) continue;
+			const suffix = token.slice(i);
+			possibleSecret = [...SECRET_PREFIXES, "AKIA", "AIza"].some(
+				(prefix) => prefix.startsWith(suffix) || suffix.startsWith(prefix),
+			);
+		}
+		// JSON JWT headers begin with an object, optionally preceded by JSON whitespace.
+		const header = token.split(".")[0] ?? "";
+		if (/^[eICD]/.test(header)) {
+			const decoded = Buffer.from(header, "base64url").toString("utf8").trimStart();
+			possibleSecret ||= decoded.length === 0 || decoded.startsWith("{");
+		}
+		const output = possibleSecret && token.length > 0 ? this.controls + REDACTED : this.rawToken;
+		this.rawToken = "";
+		this.controls = "";
+		if (possibleSecret && token.length > 0) {
+			this.token = "";
+			this.oversized = true;
+		}
+		// Keep the logical token after publishing ordinary text: a following '=' still
+		// needs its key, and a following credential prefix still needs its boundary.
 		return output;
 	}
 
@@ -189,7 +256,8 @@ export class SecretOutputRedactor {
 		this.rawToken = "";
 		this.controls = "";
 		if (token.length === 0) return rawToken;
-		const secret = this.bearer || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
+		const secret =
+			(this.bearer && BEARER_VALUE.test(token)) || PREFIX.test(token) || CLOUD_KEY.test(token) || isJwt(token);
 		this.bearer = !secret && /^Bearer$/i.test(token);
 		return secret ? controls + REDACTED : rawToken;
 	}

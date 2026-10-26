@@ -4,6 +4,49 @@ import { SecretOutputRedactor } from "../../src/core/tools/secret-output-redacto
 import { secretOutputCases } from "./bash-redaction-fixtures.ts";
 
 describe("streaming secret tokenizer", () => {
+	it.each(["https://", "--github-token=", "/tmp/", "value=", "YWJj/", "prefix.", "prefix-", "prefix+", "prefix~"])(
+		"redacts prefixed credentials embedded after %s at every split",
+		(prefix) => {
+			for (const { input } of secretOutputCases().filter(({ name }) => /^(prefix|AWS|Google)/.test(name))) {
+				const text = `${prefix}${input}@host\n`;
+				for (let split = 1; split < text.length; split++) {
+					const redactor = new SecretOutputRedactor();
+					const output =
+						redactor.push(text.slice(0, split)) + redactor.push(text.slice(split)) + redactor.finish();
+					expect(output).not.toContain(input);
+					expect(output).toContain("<redacted>");
+					expect(output).toContain("@host\n");
+				}
+			}
+		},
+	);
+	it.each(["(", ")", "*", "+"])("consumes the full ESC %s charset designation", (designator) => {
+		const fixture = secretOutputCases()[0];
+		assert(fixture);
+		const control = `\x1b${designator}B\x1b[m`;
+		const input = `${control}${fixture.input}\n`;
+		const redactor = new SecretOutputRedactor();
+		expect([...input].map((c) => redactor.push(c)).join("") + redactor.finish()).toBe(`${control}<redacted>\n`);
+	});
+	it("does not classify author metadata as an AUTH key", () => {
+		const redactor = new SecretOutputRedactor();
+		const input = "GIT_AUTHOR_NAME=Jane Doe\nAUTH=private\nHTTP_AUTHORIZATION=private\n";
+		expect(redactor.push(input) + redactor.finish()).toBe(
+			"GIT_AUTHOR_NAME=Jane Doe\nAUTH=<redacted>\nHTTP_AUTHORIZATION=<redacted>\n",
+		);
+	});
+	it("requires a token-shaped Bearer value rather than the next prose word", () => {
+		const redactor = new SecretOutputRedactor();
+		const input = "the bearer of this\nBearer ordinary words\n";
+		expect(redactor.push(input) + redactor.finish()).toBe(input);
+	});
+	it.each(["'", '"'])("bounds an unclosed %s secret value at a newline", (quote) => {
+		const redactor = new SecretOutputRedactor();
+		const input = `PASSWORD=${quote}\nline2\nline3`;
+		expect([...input].map((c) => redactor.push(c)).join("") + redactor.finish()).toBe(
+			`PASSWORD=${quote}<redacted>\nline2\nline3`,
+		);
+	});
 	it("redacts punctuation inside an unquoted secret assignment", () => {
 		const redactor = new SecretOutputRedactor();
 		const input = "PASSWORD=synthetic,comma;tail/path after";
@@ -40,8 +83,8 @@ describe("streaming secret tokenizer", () => {
 		expect(redactor.finish()).toBe("");
 	});
 
-	it("keeps a quoted assignment private across escaped quotes and newlines", () => {
-		const input = 'MY_SECRET="one \\" two\nthree" after';
+	it("keeps a quoted assignment private across escaped quotes", () => {
+		const input = 'MY_SECRET="one \\" two three" after';
 		const redactor = new SecretOutputRedactor();
 		expect([...input].map((c) => redactor.push(c)).join("") + redactor.finish()).toBe('MY_SECRET="<redacted>" after');
 	});
