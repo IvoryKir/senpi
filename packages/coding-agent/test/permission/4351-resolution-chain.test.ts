@@ -130,49 +130,53 @@ describe("4351 resolution-chain review fold", () => {
 	});
 
 	for (const action of ["deny", "allow"] as const) {
-		it(`keeps a metadata-proven case ${action} below a non-listable ancestor`, async (context) => {
-			const locked = join(root, "Locked");
-			const data = join(locked, "Data");
-			mkdirSync(locked, { mode: 0o711 });
-			mkdirSync(join(data, "x"), { recursive: true });
-			writeFileSync(join(data, "f.txt"), "fixture");
-			symlinkSync(outside, join(data, "x", "secret"), linkType);
-			try {
-				const actual = statSync(data, { bigint: true });
-				const alias = statSync(join(locked, "DATA"), { bigint: true });
-				if (actual.dev !== alias.dev || actual.ino !== alias.ino) return context.skip();
-			} catch (error) {
-				if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
-				return context.skip();
-			}
-			// 0711 is still listable by its owner; remove owner read too for this process.
-			chmodSync(locked, 0o111);
-			try {
-				expect(() => readdirSync(locked)).toThrow();
-				const input =
-					action === "deny"
-						? join(data, "x", "secret", "f.txt")
-						: join(root.toUpperCase(), "Locked", "DATA", "f.txt");
-				const pattern = action === "deny" ? `${locked}/DATA/*/secret/*` : `${data}/*`;
-				const service = new PermissionService(
-					[
-						{ permission: "*", pattern: "*", action: "allow" },
-						rule("*", action === "deny" ? "allow" : "deny"),
-						rule(pattern, action),
-					],
-					[],
-				);
-				const request = external(input);
-				expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe(action);
-				if (action === "deny") {
-					await expect(fence(input, service)).rejects.toMatchObject({ _tag: "PermissionDeniedError" });
-				} else {
-					expect((await fence(input, service))()).toBe(true);
+		// Windows chmod does not implement POSIX directory search/list permission bits.
+		it.skipIf(process.platform === "win32")(
+			`keeps a metadata-proven case ${action} below a non-listable ancestor`,
+			async (context) => {
+				const locked = join(root, "Locked");
+				const data = join(locked, "Data");
+				mkdirSync(locked, { mode: 0o711 });
+				mkdirSync(join(data, "x"), { recursive: true });
+				writeFileSync(join(data, "f.txt"), "fixture");
+				symlinkSync(outside, join(data, "x", "secret"), linkType);
+				try {
+					const actual = statSync(data, { bigint: true });
+					const alias = statSync(join(locked, "DATA"), { bigint: true });
+					if (actual.dev !== alias.dev || actual.ino !== alias.ino) return context.skip();
+				} catch (error) {
+					if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+					return context.skip();
 				}
-			} finally {
-				chmodSync(locked, 0o711);
-			}
-		});
+				// 0711 is still listable by its owner; remove owner read too for this process.
+				chmodSync(locked, 0o111);
+				try {
+					expect(() => readdirSync(locked)).toThrow();
+					const input =
+						action === "deny"
+							? join(data, "x", "secret", "f.txt")
+							: join(root.toUpperCase(), "Locked", "DATA", "f.txt");
+					const pattern = action === "deny" ? `${locked}/DATA/*/secret/*` : `${data}/*`;
+					const service = new PermissionService(
+						[
+							{ permission: "*", pattern: "*", action: "allow" },
+							rule("*", action === "deny" ? "allow" : "deny"),
+							rule(pattern, action),
+						],
+						[],
+					);
+					const request = external(input);
+					expect(service.dispatchDecision(request.permission, request.patterns, request).action).toBe(action);
+					if (action === "deny") {
+						await expect(fence(input, service)).rejects.toMatchObject({ _tag: "PermissionDeniedError" });
+					} else {
+						expect((await fence(input, service))()).toBe(true);
+					}
+				} finally {
+					chmodSync(locked, 0o711);
+				}
+			},
+		);
 	}
 
 	it("does not report an allowed sibling as denied by another path's alias", async () => {
