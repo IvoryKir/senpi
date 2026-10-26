@@ -55,12 +55,14 @@ export class SocketSecretNativeUnavailableError extends Error {
 
 export class SocketSecretNativeAbiMismatchError extends Error {
 	readonly code = "socket-secret-native-abi-mismatch";
+	readonly modulePath: string;
 
-	constructor(readonly modulePath: string) {
+	constructor(modulePath: string) {
 		super(
 			`Socket-secret bridge ABI mismatch in ${modulePath}: expected __senpiSocketSecretAbi1() === "${NATIVE_SOCKET_SECRET_ABI_VERSION}" and every export`,
 		);
 		this.name = "SocketSecretNativeAbiMismatchError";
+		this.modulePath = modulePath;
 	}
 }
 
