@@ -35,6 +35,7 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 	["bearer schemes", (size) => fill("bearer ", size)],
 	["escaped quotes after a name", (size) => `key${fill('\\"', size)}`],
 	["percent escapes", (size) => fill("%41", size)],
+	["encoded / and near misses inside one token", (size) => fill("%2Fsk-abcd%2FeyJ", size)],
 	["HTML entities", (size) => fill("&quot;", size)],
 	["130-character names", (size) => fill(`${"a".repeat(130)}_api_key: x `, size)],
 	["model-not-found prose heads", (size) => fill("the model ", size)],

@@ -64,6 +64,15 @@ const REDACTED_SHAPES: readonly (readonly [label: string, text: string, leaked: 
 	["a JWT followed by a path", `/cb/${jwt}/more`, "eyJzdWIi"],
 	["a key as proxy userinfo", `https://${sk}@proxy.example.test`, sk],
 	["a token after user@", `deploy@${ghp}`, ghp],
+	// Round 9 (senpi#4283): percent-encoded token boundaries still start a word.
+	["a token in an encoded git remote", `https%3A%2F%2F${ghp}%40github.com`, ghp],
+	["a key after an encoded path separator", `/v1%2F${sk}`, sk],
+	["a JWT after an encoded path separator", `redirect=%2Fcb%2F${jwt}`, "eyJzdWIi"],
+	["a key after encoded +", `x%2B${sk}`, sk],
+	["a key after encoded ~", `x%7E${sk}`, sk],
+	["a key after encoded -", `x%2D${sk}`, sk],
+	["a key after encoded .", `x%2e${sk}`, sk],
+	["a key after lowercase encoded /", `x%2f${sk}`, sk],
 	["a quoted password with punctuation", 'password: "Hunter2!zzTailA01"', "zzTailA01"],
 	["a bare password with @ and :", "password=p@zzTailA02:word123", "zzTailA02"],
 	["a non-ASCII password", json({ password: "p\u00e4sswzzTailA03" }), "zzTailA03"],
@@ -88,6 +97,7 @@ const READABLE_TEXT: readonly string[] = [
 	'{"type":"invalid_request_error","param":"model","max_tokens":4096} request id: req_011CUxFIXTURE',
 	"model us.anthropic.claude-opus-4-5-20251101-v1:0, gpt-6.1-sol, task-12345678",
 	"tasks-abcdefghijk /srv/risk-assessment-v2 disk-cache-directory-1234 /opt/AKIA_notes",
+	`x%41${sk} x%5F${sk} x%GG${sk}`,
 ];
 
 function failedMessage(errorMessage: string, stopReason: AssistantMessage["stopReason"] = "error"): AssistantMessage {

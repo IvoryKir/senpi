@@ -2,7 +2,16 @@
 // key prefixes and JWTs. Each check reads only the characters of the token it is given, forward, without a regular
 // expression.
 
-import { isAlnum, isBase64Url, isDigit, isLower, isNameChar, isUpper, matchesAt } from "./secret-lexer.ts";
+import {
+	isAlnum,
+	isBase64Url,
+	isDigit,
+	isEncodedWordBoundary,
+	isLower,
+	isNameChar,
+	isUpper,
+	matchesAt,
+} from "./secret-lexer.ts";
 
 /** The last component of a credential name, after digits and qualifiers are stripped (see secretWord). */
 const SECRET_WORDS = new Set([
@@ -202,14 +211,17 @@ function jwtAt(text: string, p: number, end: number): number {
 /**
  * Where the first credential-shaped run in [start, end) begins, or -1: a known key prefix or a JWT at the start of a
  * word anywhere in the token (after "/", "+", "~", "-", "." or "%", so URL userinfo, paths and joined values count),
- * never inside a word ("tasks-..." is not "sk-..."). Constant work per character plus the JWT walks bounded above.
+ * including percent-encoded token punctuation, never inside a word ("tasks-..." is not "sk-...").
+ * Constant work per character plus the JWT walks bounded above.
  */
 export function credentialShapeStart(text: string, start: number, end: number): number {
 	let stop = end;
 	while (stop > start && text.charCodeAt(stop - 1) === 46) stop--;
 	let jwtFrom = start;
 	for (let p = start; p < stop; p++) {
-		if (p > start && isWordChar(text.charCodeAt(p - 1))) continue;
+		if (p > start && isWordChar(text.charCodeAt(p - 1)) && !(p >= start + 3 && isEncodedWordBoundary(text, p - 3))) {
+			continue;
+		}
 		for (const rule of PREFIX_RULES) if (matchesPrefixRule(text, p, stop, rule)) return p;
 		if (p < jwtFrom) continue;
 		const next = jwtAt(text, p, stop);

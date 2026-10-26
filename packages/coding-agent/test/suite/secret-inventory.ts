@@ -203,6 +203,15 @@ const skAnt = PREFIXED_SECRETS[1]?.[1] ?? "";
 const akia = PREFIXED_SECRETS[4]?.[1] ?? "";
 const jwt = PREFIXED_SECRETS[6]?.[1] ?? "";
 const ROUND_8_CELLS: readonly SecretCell[] = [
+	// Round 9 (senpi#4283): decoded token punctuation is a word boundary too.
+	{ name: "review: encoded git remote userinfo", secret: ghp, text: `https%3A%2F%2F${ghp}%40github.com` },
+	{ name: "review: key after encoded /", secret: sk, text: `/v1%2F${sk}` },
+	{ name: "review: JWT after encoded /", secret: jwt, text: `redirect=%2Fcb%2F${jwt}` },
+	{ name: "review: key after encoded +", secret: sk, text: `x%2B${sk}` },
+	{ name: "review: key after encoded ~", secret: sk, text: `x%7E${sk}` },
+	{ name: "review: key after encoded -", secret: sk, text: `x%2D${sk}` },
+	{ name: "review: key after encoded .", secret: sk, text: `x%2e${sk}` },
+	{ name: "review: key after lowercase encoded /", secret: sk, text: `x%2f${sk}` },
 	{ name: "review: token as git remote userinfo", secret: ghp, text: `https://${ghp}@github.com/o/r.git` },
 	{
 		name: "review: git remote user:token userinfo",

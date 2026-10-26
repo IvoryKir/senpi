@@ -45,6 +45,13 @@ function percentDecoded(text: string, i: number): number {
 	return high < 0 || low < 0 ? -1 : high * 16 + low;
 }
 
+/** Whether the three-character percent unit at i is token punctuation that starts a new word. */
+export function isEncodedWordBoundary(text: string, i: number): boolean {
+	if (text.charCodeAt(i) !== 37) return false;
+	const decoded = percentDecoded(text, i);
+	return decoded === 47 || decoded === 43 || decoded === 126 || decoded === 45 || decoded === 46;
+}
+
 export function matchesAt(text: string, i: number, literal: string, limit = text.length): boolean {
 	if (i + literal.length > limit) return false;
 	for (let k = 0; k < literal.length; k++) if (text.charCodeAt(i + k) !== literal.charCodeAt(k)) return false;
