@@ -35,7 +35,10 @@ export function describeLoginFailure(error: unknown, providerName: string, metho
 		method === "oauth"
 			? `Sign-in to ${providerName} did not finish`
 			: `Could not save the API key for ${providerName}`;
-	return { level: "error", message: `${failed}: ${message}. Run /login to try again.` };
+	return {
+		level: "error",
+		message: `${failed}: ${message}${/[.!?]$/.test(message) ? "" : "."} Run /login to try again.`,
+	};
 }
 
 function errorMessage(error: unknown): string {

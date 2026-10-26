@@ -221,8 +221,15 @@ export function createAssistantRenderDescriptors(
 							model: `${message.provider}/${message.model}`,
 							usageLimit: usageLimitScope(message),
 						});
+			const commandHint = message.errorMessage?.includes("Provider is not configured: ")
+				? " Use /login to connect it, or /model to choose another model."
+				: usageLimitScope(message) === "account"
+					? " Use /model to choose another provider."
+					: "";
 			addError(
-				described ?? `Error: ${stripTurnRetrySuppressionPrefix(message.errorMessage ?? "") || "Unknown error"}`,
+				described === undefined
+					? `Error: ${stripTurnRetrySuppressionPrefix(message.errorMessage ?? "") || "Unknown error"}`
+					: `${described}${commandHint}`,
 			);
 			break;
 		}

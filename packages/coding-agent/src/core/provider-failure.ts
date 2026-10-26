@@ -57,7 +57,14 @@ export function describeProviderFailure(diagnostic: ProviderDiagnostic | undefin
 		...(resetsAt === undefined
 			? {}
 			: {
-					reason: `${detail.reason} until ${new Date(resetsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`,
+					reason: `${detail.reason} until ${new Date(resetsAt).toLocaleString(undefined, {
+						year: "numeric",
+						month: "short",
+						day: "numeric",
+						hour: "numeric",
+						minute: "2-digit",
+						timeZoneName: "short",
+					})}`,
 				}),
 	};
 }

@@ -9178,8 +9178,9 @@ export class InteractiveMode {
 		try {
 			providerOptions = await this.getLogoutProviderOptions();
 		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
 			this.showError(
-				`Could not read your saved sign-ins: ${error instanceof Error ? error.message : String(error)}. Restart senpi; if it happens again, run /login to sign in again.`,
+				`Could not read your saved sign-ins: ${message}${/[.!?]$/.test(message) ? "" : "."} Restart senpi; if it happens again, run /login to sign in again.`,
 			);
 			return;
 		}

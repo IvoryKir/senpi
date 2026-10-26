@@ -78,10 +78,13 @@ describe("agent_end provider failure", () => {
 		expect(end.failure).toMatchObject({ category: "unknown", httpStatus: 403, code: "permission_error" });
 		// senpi#4329: the code and status stay in the typed fields; the user-facing text never carries them.
 		for (const text of [end.failure?.reason, end.failure?.action]) {
+			expect(text?.trim().length).toBeGreaterThan(0);
 			expect(text).not.toContain("permission_error");
 			expect(text).not.toContain("403");
 		}
 		expectStructuredOnly(end.failure, "invalid api key");
+		if (end.failure === undefined) throw new Error("Missing provider failure");
+		expect(formatProviderFailure(end.failure).trim().length).toBeGreaterThan(0);
 	});
 
 	it("falls back to unknown, not a guess from the message, when the error carries no diagnostic", async () => {

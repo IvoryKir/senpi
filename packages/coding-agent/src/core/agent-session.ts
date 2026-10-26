@@ -12650,8 +12650,12 @@ export class AgentSession {
 		if (degraded.kind === "fail") {
 			const waitSeconds = Math.ceil(degraded.hintMs / 1000);
 			const until = new Date(Date.now() + degraded.hintMs).toLocaleString(undefined, {
-				dateStyle: "medium",
-				timeStyle: "short",
+				year: "numeric",
+				month: "short",
+				day: "numeric",
+				hour: "numeric",
+				minute: "2-digit",
+				timeZoneName: "short",
 			});
 			finishRetryAttempt(
 				this._retryAttempt,
