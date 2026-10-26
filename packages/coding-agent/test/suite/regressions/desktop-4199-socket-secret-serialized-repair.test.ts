@@ -74,12 +74,23 @@ describe.skipIf(process.platform === "win32")("serialized socket-secret repair",
 		},
 	);
 
-	it("a repair through a symlinked directory takes the same lock as the canonical path", async () => {
+	it("a repair through a symlinked parent directory waits for the canonical path's lock", async () => {
 		const root = await scratch();
 		const real = join(root, "real");
 		await mkdir(real);
 		await symlink(real, join(root, "alias"));
 		await contenderRepairsFirst(join(real, "rpc.sock.secret"), join(root, "alias", "rpc.sock.secret"), 8);
+	});
+
+	it("a repair through a '..' that crosses a symlink locks the physical parent, not the textual one", async () => {
+		const root = await scratch();
+		const real = join(root, "real");
+		await mkdir(join(real, "sub"), { recursive: true });
+		await symlink(join(real, "sub"), join(root, "link"));
+		// Built as a string: path.join would resolve the '..' by text to <root>/rpc.sock.secret.
+		const crossing = `${join(root, "link")}/../rpc.sock.secret`;
+		await contenderRepairsFirst(join(real, "rpc.sock.secret"), crossing, 8);
+		await expect(fs.access(join(root, "rpc.sock.secret.publish.lock"))).rejects.toThrow();
 	});
 
 	it("a repair with no contender replaces the invalid secret with a valid owner-only key", async () => {
