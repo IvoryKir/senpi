@@ -3,9 +3,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ExtensionToolContext } from "../../src/core/extensions/types.ts";
 import { rulesForPreset } from "../../src/core/extensions/builtin/permission-system/config.ts";
 import { evaluate } from "../../src/core/extensions/builtin/permission-system/evaluate.ts";
 import { createBuiltinParserRegistry } from "../../src/core/extensions/builtin/permission-system/parsers.ts";
+import { createGrepToolDefinition } from "../../src/core/tools/grep.ts";
 
 describe("permission presets for external paths", () => {
 	const cwd = "/Users/me/project";
@@ -114,9 +116,17 @@ describe("permission presets for external paths", () => {
 		}
 	});
 
-	it("refuses a file URL the tools cannot open instead of passing it (senpi#4311)", () => {
-		// when / then: a remote-host file URL makes the resolver throw, which blocks the call
-		expect(() => registry.parse("write", { path: "file://evilhost/x", content: "x" }, cwd)).toThrow();
+	it.skipIf(process.platform === "win32")(
+		"refuses a file URL the tools cannot open instead of passing it (senpi#4311)",
+		() => {
+			// when / then: a remote-host file URL makes the resolver throw, which blocks the call
+			expect(() => registry.parse("write", { path: "file://evilhost/x", content: "x" }, cwd)).toThrow();
+		},
+	);
+
+	it.runIf(process.platform === "win32")("classifies a Windows file URL as an external UNC path (senpi#4316)", () => {
+		const requests = registry.parse("write", { path: "file://evilhost/x", content: "x" }, cwd);
+		expect(requests.find((r) => r.permission === "external_directory")?.patterns).toEqual(["\\\\evilhost\\x\\"]);
 	});
 });
 
@@ -150,6 +160,40 @@ describe("permission presets for external paths through in-repo symlinks (senpi#
 		// then
 		expect(requests.map((r) => r.permission)).toContain("external_directory");
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"classifies only the literal selector-shaped file grep opens (senpi#4316)",
+		async () => {
+			const { project, outsideDir } = setup();
+			symlinkSync(join(outsideDir, "secret.txt"), join(project, "link"));
+			const literal = join(project, "link:L1-L1");
+			writeFileSync(literal, "TOKEN=literal\n");
+			const input = { pattern: "TOKEN", path: "link:L1-L1" };
+
+			const result = await createGrepToolDefinition(project).execute("literal", input, undefined, undefined, {
+				cwd: project,
+			} as ExtensionToolContext);
+			expect(result.details?.paths).toEqual([literal]);
+			expect(result.details?.matches.map((match) => match.text)).toEqual(["TOKEN=literal"]);
+			expect(registry.parse("grep", input, project).map((r) => r.permission)).toEqual(["grep"]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not classify a directory prefix as a grep line-selector target (senpi#4316)",
+		async () => {
+			const { project, outsideDir } = setup();
+			symlinkSync(outsideDir, join(project, "link"));
+			const input = { pattern: "TOKEN", path: "link:L1-L1" };
+
+			await expect(
+				createGrepToolDefinition(project).execute("directory", input, undefined, undefined, {
+					cwd: project,
+				} as ExtensionToolContext),
+			).rejects.toThrow("Path not found:");
+			expect(registry.parse("grep", input, project).map((r) => r.permission)).toEqual(["grep"]);
+		},
+	);
 
 	it.skipIf(process.platform === "win32")("asks for a Unicode-space spelling of a symlinked outside directory", () => {
 		// given: `a b` (plain space) links outside; the model writes `a\u00A0b`, which the tool normalizes

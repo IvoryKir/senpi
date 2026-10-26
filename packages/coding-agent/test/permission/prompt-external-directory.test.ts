@@ -21,18 +21,21 @@ function directoryShownFor(request: Request): Promise<string | undefined> {
 }
 
 describe("external_directory prompt target (senpi#4311)", () => {
-	it("names the resolved path the tool opens, not the call's raw spelling", async () => {
-		// given: a write of `@/tmp/outside.txt`, whose resolved external_directory pattern is `/tmp/outside.txt`
-		const request: Request = {
-			id: "req-1",
-			sessionID: "session-1",
-			permission: "external_directory",
-			patterns: ["/tmp/outside.txt"],
-			always: ["/tmp/*"],
-			metadata: { filepath: "@/tmp/outside.txt" },
-		};
+	it.each(["/tmp/outside.txt", "/tmp/legal*filename.txt"])(
+		"names the resolved target %s, ignoring caller display metadata (senpi#4316)",
+		async (target) => {
+			const request: Request = {
+				id: "req-1",
+				sessionID: "session-1",
+				permission: "external_directory",
+				patterns: [target],
+				always: ["/tmp/*"],
+				metadata: { filepath: `@${target}`, parentDir: "/trusted-looking-project" },
+			};
 
-		// when / then: the Directory the user approves is the file that will be touched
-		expect(await directoryShownFor(request)).toBe("/tmp/outside.txt");
-	});
+			expect(await directoryShownFor(request)).toBe(target);
+			// Removing the spoofed parent must not turn literal filename characters into glob syntax.
+			expect(await directoryShownFor({ ...request, metadata: { filepath: `@${target}` } })).toBe(target);
+		},
+	);
 });

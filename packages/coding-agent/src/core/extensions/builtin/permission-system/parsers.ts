@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { realpathWithoutOpen } from "../../../../utils/paths.ts";
 import { resolveToCwd } from "../../../tools/path-utils.ts";
@@ -107,15 +108,26 @@ const patchTarget: TargetResolver = (rawPath, cwd) => [resolvePatchPath(cwd, raw
  */
 const unknownToolTarget: TargetResolver = (rawPath, cwd) => [rawPath, resolveToCwd(rawPath, cwd)];
 
+/** Match grep's pathStat: only ENOENT permits selector fallback; other I/O errors block the call. */
+function grepPathStat(path: string) {
+	try {
+		return statSync(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
 /**
- * grep opens `resolveToCwd(raw, cwd)`, and when that does not exist and ends in a `:L<a>-L<b>`
- * line selector it searches the prefix instead (tools/grep/index.ts). Both are classified: the
- * classifier must not stat on the host main thread, and the superset fails closed.
+ * Match tools/grep/index.ts: an existing literal name wins; only a missing name with a file
+ * prefix is a selector. Probe synchronously because the final dispatch fence cannot yield.
+ * Ordinary paths need no selection probe (senpi#4316).
  */
 const grepTarget: TargetResolver = (rawPath, cwd) => {
 	const resolved = resolveToCwd(rawPath, cwd);
 	const selector = /^(.*):L(\d+)-L?(\d+)$/.exec(resolved);
-	return selector?.[1] ? [resolved, selector[1]] : [resolved];
+	if (!selector || grepPathStat(resolved)) return [resolved];
+	return grepPathStat(selector[1])?.isFile() ? [selector[1]] : [resolved];
 };
 
 function withExternalDirectoryRequests(
