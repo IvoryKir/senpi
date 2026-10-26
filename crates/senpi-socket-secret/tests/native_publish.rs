@@ -174,13 +174,73 @@ mod windows {
             .split(")(")
             .collect();
         found.sort_unstable();
-        let owner = format!("A;;FA;;;{user}");
-        let mut expected = vec![owner.as_str(), "A;;FA;;;BA", "A;;FA;;;SY"];
-        expected.sort_unstable();
-        assert_eq!(
-            found, expected,
-            "exactly owner, SYSTEM and Administrators: {sddl}"
+        assert_eq!(found.len(), 3, "exactly owner, SYSTEM and Administrators: {sddl}");
+        for well_known in ["A;;FA;;;BA", "A;;FA;;;SY"] {
+            assert!(found.contains(&well_known), "missing {well_known}: {sddl}");
+        }
+        let owner: Vec<&&str> = found
+            .iter()
+            .filter(|ace| **ace != "A;;FA;;;BA" && **ace != "A;;FA;;;SY")
+            .collect();
+        assert!(
+            owner.len() == 1 && owner_ace_matches(owner[0], &user),
+            "the third ACE grants the current user full access: {sddl}"
         );
+    }
+
+    /// The owner ACE grants full access to `user_sid` (an `S-1-...` string).
+    fn owner_ace_matches(ace: &str, user_sid: &str) -> bool {
+        ace == format!("A;;FA;;;{user_sid}")
+    }
+
+    /// senpi#4362: SDDL prints some machine-relative SIDs as aliases, e.g. the built-in local
+    /// Administrator (RID 500) as `LA`. An owner ACE printed that way is still the user's ACE.
+    #[test]
+    fn an_owner_ace_printed_as_an_alias_still_matches_its_sid() {
+        let administrator = sid_string_of("LA");
+        assert!(
+            administrator.starts_with("S-1-5-21-") && administrator.ends_with("-500"),
+            "{administrator}"
+        );
+        println!("RECEIPT_PUBLISH alias_owner LA={administrator}");
+        assert!(owner_ace_matches("A;;FA;;;LA", &administrator));
+        assert!(!owner_ace_matches("A;;FA;;;SY", &administrator));
+        assert!(!owner_ace_matches("A;;GR;;;LA", &administrator));
+    }
+
+    /// The `S-1-...` form of an SDDL SID string (alias or numeric).
+    fn sid_string_of(sddl_sid: &str) -> String {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSidToSidW};
+        use windows_sys::Win32::Security::PSID;
+
+        let wide: Vec<u16> = sddl_sid.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut sid: PSID = std::ptr::null_mut();
+        // SAFETY: `wide` is NUL-terminated; `sid` receives a LocalAlloc SID.
+        assert_ne!(
+            unsafe { ConvertStringSidToSidW(wide.as_ptr(), &mut sid) },
+            0,
+            "not a SID: {sddl_sid}"
+        );
+        let mut text: *mut u16 = std::ptr::null_mut();
+        // SAFETY: `sid` is valid; `text` receives a LocalAlloc string.
+        assert_ne!(
+            unsafe { ConvertSidToStringSidW(sid, &mut text) },
+            0,
+            "ConvertSidToStringSidW failed"
+        );
+        // SAFETY: `text` is a NUL-terminated UTF-16 string from the conversion above.
+        let length = (0..)
+            .take_while(|&index| unsafe { *text.add(index) } != 0)
+            .count();
+        // SAFETY: `text` holds `length` readable units before its terminator.
+        let value = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+        // SAFETY: both allocations came from the calls above and are freed exactly once.
+        unsafe {
+            LocalFree(text.cast());
+            LocalFree(sid.cast());
+        }
+        value
     }
 
     fn current_user_sid() -> String {
