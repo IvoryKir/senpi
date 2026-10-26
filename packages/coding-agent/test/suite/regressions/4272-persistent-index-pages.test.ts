@@ -111,8 +111,14 @@ it("publishes one changed page through bounded paths without copying the large b
 	const index = new CompactContentIndex<{ n: number }>(store, () => [], 1);
 	try {
 		const count = 8192;
+		// Build the base without per-insert compaction churn, then fold it once; the measured step is the single set below.
+		const pause = vi.spyOn(index["compactor"], "schedule").mockImplementation(() => undefined);
 		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
+		pause.mockRestore();
+		index.maybeCompact();
+		await store.idle();
+		expect(index.bases.get(index.base, "00512"), "the base is compacted before the measured step").toBeDefined();
 		const old = index.freeze();
 		const touched = index.bases.get(index.base, "00512")?.page.keys.length ?? 0;
 		const bound = 4 * touched * Math.ceil(Math.log2(count));
