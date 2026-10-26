@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { providerNotConfiguredMessage } from "../src/auth/resolve.ts";
 import {
 	describeProviderFailureForUser,
 	stripTurnRetrySuppressionPrefix,
@@ -56,6 +57,17 @@ describe("describeProviderFailureForUser", () => {
 			"The connection to the provider reported an error before the reply finished (WebSocket error).",
 		);
 		expect(text).not.toContain(MARKER);
+	});
+
+	// senpi#4329: the not-configured sentinel stays on the message for the classifiers; the reader gets a step instead.
+	it("rewrites the provider-not-configured sentinel, with or without the replay marker", () => {
+		const sentinel = providerNotConfiguredMessage("kiro");
+		for (const raw of [sentinel, `${MARKER}${sentinel}`]) {
+			const text = describeProviderFailureForUser(raw);
+			expect(text).toBeDefined();
+			expect(text).not.toContain(sentinel);
+			expect(text).toContain("kiro");
+		}
 	});
 
 	it("counts the same-model attempts that already failed", () => {

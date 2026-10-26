@@ -8,6 +8,13 @@ import {
 const CLAUDE_EXTRA_USAGE_URL = "https://claude.ai/settings/usage";
 
 /**
+ * `PROVIDER_NOT_CONFIGURED_PREFIX` from `../auth/resolve.ts`, repeated because importing it pulls the auth
+ * modules past this entry's import budget (`check:entry-graphs`). The description test builds its input with
+ * `providerNotConfiguredMessage`, so the two copies cannot drift apart.
+ */
+const PROVIDER_NOT_CONFIGURED_PREFIX = "Provider is not configured: ";
+
+/**
  * Opens the sentence an adapter adds when its own account-limit text already names the next step
  * (senpi#3615). Such text is shown as written instead of the generic switch-provider advice.
  */
@@ -82,6 +89,11 @@ export function describeProviderFailureForUser(
 	if (!message) return undefined;
 	if (isAnthropicThirdPartyBillingMessage(message)) {
 		return describeAnthropicThirdPartyBilling(options.model?.split("/")[0]);
+	}
+	// The sentinel stays on the message for the classifiers that key on it; the reader gets the step (senpi#4329).
+	if (message.startsWith(PROVIDER_NOT_CONFIGURED_PREFIX)) {
+		const provider = message.slice(PROVIDER_NOT_CONFIGURED_PREFIX.length);
+		return `${provider} is not connected: no API key or sign-in is saved for it. Run /login to connect it, or choose another model with /model.`;
 	}
 	if (options.usageLimit === "account") {
 		if (message.includes(ACCOUNT_LIMIT_NEXT_STEP_LEAD)) return message.replace(RETRY_AFTER_MARKER, "");

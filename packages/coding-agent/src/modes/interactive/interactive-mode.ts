@@ -9178,7 +9178,9 @@ export class InteractiveMode {
 		try {
 			providerOptions = await this.getLogoutProviderOptions();
 		} catch (error) {
-			this.showError(`Could not read stored credentials: ${error instanceof Error ? error.message : String(error)}`);
+			this.showError(
+				`Could not read your saved sign-ins: ${error instanceof Error ? error.message : String(error)}. Restart senpi; if it happens again, run /login to sign in again.`,
+			);
 			return;
 		}
 		if (providerOptions.length === 0) {

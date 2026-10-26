@@ -5028,12 +5028,12 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
-| `invalid_request` | report it with the code |
+| `invalid_request` | send the message again; if it repeats, choose another model or start a new session |
 | `provider_unavailable` | retry or switch provider |
 | `network` | check connectivity |
-| `unknown` | retry once; if it repeats, switch the model or report the code |
+| `unknown` | send the message again; if it repeats, choose another model |
 
-`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` names the provider and the code or status, for example `the provider returned an error that could not be classified (openai, status 429)`. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
 
 ### agent_settled
 

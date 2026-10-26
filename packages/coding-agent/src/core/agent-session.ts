@@ -12649,9 +12649,13 @@ export class AgentSession {
 		);
 		if (degraded.kind === "fail") {
 			const waitSeconds = Math.ceil(degraded.hintMs / 1000);
+			const until = new Date(Date.now() + degraded.hintMs).toLocaleString(undefined, {
+				dateStyle: "medium",
+				timeStyle: "short",
+			});
 			finishRetryAttempt(
 				this._retryAttempt,
-				`Provider requested a ${waitSeconds}s wait before retrying and no usable fallback model is available. ${message.errorMessage ?? ""}`,
+				`The provider asked to wait ${waitSeconds}s (until ${until}) before the next request, and no fallback model can take the turn. Wait until then, or choose another model. Provider error: ${message.errorMessage ?? "none"}`,
 			);
 			return undefined;
 		}

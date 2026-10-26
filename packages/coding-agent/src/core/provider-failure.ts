@@ -29,24 +29,21 @@ const ACTIONS: Record<Exclude<ProviderDiagnosticCategory, "unknown">, { reason: 
 		reason: "the conversation is larger than the model's context",
 		action: "compact or shorten the conversation",
 	},
-	invalid_request: { reason: "the provider rejected the request as invalid", action: "report it with the code" },
+	invalid_request: {
+		reason: "the provider could not accept this request",
+		action: "send the message again; if it repeats, choose another model or start a new session",
+	},
 	provider_unavailable: { reason: "the provider is unavailable", action: "retry or switch provider" },
 	network: { reason: "the connection to the provider failed", action: "check connectivity" },
 };
-
-function identifier(diagnostic: ProviderDiagnostic | undefined): string {
-	if (diagnostic?.code !== undefined) return `code ${diagnostic.code}`;
-	if (diagnostic?.httpStatus !== undefined) return `status ${diagnostic.httpStatus}`;
-	return "no code";
-}
 
 export function describeProviderFailure(diagnostic: ProviderDiagnostic | undefined, provider: string): ProviderFailure {
 	const category = diagnostic?.category ?? "unknown";
 	const detail =
 		category === "unknown"
 			? {
-					reason: `the provider returned an error that could not be classified (${provider}, ${identifier(diagnostic)})`,
-					action: "retry once; if it repeats, switch the model or report the code",
+					reason: "the provider returned an unexpected error",
+					action: "send the message again; if it repeats, choose another model",
 				}
 			: ACTIONS[category];
 	const resetsAt = diagnostic?.resetsAt;
@@ -57,7 +54,11 @@ export function describeProviderFailure(diagnostic: ProviderDiagnostic | undefin
 		...(diagnostic?.code === undefined ? {} : { code: diagnostic.code }),
 		...(resetsAt === undefined ? {} : { resetsAt }),
 		...detail,
-		...(resetsAt === undefined ? {} : { reason: `${detail.reason} until ${new Date(resetsAt).toISOString()}` }),
+		...(resetsAt === undefined
+			? {}
+			: {
+					reason: `${detail.reason} until ${new Date(resetsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`,
+				}),
 	};
 }
 
