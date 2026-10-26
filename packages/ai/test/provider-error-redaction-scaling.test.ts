@@ -38,6 +38,19 @@ const SHAPES: readonly (readonly [label: string, make: (size: number) => string]
 	["HTML entities", (size) => fill("&quot;", size)],
 	["130-character names", (size) => fill(`${"a".repeat(130)}_api_key: x `, size)],
 	["model-not-found prose heads", (size) => fill("the model ", size)],
+	// Round 8: shapes recognized anywhere a word starts inside one long token, and whole strict values.
+	["sk- near misses inside one token", (size) => fill("/sk-abcd", size)],
+	["ghp_ near misses inside one token", (size) => fill("/ghp_abc", size)],
+	["AKIA near misses inside one token", (size) => fill("+AKIA0123", size)],
+	["every prefix near miss inside one token", (size) => fill("/sk-a~gsk_a+xai-a/hf_a-xoxb-a/AIza.eyJ.", size)],
+	["eyJ candidates after / inside one token", (size) => fill("/eyJaaaaaaaa.bbbbb", size)],
+	["dotted eyJ segments after hyphens", (size) => fill("-eyJaaaaaaaa.", size)],
+	["eyJ candidates in one dotless segment", (size) => fill("-eyJ", size)],
+	["a long quoted strict value", (size) => `password: "${fill("ab c!", size)}"`],
+	["a long unclosed quoted strict value", (size) => `password: "${fill("ab c!", size)}`],
+	["a long bare strict value", (size) => `password=${fill("p@ss:", size)}`],
+	["strict names opening quotes", (size) => fill('password: "', size)],
+	["escaped quotes inside a strict value", (size) => `secret: "${fill('a\\"', size)}"`],
 ];
 
 const BASE = 10_000;
@@ -168,8 +181,15 @@ function hasNestedQuantifier(pattern: string): boolean {
 const REDACTOR_SOURCES = [
 	"../src/utils/provider-error.ts",
 	"../src/utils/secret-redaction.ts",
+	"../src/utils/secret-lexer.ts",
+	"../src/utils/secret-classifier.ts",
 	"../../coding-agent/src/core/sensitive-output.ts",
 ];
+
+// An architecture contract, not a behavior test: the redactor runs synchronously on every provider error and log line,
+// so it must stay linear by construction (senpi#4283). The secret-* scanner modules hold no regular expression at all,
+// and the remaining redactor sources hold none with a nested quantifier, the shape that backtracks. Timing tests only
+// sample shapes; this guard keeps a new pattern from reintroducing the class they cannot all cover.
 
 describe("the redactor sources", () => {
 	it("recognizes a nested quantifier", () => {

@@ -9,6 +9,9 @@ import { redactSecrets, sanitizeProviderErrorMessage } from "../src/utils/provid
 
 const secret = ["zzfixture", "4283", "valueQ"].join("");
 const json = (value: unknown): string => JSON.stringify(value);
+const ghp = `ghp_${"FIXTURE".repeat(3)}0008`;
+const sk = `sk-${"proj"}FIXTURE0006`;
+const jwt = ["eyJhbGciOiJub25lIn0", "eyJzdWIiOiJmaXh0dXJlIn0", "Zml4dHVyZS1zaWcx"].join(".");
 
 const REDACTED_SHAPES: readonly (readonly [label: string, text: string, leaked: string])[] = [
 	["header line", `x-api-key: ${secret}`, secret],
@@ -50,6 +53,23 @@ const REDACTED_SHAPES: readonly (readonly [label: string, text: string, leaked: 
 		`rejected ${["eyJhbGciOiJub25lIn0", "eyJzdWIiOiJmaXh0dXJlIn0", "Zml4dHVyZS1zaWcx"].join(".")}.`,
 		"eyJhbGci",
 	],
+	// Round 8: credential shapes inside a token (URL userinfo, paths, joined values), and whole strict values.
+	["a token as git remote userinfo", `https://${ghp}@github.com/o/r.git`, ghp],
+	["a token after git remote user:", `https://x-access-token:${ghp}@github.com/o/r.git`, ghp],
+	["a key in a URL path segment", `/v1/keys/${sk}`, sk],
+	["a key joined with +", `x+${sk}`, sk],
+	["a key after ~/", `~/${sk}`, sk],
+	["an AWS key id after /", `see /AKIA${"FIXTURE"}000000010`, "FIXTURE000000010"],
+	["a JWT in a URL path", `/cb/${jwt}`, "eyJzdWIi"],
+	["a JWT followed by a path", `/cb/${jwt}/more`, "eyJzdWIi"],
+	["a key as proxy userinfo", `https://${sk}@proxy.example.test`, sk],
+	["a token after user@", `deploy@${ghp}`, ghp],
+	["a quoted password with punctuation", 'password: "Hunter2!zzTailA01"', "zzTailA01"],
+	["a bare password with @ and :", "password=p@zzTailA02:word123", "zzTailA02"],
+	["a non-ASCII password", json({ password: "p\u00e4sswzzTailA03" }), "zzTailA03"],
+	["a quoted password with spaces", json({ password: "abc def zzTailA04" }), "zzTailA04"],
+	["an escaped quoted authorization", json(json({ authorization: "Bearer abc zzTailA05" })), "zzTailA05"],
+	["an XML password with punctuation", "<password>ab!zzTailA06</password>", "zzTailA06"],
 ];
 
 // Names that contain a credential word without holding a credential, and diagnostics, stay byte-identical.
@@ -67,6 +87,7 @@ const READABLE_TEXT: readonly string[] = [
 	"https://gateway.example.test:8443/v1/chat?model=faux-1&stream=true",
 	'{"type":"invalid_request_error","param":"model","max_tokens":4096} request id: req_011CUxFIXTURE',
 	"model us.anthropic.claude-opus-4-5-20251101-v1:0, gpt-6.1-sol, task-12345678",
+	"tasks-abcdefghijk /srv/risk-assessment-v2 disk-cache-directory-1234 /opt/AKIA_notes",
 ];
 
 function failedMessage(errorMessage: string, stopReason: AssistantMessage["stopReason"] = "error"): AssistantMessage {
@@ -108,6 +129,19 @@ describe("redactSecrets", () => {
 
 	it("uses the caller's replacement", () => {
 		expect(redactSecrets(`api_key=${secret}`, "[redacted]")).toBe("api_key=[redacted]");
+	});
+
+	it("keeps the URL around a credential found inside a token", () => {
+		expect(redactSecrets(`https://${ghp}@github.com/o/r.git`)).toBe("https://[REDACTED]@github.com/o/r.git");
+		expect(redactSecrets(`/v1/keys/${sk}`)).toBe("/v1/keys/[REDACTED]");
+	});
+
+	it("redacts a strict value up to its closing quote or field delimiter, keeping the structure", () => {
+		expect(redactSecrets('password: "Hunter2!xyz9", next')).toBe('password: "[REDACTED]", next');
+		expect(redactSecrets("password=p@ss:word123&model=faux-1")).toBe("password=[REDACTED]&model=faux-1");
+		expect(redactSecrets(json({ password: 'a"b c', model: "faux-1" }))).toBe(
+			json({ password: "[REDACTED]", model: "faux-1" }),
+		);
 	});
 });
 

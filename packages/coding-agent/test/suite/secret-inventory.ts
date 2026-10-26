@@ -195,10 +195,47 @@ const ROUND_6_CELLS: readonly SecretCell[] = [
 	},
 ];
 
+// The inputs the delta review of 4cf2ef5bfa saw leak: credential shapes inside a token (git remote and proxy userinfo,
+// URL path segments, joined values), and strict values past their first token.
+const ghp = PREFIXED_SECRETS[2]?.[1] ?? "";
+const sk = PREFIXED_SECRETS[0]?.[1] ?? "";
+const skAnt = PREFIXED_SECRETS[1]?.[1] ?? "";
+const akia = PREFIXED_SECRETS[4]?.[1] ?? "";
+const jwt = PREFIXED_SECRETS[6]?.[1] ?? "";
+const ROUND_8_CELLS: readonly SecretCell[] = [
+	{ name: "review: token as git remote userinfo", secret: ghp, text: `https://${ghp}@github.com/o/r.git` },
+	{
+		name: "review: git remote user:token userinfo",
+		secret: ghp,
+		text: `git push https://x-access-token:${ghp}@github.com/o/r.git`,
+	},
+	{
+		name: "review: git remote oauth2:password userinfo",
+		secret: secretFor(9301),
+		text: `remote: https://oauth2:${secretFor(9301)}@gitlab.example.test/o/r.git`,
+	},
+	{ name: "review: key in a URL path segment", secret: sk, text: `GET /v1/keys/${sk} 401` },
+	{ name: "review: key joined with +", secret: skAnt, text: `x+${skAnt}` },
+	{ name: "review: AWS key id after /", secret: akia, text: `see /${akia}` },
+	{ name: "review: JWT in a URL path", secret: jwt, text: `callback /cb/${jwt}` },
+	{ name: "review: key as proxy userinfo", secret: sk, text: `https://${sk}@proxy.example.test` },
+	{ name: "review: token after user@", secret: ghp, text: `ssh deploy@${ghp}` },
+	{ name: "review: key after ~/", secret: sk, text: `~/${sk}` },
+	{ name: "review: password with !", secret: "zzTailB01", text: 'password: "Hunter2!zzTailB01"' },
+	{ name: "review: password with @ and :", secret: "zzTailB02", text: "password=p@zzTailB02:word123" },
+	{ name: "review: non-ASCII password", secret: "zzTailB03", text: json({ password: "p\u00e4ssw\u00f6rdzzTailB03" }) },
+	{
+		name: "review: password with spaces in quotes",
+		secret: "zzTailB04",
+		text: json({ password: "abc def zzTailB04" }),
+	},
+];
+
 export const SECRET_CELLS: readonly SecretCell[] = [
 	...REVIEW_CELLS,
 	...ROUND_4_CELLS,
 	...ROUND_6_CELLS,
+	...ROUND_8_CELLS,
 	...named,
 	...prefixed,
 ];
