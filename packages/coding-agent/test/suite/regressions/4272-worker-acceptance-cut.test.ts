@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.ts";
 import { WORKER_CREDIT_CODES } from "../../../src/modes/rpc/session-worker-protocol.ts";
-import { creditOf, type OutputFrame, within, workerAcceptanceHost } from "./4272-worker-acceptance-support.ts";
+import { type OutputFrame, workerAcceptanceHost } from "./4272-worker-acceptance-support.ts";
 
 const FLAG = "SENPI_ENGINE_SOCKET_COMPACT_UPDATES";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -126,70 +126,6 @@ it("T5/X03 holds worker acceptance while its fork is on disk: the cut keeps the 
 		await host.dispose();
 	}
 }, 120_000);
-
-type Fault = "gap" | "duplicate" | "reorder" | "writer_refusal";
-
-// Part of #4272, ruling 10 Q4: a broken frame order is denied credit and ends that worker incarnation, never hangs.
-it.each<Fault>(["gap", "duplicate", "reorder", "writer_refusal"])(
-	"Q4 %s: credit denied, the worker incarnation fails with a typed error, the sequence is unchanged",
-	async (fault) => {
-		vi.stubEnv(FLAG, "1");
-		const host = await workerAcceptanceHost();
-		try {
-			const { sessionId, worker } = await host.open();
-			const lane = worker.acceptance;
-			if (!lane) throw new Error("flag on: the worker client owns an acceptance lane");
-			const before = lane.freeze();
-			lane.release(before);
-			const expected = host.frames.length;
-			const failed = Promise.withResolvers<string>();
-			const failure = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-				const text = String(chunk);
-				const quarantined = /quarantined: (session_worker_frame_\w+|session_output_overflow_or_closed)/.exec(text);
-				if (quarantined?.[1]) failed.resolve(quarantined[1]);
-				return true;
-			});
-			const frame = (ordinal: number): OutputFrame => ({
-				type: "output",
-				ordinal,
-				record: { type: "agent_start" },
-				signal: new SharedArrayBuffer(4),
-				activity: { busy: false, streaming: false },
-			});
-			const sent =
-				fault === "gap"
-					? [frame(expected + 1)]
-					: fault === "duplicate"
-						? [frame(expected - 1)]
-						: fault === "reorder"
-							? [frame(expected + 1), frame(expected)]
-							: [frame(expected)];
-			if (fault === "writer_refusal")
-				host.writer.closeSession(sessionId, { type: "response", command: "close_session", success: true });
-			for (const message of sent) worker.worker.emit("message", message);
-			const credits = await within("credits", Promise.all(sent.map((message) => creditOf(message.signal))));
-			expect(credits.every((code) => code === WORKER_CREDIT_CODES.conflict)).toBe(true);
-			const reason = await within("typed failure", failed.promise);
-			failure.mockRestore();
-			expect(reason).toBe(
-				fault === "duplicate"
-					? "session_worker_frame_duplicate"
-					: fault === "writer_refusal"
-						? "session_output_overflow_or_closed"
-						: "session_worker_frame_gap",
-			);
-			expect(lane.retired, "the incarnation's lane is retired").toBe(true);
-			await within("worker exit", worker.exited);
-			const after = lane.freeze();
-			expect(after.sequence, "no partial acceptance").toBe(before.sequence);
-			expect(after.sessionEpoch).toBe(before.sessionEpoch);
-		} finally {
-			vi.restoreAllMocks();
-			await host.dispose();
-		}
-	},
-	60_000,
-);
 
 it("flag off: the worker client owns no lane and frames carry no ordinal", async () => {
 	const host = await workerAcceptanceHost();

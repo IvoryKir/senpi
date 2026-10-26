@@ -16,7 +16,8 @@ const extension = `
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(fauxPath)};
 export default function (pi) {
 	const faux = fauxProvider({ tokenSize: { min: 4, max: 4 } });
-	faux.setResponses([fauxAssistantMessage("an answer streamed in a few deltas", { timestamp: 1 })]);
+	const answer = () => fauxAssistantMessage("an answer streamed in a few deltas", { timestamp: 1 });
+	faux.setResponses([answer(), answer(), answer()]);
 	pi.registerProvider(faux.provider);
 }`;
 
@@ -59,6 +60,8 @@ export async function workerAcceptanceHost() {
 	const writer = new SessionEventWriter(() => {});
 	const workers: SessionWorkerClient[] = [];
 	const frames: ObservedFrame[] = [];
+	/** Every typed failure a worker incarnation reported to the registry, in order. */
+	const failures: string[] = [];
 	let hold:
 		| ((paths: readonly string[], arriving: SessionWorkerToHost | undefined) => Promise<void> | undefined)
 		| undefined;
@@ -83,6 +86,10 @@ export async function workerAcceptanceHost() {
 		createWorker: (callbacks) => {
 			const worker = new SessionWorkerClient({
 				...callbacks,
+				failure: (error) => {
+					failures.push(error);
+					callbacks.failure(error);
+				},
 				reconcile: (paths) => {
 					const held = hold?.(paths, arriving);
 					return held ? held.then(() => callbacks.reconcile(paths)) : callbacks.reconcile(paths);
@@ -141,6 +148,7 @@ export async function workerAcceptanceHost() {
 		writer,
 		workers,
 		frames,
+		failures,
 		records,
 		next,
 		request,
