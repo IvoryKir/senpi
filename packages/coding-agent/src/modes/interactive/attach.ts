@@ -178,7 +178,12 @@ export class AttachedTui extends Container implements Focusable {
 			this.buffering = undefined;
 			for (const record of buffered) this.record(record);
 		} catch (error) {
-			await this.close();
+			// What failed is the cause: a release that also fails must not replace it (senpi#4271 review).
+			try {
+				await this.close();
+			} catch (releaseError) {
+				throw new AggregateError([error, releaseError], error instanceof Error ? error.message : String(error));
+			}
 			throw error;
 		}
 	}

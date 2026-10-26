@@ -80,15 +80,19 @@ export async function runAttachedTui(options: {
 		if (outcome === "connected") await done;
 	} finally {
 		leaving = true;
-		// The terminal comes back first: the release below can wait out its whole deadline.
-		restore();
 		try {
-			await view.close();
+			// The terminal comes back first: the release below can wait out its whole deadline.
+			restore();
 		} finally {
-			process.off("SIGTERM", onSigterm);
-			process.off("SIGINT", onSigint);
-			process.off("uncaughtException", crash);
-			process.off("unhandledRejection", crash);
+			// Even if restoring throws, the release is sent and the listeners come off.
+			try {
+				await view.close();
+			} finally {
+				process.off("SIGTERM", onSigterm);
+				process.off("SIGINT", onSigint);
+				process.off("uncaughtException", crash);
+				process.off("unhandledRejection", crash);
+			}
 		}
 	}
 }
