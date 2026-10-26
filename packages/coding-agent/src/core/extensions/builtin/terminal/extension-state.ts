@@ -143,6 +143,9 @@ export function buildToolContext(pi: ExtensionAPI, state: TerminalExtensionState
 		get shellPath() {
 			return state.shellPath;
 		},
+		get redactSecretsInOutput() {
+			return state.settings.redactSecretsInOutput;
+		},
 		get defaultCols() {
 			return state.settings.defaultCols;
 		},

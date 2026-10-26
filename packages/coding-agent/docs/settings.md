@@ -503,7 +503,37 @@ run.
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows); supports a leading `~` for the home directory |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
+| `tools.bash.redactSecretsInOutput` | boolean | `false` | Redact credential-shaped bash stdout and stderr before streaming, retaining output, or writing output spill files |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
+
+To opt in, set:
+
+```json
+{
+  "tools": {
+    "bash": {
+      "redactSecretsInOutput": true
+    }
+  }
+}
+```
+
+The default is off. When enabled, bash replaces GitHub, Slack, OpenAI/Anthropic,
+AWS access-key, Google API-key and JWT-shaped tokens, PEM private-key blocks,
+Bearer credentials, and secret-named `KEY=VALUE` values with `<redacted>`.
+Assignment names are retained. This applies to core bash and persistent terminal
+bash, including streamed updates, background completion notices, terminal screen
+reads, structured results, output spill files and resulting transcript entries.
+The tool-child runtime uses the same setting.
+ANSI styling does not split credential detection; hidden OSC payloads (such as
+terminal titles and hyperlink targets) are omitted while redaction is enabled.
+
+An incomplete token is held until its delimiter or process exit, so partial words
+may appear later while streaming. Tokens longer than 8,192 characters are
+conservatively redacted to bound memory. Enabling the setting affects newly
+started commands; it does not rewrite existing terminal sessions, transcripts,
+command arguments, or files created by commands. This is shape detection, not a
+guarantee that arbitrary encoded or unrecognized credentials will be removed.
 
 Windows paths in JSON must use forward slashes or escaped backslashes:
 
