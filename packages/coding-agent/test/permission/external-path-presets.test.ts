@@ -91,7 +91,7 @@ describe("permission presets for external paths", () => {
 		expect(tilde.map((r) => r.permission)).toEqual(["edit"]);
 	});
 
-	it("keeps asking for $HOME paths on a parser registration with no known tool (senpi#4311)", () => {
+	it("classifies $HOME paths by each tool's resolver: write stops asking, multiedit keeps asking (senpi#4311)", () => {
 		// when: write creates a literal `$HOME` directory inside cwd; multiedit has no implementation
 		const write = registry.parse("write", { path: "$HOME/x", content: "x" }, cwd);
 		const multiedit = registry.parse("multiedit", { path: "$HOME/x" }, cwd);
