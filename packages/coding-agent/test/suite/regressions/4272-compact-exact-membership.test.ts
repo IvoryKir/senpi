@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { CompactSessionState } from "../../../src/modes/rpc/compact-session-state.ts";
-import { spoolRoot } from "../compact-storage-support.ts";
+import { spoolRoot, startIdentity } from "../compact-storage-support.ts";
 
 // senpi#4272 / RULING-34: resident membership remains exact at both independently shippable heads.
 it("rejects duplicate settled starts and unknown operations without changing the accepted root", async () => {
@@ -14,6 +14,7 @@ it("rejects duplicate settled starts and unknown operations without changing the
 	try {
 		state.accept({
 			type: "block_start",
+			...startIdentity(),
 			messageId: "old",
 			contentIndex: 0,
 			kind: "text",
@@ -26,7 +27,15 @@ it("rejects duplicate settled starts and unknown operations without changing the
 		const status = state.storageStatus();
 		for (const [transition, reason] of [
 			[
-				{ type: "block_start", messageId: "old", contentIndex: 1, kind: "text", seed: "", coveredCodeUnits: 0 },
+				{
+					type: "block_start",
+					...startIdentity(),
+					messageId: "old",
+					contentIndex: 1,
+					kind: "text",
+					seed: "",
+					coveredCodeUnits: 0,
+				},
 				"duplicate_block",
 			],
 			[{ type: "message_status", messageId: "missing", persistence: "failed" }, "unknown_message"],

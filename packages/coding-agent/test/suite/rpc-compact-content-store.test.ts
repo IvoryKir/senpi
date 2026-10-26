@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { COMPACT_LEAF_CODE_UNITS as LEAF } from "../../src/modes/rpc/compact-content-store.ts";
 import { CompactSessionState, type CompactSessionStateOptions } from "../../src/modes/rpc/compact-session-state.ts";
-import { controlledIo, spoolRoot } from "./compact-storage-support.ts";
+import { controlledIo, spoolRoot, startBlock } from "./compact-storage-support.ts";
 
 // senpi#4272 (R3.C6.4 / R3.C2.4, ruling 08): storage contracts of the compact current-state owner.
 // Every asynchronous step is driven by an explicit I/O hold, never by elapsed time.
@@ -35,9 +35,7 @@ async function spoolFiles(dir: string): Promise<string[]> {
 	return (await readdir(dir)).filter((name) => name.startsWith("leaf-")).sort();
 }
 
-function start(messageId: string, seed: string) {
-	return { type: "block_start", messageId, contentIndex: 0, kind: "text", seed, coveredCodeUnits: 0 } as const;
-}
+const start = startBlock;
 
 describe("compact content store: accepted bytes stay resident until the spill commits", () => {
 	it("charges a held write as pending, keeps the RAM copy, and a cut pinned before a reset still reads the old value", async () => {
