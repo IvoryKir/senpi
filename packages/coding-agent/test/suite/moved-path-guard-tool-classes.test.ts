@@ -70,6 +70,47 @@ describe("moved-path-guard tool classes (#2898)", () => {
 		expect(unclassified).toEqual([]);
 	});
 
+	it("refuses a session_service launch whose working directory or argument names a moved path", async () => {
+		const layout: MovedLayout = createMovedLayout();
+		cleanups.push(layout.cleanup);
+		const guard = builtinExtensions.find((entry) => entry.id === "moved-path-guard");
+		if (!guard) throw new Error("moved-path-guard is not registered");
+		const launched: unknown[] = [];
+		const harness = await createHarness({
+			cwd: layout.home,
+			extensionFactories: [
+				guard.factory,
+				(pi) =>
+					pi.registerTool({
+						name: "session_service",
+						label: "service",
+						description: "Records the launch it would run.",
+						parameters: Type.Object({
+							command: Type.String(),
+							args: Type.Array(Type.String()),
+							cwd: Type.Optional(Type.String()),
+						}),
+						execute: async (_id, params) => {
+							launched.push(params);
+							return { content: [{ type: "text", text: "started" }], details: {} };
+						},
+					}),
+			],
+			initialActiveToolNames: ["session_service"],
+		});
+		cleanups.push(harness.cleanup);
+		await harness.session.bindExtensions({});
+
+		const byCwd = await runTool(harness, "session_service", { command: "bsk", args: [], cwd: layout.oldWorktree });
+		const byArg = await runTool(harness, "session_service", {
+			command: "bsk",
+			args: ["--log", `${layout.oldWorktree}/bsk.log`],
+		});
+
+		expect([byCwd.outcome, byArg.outcome]).toEqual(["blocked", "blocked"]);
+		expect(launched).toEqual([]);
+	});
+
 	it("refuses an unclassified tool whose string argument names a moved path", async () => {
 		const layout: MovedLayout = createMovedLayout();
 		cleanups.push(layout.cleanup);

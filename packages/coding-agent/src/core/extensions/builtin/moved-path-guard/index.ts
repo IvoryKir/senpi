@@ -56,6 +56,8 @@ function targets(toolName: string, input: Record<string, unknown>, cwd: string):
 					true,
 				),
 			];
+		case "launch":
+			return of([cwd, ...commandPaths(allStrings(input).join("\n"), cwd)]);
 		case undefined:
 			return of(commandPaths(allStrings(input).join("\n"), cwd));
 		case "filesystem-policy":
