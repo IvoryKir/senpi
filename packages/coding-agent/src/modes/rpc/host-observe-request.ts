@@ -7,7 +7,7 @@
  * itself with `observe: true`; the supervisor classifies a connection by the requests it sends, and
  * only a connection that sends something other than an observing read becomes an attachment.
  *
- * Only the side-effect-free reads can observe (`get_effect_status` answers a receipt and changes nothing; `get_state` and
+ * Only the reads the method table marks `observing_read` can observe (`RPC_OBSERVING_METHODS`, senpi#4324; `get_effect_status` answers a receipt and changes nothing; `get_state` and
  * `get_entries` read a session's state and history, senpi#4267): `observe: true` on any other command is ignored
  * and the connection attaches, so a client cannot hold a session while its host idles out under it.
  * `warm` never attaches, marked or not: it opens nothing, so a host that only received it idles out
@@ -25,23 +25,10 @@
  */
 
 import { HOST_INSTANCE_ID_ENV } from "./host-identity-env.ts";
+import { RPC_OBSERVING_METHODS } from "./rpc-method-class.ts";
 
 export const OBSERVE_REQUEST_FIELD = "observe";
 export const ORIGIN_HOST_INSTANCE_FIELD = "origin_host_instance";
-
-const OBSERVING_COMMANDS: ReadonlySet<unknown> = new Set([
-	"get_protocol_info",
-	"get_snapshot",
-	"list_sessions",
-	"subscribe_sessions",
-	"unsubscribe_sessions",
-	"get_effect_status",
-	"get_pending_inputs",
-	"get_subscription_limits",
-	"get_rpc_method_classes",
-	"get_state",
-	"get_entries",
-]);
 
 export function isObservingRequest(line: string): boolean {
 	let request: unknown;
@@ -53,7 +40,7 @@ export function isObservingRequest(line: string): boolean {
 	if (typeof request !== "object" || request === null || Array.isArray(request)) return false;
 	const record = request as Readonly<Record<string, unknown>>;
 	if (record.type === "warm" || record.type === "authenticate") return true;
-	return record[OBSERVE_REQUEST_FIELD] === true && OBSERVING_COMMANDS.has(record.type);
+	return record[OBSERVE_REQUEST_FIELD] === true && (RPC_OBSERVING_METHODS as ReadonlySet<unknown>).has(record.type);
 }
 
 /** The host generation this process runs in, or undefined outside any host. */

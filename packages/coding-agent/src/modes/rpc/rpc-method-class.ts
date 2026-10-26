@@ -217,6 +217,185 @@ export const RPC_METHOD_CLASS = {
 } as const satisfies RpcMethodClassTable;
 
 /**
+ * What a method's class alone does not decide (senpi#4324): the facts three host lists are derived from. Exhaustive like
+ * the table, so a new record type states its traits before it typechecks, and a trait is accepted only on the classes it
+ * can be true of, so the class still bounds every derived list:
+ * - `observing_read`: honours `observe: true`; the connection that sent it is not host activity
+ *   (`host-observe-request.ts`). Only on an `observe` method or a `connection_local` subscription toggle.
+ * - `read_only`: a `device_admin` read that changes nothing; like every `observe` method it leaves an idle session's
+ *   activity untouched (`session-command-activity.ts`).
+ * - `new_work`: starts, extends or queues model work, so a pending handover holds it back (`host-idle-handover.ts`).
+ *   Never on an `observe`, `answer` or `connection_local` method.
+ */
+export type RpcMethodTrait = "observing_read" | "read_only" | "new_work";
+
+type TableEntryClass<E> = E extends RpcMethodClass ? E : RpcMethodClass;
+
+type TraitAllowedOn<C extends RpcMethodClass> =
+	| (C extends "observe" | "connection_local" ? "observing_read" : never)
+	| (C extends "device_admin" ? "read_only" : never)
+	| (C extends "drive" | "thread" | "device_admin" ? "new_work" : never);
+
+type RpcMethodTraitTable = {
+	readonly [K in RpcMethodType]: readonly TraitAllowedOn<TableEntryClass<(typeof RPC_METHOD_CLASS)[K]>>[];
+};
+
+export const RPC_METHOD_TRAITS = {
+	// observe
+	get_protocol_info: ["observing_read"],
+	get_rpc_method_classes: ["observing_read"],
+	get_subscription_limits: ["observing_read"],
+	list_sessions: ["observing_read"],
+	get_state: ["observing_read"],
+	get_snapshot: ["observing_read"],
+	get_entries: ["observing_read"],
+	get_messages: [],
+	get_tree: [],
+	get_fork_messages: [],
+	get_last_assistant_text: [],
+	get_session_stats: [],
+	get_effect_status: ["observing_read"],
+	get_pending_inputs: ["observing_read"],
+	get_follow_up_messages: [],
+	get_steering_messages: [],
+	get_commands: [],
+	get_loaded_surfaces: [],
+	get_available_models: [],
+	get_available_thinking_levels: [],
+	get_model_thinking_level: [],
+	get_fast_mode: [],
+	get_media: [],
+	memory_report: [],
+	"eval_cells.list": [],
+	"eval_cells.peek": [],
+	// drive
+	prompt: ["new_work"],
+	steer: ["new_work"],
+	follow_up: ["new_work"],
+	abort: [],
+	interrupt: [],
+	abort_retry: [],
+	abort_compaction: [],
+	abort_branch_summary: [],
+	compact: ["new_work"],
+	clear_queue: [],
+	dequeue_message: [],
+	edit_queued_message: [],
+	hold_input: [],
+	withdraw_held_input: [],
+	append_user_message: ["new_work"],
+	edit_user_message: ["new_work"],
+	edit_assistant_message: ["new_work"],
+	send_custom_message: ["new_work"],
+	continue_from_leaf: ["new_work"],
+	navigate_tree: [],
+	set_label: [],
+	set_session_name: [],
+	set_model: [],
+	cycle_model: [],
+	set_thinking_level: [],
+	cycle_thinking_level: [],
+	set_fast_mode: [],
+	set_steering_mode: [],
+	set_follow_up_mode: [],
+	set_auto_compaction: [],
+	set_auto_retry: [],
+	set_retry_fallback: [],
+	pause_for_run: [],
+	resume_for_run: [],
+	wake: ["new_work"],
+	release_tool_barrier: [],
+	request_self_settle: [],
+	"eval_cells.stop": [],
+	append_session_entry: [],
+	// answer
+	extension_ui_response: [],
+	extension_ui_progress: [],
+	// thread
+	new_session: [],
+	switch_session: [],
+	resume_session: ["new_work"],
+	fork: [],
+	clone: [],
+	import_jsonl: [],
+	open_session: [],
+	close_session: [],
+	unload_session: [],
+	set_session_context: [],
+	attach_session: [],
+	// device_admin
+	bash: ["new_work"],
+	abort_bash: [],
+	record_bash_result: [],
+	cleanup_bash_output: [],
+	extension_request: [],
+	reload: [],
+	check_reload_veto: [],
+	resolve_path: ["read_only"],
+	login_start: [],
+	login_cancel: [],
+	login_api_key: [],
+	logout: [],
+	verify_api_key: [],
+	get_auth_providers: ["read_only"],
+	get_provider_accounts: ["read_only"],
+	account_order: [],
+	account_pin: [],
+	account_remove: [],
+	set_favorite_models: [],
+	set_scoped_models: [],
+	export_html: [],
+	export_jsonl: [],
+	// connection_local
+	set_client_info: [],
+	subscribe_sessions: ["observing_read"],
+	unsubscribe_sessions: ["observing_read"],
+	record_user_activity: [],
+	detach_connection: [],
+	release_session: [],
+	warm: [],
+	host_response: [],
+	release_attachment: [],
+	reclaim_session: [],
+	move_session: [],
+} as const satisfies RpcMethodTraitTable;
+
+type DerivedClass = RpcMethodClass | typeof RPC_METHOD_CLASS_DYNAMIC;
+
+function methodsWhere(
+	rule: (methodClass: DerivedClass, traits: readonly RpcMethodTrait[]) => boolean,
+): ReadonlySet<RpcMethodType> {
+	const methods = new Set<RpcMethodType>();
+	for (const type of Object.keys(RPC_METHOD_CLASS) as RpcMethodType[]) {
+		const entry: RpcMethodClass | object = RPC_METHOD_CLASS[type];
+		const methodClass = typeof entry === "string" ? entry : RPC_METHOD_CLASS_DYNAMIC;
+		if (rule(methodClass, RPC_METHOD_TRAITS[type])) methods.add(type);
+	}
+	return methods;
+}
+
+/** Methods whose `observe: true` keeps their connection from counting as host activity. */
+export const RPC_OBSERVING_METHODS = methodsWhere(
+	(methodClass, traits) =>
+		(methodClass === "observe" || methodClass === "connection_local") && traits.includes("observing_read"),
+);
+
+/** Methods that leave an idle session's activity untouched: every `observe` method and the `read_only` device reads. */
+export const RPC_ACTIVITY_NEUTRAL_METHODS = methodsWhere(
+	(methodClass, traits) =>
+		methodClass === "observe" || (methodClass === "device_admin" && traits.includes("read_only")),
+);
+
+/** Methods a pending handover holds back: they start, extend or queue model work. */
+export const RPC_NEW_WORK_METHODS = methodsWhere(
+	(methodClass, traits) =>
+		methodClass !== "observe" &&
+		methodClass !== "answer" &&
+		methodClass !== "connection_local" &&
+		traits.includes("new_work"),
+);
+
+/**
  * The class of an inbound record, or `undefined` when the engine cannot classify it: not a plain object, a
  * non-string `type`, or a type the table does not own (own keys only, never the prototype's).
  */

@@ -3535,6 +3535,15 @@ sha256 of the `<type>=<class>\n` lines of `classes` (`<type>=dynamic@<version>` 
 version from `dynamic_versions`), sorted, so a client that kept a copy can tell whether it is
 current without fetching it; `version` changes only when the meaning of a class does.
 
+The host derives three of its own lists from the same table, so they cannot drift from it: the observing reads that
+may carry `observe: true`, the reads that leave an idle session's activity untouched (every `observe` type plus the
+read-only device reads `resolve_path`, `get_auth_providers` and `get_provider_accounts`), and the inputs a pending idle
+handover holds back. An embedder that forwards records for someone other than the local user can check each one with
+`validateRpcInboundRecord(record)` (`src/modes/rpc/rpc-inbound-schema.ts`). It answers `{ ok: true }` or
+`{ ok: false, reason }` from one schema per inbound record type plus the host's own field bounds, refuses a type it
+does not know, and bounds question answers (`extension_ui_response`, `extension_ui_progress`) to 64 answers of at most
+64 selected labels, each label at most 1,000,000 characters. The local connection does not run it.
+
 #### get_effect_status
 
 The newest receipt of one effect (capability `effect_ledger`). For inputs `effectId` is the

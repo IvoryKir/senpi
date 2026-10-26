@@ -1,34 +1,9 @@
-import type { RpcCommand } from "./rpc-types.ts";
+import { RPC_ACTIVITY_NEUTRAL_METHODS } from "./rpc-method-class.ts";
 
-/** Whether the command itself refreshes activity, apart from attached-client keepalives. */
-const observations: ReadonlySet<string> = new Set([
-	"get_state",
-	"get_snapshot",
-	"get_effect_status",
-	"get_pending_inputs",
-	"get_messages",
-	"get_entries",
-	"get_tree",
-	"get_fork_messages",
-	"get_last_assistant_text",
-	"get_session_stats",
-	"resolve_path",
-	"get_steering_messages",
-	"get_follow_up_messages",
-	"get_available_models",
-	"get_available_thinking_levels",
-	"get_model_thinking_level",
-	"get_fast_mode",
-	"get_commands",
-	"get_loaded_surfaces",
-	"get_media",
-	"get_auth_providers",
-	"get_provider_accounts",
-	"memory_report",
-	"eval_cells.list",
-	"eval_cells.peek",
-] satisfies readonly RpcCommand["type"][]);
-
+/**
+ * Whether the command itself refreshes activity, apart from attached-client keepalives. Reads leave it untouched: the
+ * method table decides which (`RPC_ACTIVITY_NEUTRAL_METHODS`, senpi#4324).
+ */
 export function refreshesSessionActivity(command: string): boolean {
-	return !observations.has(command);
+	return !(RPC_ACTIVITY_NEUTRAL_METHODS as ReadonlySet<string>).has(command);
 }

@@ -25,6 +25,7 @@
  * (`handover_in_progress`) until the pending operation ends.
  */
 import type { HostLifecyclePolicyInput } from "./host-lifecycle.ts";
+import { RPC_NEW_WORK_METHODS } from "./rpc-method-class.ts";
 
 /**
  * Set on a successor launched by an idle handover: the runtime it must report. A successor that
@@ -94,22 +95,6 @@ export interface HostIdleHandoverOptions {
 	readonly log?: (line: string) => void;
 }
 
-/** Commands that would start, extend or queue model work. Everything else stays admitted. */
-const NEW_WORK_COMMANDS: ReadonlySet<string> = new Set([
-	"prompt",
-	"steer",
-	"follow_up",
-	"send_custom_message",
-	"continue_from_leaf",
-	"resume_session",
-	"append_user_message",
-	"bash",
-	"compact",
-	"wake",
-	"edit_assistant_message",
-	"edit_user_message",
-]);
-
 const DEFAULT_POLL_MS = 200;
 
 interface Operation {
@@ -134,7 +119,7 @@ export class HostIdleHandover {
 	/** False while a handover holds new work back; a blocked one admits again. */
 	admits(commandType: string): boolean {
 		const state = this.operation?.view.state;
-		return state === undefined || state === "handover_blocked" || !NEW_WORK_COMMANDS.has(commandType);
+		return state === undefined || state === "handover_blocked" || !(RPC_NEW_WORK_METHODS as ReadonlySet<string>).has(commandType);
 	}
 
 	async begin(request: IdleHandoverRequest): Promise<HandoverAnswer> {

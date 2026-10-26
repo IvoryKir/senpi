@@ -90,6 +90,10 @@ const PUBLIC_AUTH_LEAVES = new Set(
 	),
 );
 
+// senpi#4324: the supervisor's observe check reads the method table's derived observing set, so the table module is a
+// leaf of its graph. It imports only `node:crypto` (its other imports are type-only and erased); nothing else entered.
+const METHOD_TABLE_LEAVES = new Set(["packages/coding-agent/dist/modes/rpc/rpc-method-class.js"]);
+
 function loadedModules(entries: readonly { phase: string; url: string }[]): string[] {
 	const repo = `file://${repoRoot}`;
 	return [
@@ -106,8 +110,9 @@ describe("RPC host supervisor import graph", () => {
 		);
 		const internalHopLeaves = modules.filter((url) => INTERNAL_HOP_LEAVES.has(url)).length;
 		const publicAuthLeaves = modules.filter((url) => PUBLIC_AUTH_LEAVES.has(url)).length;
+		const methodTableLeaves = modules.filter((url) => METHOD_TABLE_LEAVES.has(url)).length;
 		console.info(
-			`supervisor graph: ${modules.length} modules (base ceiling ${SUPERVISOR_MODULE_CEILING}, internal hop ${internalHopLeaves}, public auth ${publicAuthLeaves})`,
+			`supervisor graph: ${modules.length} modules (base ceiling ${SUPERVISOR_MODULE_CEILING}, internal hop ${internalHopLeaves}, public auth ${publicAuthLeaves}, method table ${methodTableLeaves})`,
 		);
 
 		const core = modules.filter((url) => url.startsWith("packages/coding-agent/dist/core/"));
@@ -116,7 +121,9 @@ describe("RPC host supervisor import graph", () => {
 		).toEqual([]);
 		expect(modules.filter((url) => url.startsWith("packages/coding-agent/dist/modes/interactive/"))).toEqual([]);
 		expect(modules.filter((url) => url.startsWith("packages/coding-agent/dist/modes/app-server/"))).toEqual([]);
-		expect(modules.length - internalHopLeaves - publicAuthLeaves).toBeLessThanOrEqual(SUPERVISOR_MODULE_CEILING);
+		expect(modules.length - internalHopLeaves - publicAuthLeaves - methodTableLeaves).toBeLessThanOrEqual(
+			SUPERVISOR_MODULE_CEILING,
+		);
 	});
 
 	// senpi#3743: a bundled install starts its supervisor through `dist/bundle/host-supervisor.js`. Before it
