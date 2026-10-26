@@ -182,8 +182,13 @@ describe("RPC method classes (senpi#4319)", () => {
 				["session file", { sessionPath: "/x/s.jsonl" }, "device_admin"],
 				["cwd", { cwd: "/x" }, "device_admin"],
 				["permission preset", { permissionPreset: "full-access" }, "device_admin"],
+				["browser engine", { browserEngine: "connected" }, "device_admin"],
 				["a null path still names one", { sessionPath: null }, "device_admin"],
 				["an explicitly undefined field is absent", { cwd: undefined }, "thread"],
+			],
+			"get_effect_status@1": [
+				["by session id", { sessionId: "s", effectId: "e" }, "observe"],
+				["in a named session file", { sessionPath: "/x/s.jsonl", effectId: "e" }, "device_admin"],
 			],
 			"new_session@1": [
 				["plain", {}, "thread"],
@@ -209,6 +214,9 @@ describe("RPC method classes (senpi#4319)", () => {
 			{ type: "set_steering_mode", mode: "all" },
 			{ type: "set_follow_up_mode", mode: "all" },
 			{ type: "set_auto_retry", enabled: true },
+			{ type: "set_model", provider: "p", modelId: "m" },
+			{ type: "cycle_model" },
+			{ type: "set_fast_mode", enabled: true },
 		])
 			expect([record.type, classifyRpcMethod(record)]).toEqual([record.type, "device_admin"]);
 		expect(classifyRpcMethod({ type: "set_auto_compaction", enabled: true })).toBe("drive");
@@ -236,12 +244,17 @@ describe("RPC method classes (senpi#4319)", () => {
 	// A changed rule must bump its version deliberately: this snapshot makes the change visible.
 	it("versions every record-dependent entry", () => {
 		const { classes, dynamic_versions } = rpcMethodClassesAnswer();
-		expect(dynamic_versions).toEqual({ append_session_entry: 1, new_session: 1, open_session: 1 });
+		expect(dynamic_versions).toEqual({
+			append_session_entry: 1,
+			get_effect_status: 1,
+			new_session: 1,
+			open_session: 1,
+		});
 		expect(
 			Object.keys(classes)
 				.filter((type) => classes[type as "prompt"] === "dynamic")
 				.sort(),
-		).toEqual(["append_session_entry", "new_session", "open_session"]);
+		).toEqual(["append_session_entry", "get_effect_status", "new_session", "open_session"]);
 	});
 
 	it("digests the sorted type=class lines, dynamic entries as type=dynamic@<version>, and changes with one reassignment", () => {

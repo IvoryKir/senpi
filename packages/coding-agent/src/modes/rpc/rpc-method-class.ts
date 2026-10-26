@@ -12,7 +12,8 @@
  * - `observe`: side-effect-free reads.
  * - `drive`: runs, steers or edits the current session (prompts, queue and message edits, session-scoped settings;
  *   a setter that writes the device-wide settings file is `device_admin`).
- * - `answer`: replies to a question or dialog the engine asked.
+ * - `answer`: replies to a question or dialog the engine asked. The engine's permission prompts are such dialogs, so
+ *   an `answer` grant can approve what `device_admin` would otherwise gate: never hand it out as harmless.
  * - `thread`: creates, opens, attaches, forks or closes sessions by id. A record that names a host path (a session
  *   file, a cwd, an import source, a parent session) or a permission preset is `device_admin`: it reads or writes host
  *   files, or changes what the agent may do without asking.
@@ -101,9 +102,17 @@ function namesAny(record: object, fields: ReadonlyArray<string>): boolean {
 	return fields.some((field) => Object.hasOwn(record, field) && Reflect.get(record, field) !== undefined);
 }
 
-/** Opening by id is a thread operation; naming a session file, a cwd or a permission preset acts on the device. */
+/**
+ * Opening by id is a thread operation; naming a session file, a cwd, a permission preset or a browser engine (the
+ * user's own signed-in browser) acts on the device.
+ */
 function openSessionClass(record: object): RpcMethodClass {
-	return namesAny(record, ["sessionPath", "cwd", "permissionPreset"]) ? "device_admin" : "thread";
+	return namesAny(record, ["sessionPath", "cwd", "permissionPreset", "browserEngine"]) ? "device_admin" : "thread";
+}
+
+/** An effect looked up by session id is a read; one looked up in a named session file opens a host path. */
+function effectStatusClass(record: object): RpcMethodClass {
+	return namesAny(record, ["sessionPath"]) ? "device_admin" : "observe";
 }
 
 /** A new session is a thread operation; naming a parent session file reads a host path. */
@@ -125,7 +134,8 @@ export const RPC_METHOD_CLASS = {
 	get_fork_messages: "observe",
 	get_last_assistant_text: "observe",
 	get_session_stats: "observe",
-	get_effect_status: "observe",
+	// observe by session id; device_admin when it names a session file (it opens that host path)
+	get_effect_status: { classify: effectStatusClass, version: 1 },
 	get_pending_inputs: "observe",
 	get_follow_up_messages: "observe",
 	get_steering_messages: "observe",
@@ -162,11 +172,10 @@ export const RPC_METHOD_CLASS = {
 	navigate_tree: "drive",
 	set_label: "drive",
 	set_session_name: "drive",
-	set_model: "drive",
-	cycle_model: "drive",
+
 	set_thinking_level: "drive",
 	cycle_thinking_level: "drive",
-	set_fast_mode: "drive",
+
 	// a session override; set_steering_mode, set_follow_up_mode and set_auto_retry write global settings (device_admin)
 	set_auto_compaction: "drive",
 	set_retry_fallback: "drive",
@@ -213,7 +222,11 @@ export const RPC_METHOD_CLASS = {
 	account_remove: "device_admin",
 	set_favorite_models: "device_admin",
 	set_scoped_models: "device_admin",
-	// each writes the device-wide settings file, not a session override
+	// each writes the device-wide settings file, not a session override (set_model and cycle_model persist the default
+	// model, set_fast_mode the service tier)
+	set_model: "device_admin",
+	cycle_model: "device_admin",
+	set_fast_mode: "device_admin",
 	set_steering_mode: "device_admin",
 	set_follow_up_mode: "device_admin",
 	set_auto_retry: "device_admin",

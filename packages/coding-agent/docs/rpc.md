@@ -3519,10 +3519,12 @@ only reads and may be sent with `observe: true`.
 `classes` names every inbound record type (the example shows five). `dynamic` marks a type whose class depends on
 the record, and `dynamic_versions` gives the version of each such rule: `append_session_entry` is `drive` for a
 user-authored message entry (`entry.type: "message"` with `entry.message.role: "user"`) and `device_admin` for any
-other entry; `open_session` is `thread` unless it names `sessionPath`, `cwd` or `permissionPreset` (then `device_admin`), and
-`new_session` is `thread` unless it names `parentSession`. `switch_session` and `import_jsonl` are always `device_admin`
-(they open or read a host file), and so are `set_steering_mode`, `set_follow_up_mode` and `set_auto_retry` (they
-write the device-wide settings). `export_html` and `export_jsonl` are `device_admin` with or without `outputPath`: both write a file on
+other entry; `open_session` is `thread` unless it names `sessionPath`, `cwd`, `permissionPreset` or `browserEngine` (then
+`device_admin`), `new_session` is `thread` unless it names `parentSession`, and `get_effect_status` is `observe` unless it
+names `sessionPath`. `switch_session` and `import_jsonl` are always `device_admin`
+(they open or read a host file), and so are `set_model`, `cycle_model`, `set_fast_mode`, `set_steering_mode`,
+`set_follow_up_mode` and `set_auto_retry` (they write the device-wide settings). `answer` can approve the engine's
+permission prompts, so it is not a harmless grant. `export_html` and `export_jsonl` are `device_admin` with or without `outputPath`: both write a file on
 the engine's filesystem (into the session's working directory when no path is given). The classes, least to most dangerous:
 `observe` (side-effect-free reads), `drive` (runs, steers or edits a session), `answer` (`extension_ui_response`,
 `extension_ui_progress`), `thread` (creates, opens, attaches, forks or closes sessions by id), `device_admin`
