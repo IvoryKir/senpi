@@ -271,6 +271,11 @@ export class SessionEventWriter {
 		return this.sealedSessions.has(sessionId);
 	}
 
+	/** Legacy views frozen for a peer's baseline and not yet released (R3.C6.4 accounting). */
+	get openLegacyViews(): number {
+		return this.fanout.replay.openCursors;
+	}
+
 	registerConnection(
 		id: string,
 		connection: SessionEventWriterConnection,

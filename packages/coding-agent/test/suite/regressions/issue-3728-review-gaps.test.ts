@@ -36,7 +36,7 @@ function actorFixture() {
 		failure,
 		400,
 	);
-	actor.enableRecovery(() => () => []);
+	actor.enableRecovery(() => ({ empty: true, next: async () => undefined, release: () => {} }));
 	actor.enqueue('{"type":"agent_start"}\n');
 	return { actor, drain, writes, failure };
 }
@@ -62,8 +62,9 @@ it("releases callbacks for queued and incoming shed notices exactly once", async
 	actor.enqueue(`${JSON.stringify({ type: "message_update", message: "x".repeat(500) })}\n`);
 	actor.enqueue('{"type":"close_overflow","ids":["b"]}\n', undefined, incoming);
 
+	// The shed released the queued notice; the incoming one is captured behind the cut and written after it.
 	expect(queued).toHaveBeenCalledTimes(1);
-	expect(incoming).toHaveBeenCalledTimes(1);
+	expect(incoming).toHaveBeenCalledTimes(0);
 	drain.resolve();
 	await actor.flush();
 	expect(queued).toHaveBeenCalledTimes(1);

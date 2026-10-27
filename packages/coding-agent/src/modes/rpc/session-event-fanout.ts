@@ -1,9 +1,8 @@
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
-import { serializeJsonLine } from "./jsonl.ts";
-import { carriesMedia, omitNormalInlineMedia } from "./media-placeholders.ts";
-import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
+import { LegacyReplayStore } from "./legacy-replay-store.ts";
+import type { FrozenAcceptedRoot, SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { SocketEventSinkActor } from "./socket-event-fanout.ts";
-import { EVENT_RESYNC_CAPABILITY, type ResyncReason, type RpcSessionResyncRequired } from "./socket-peer-recovery.ts";
+import { EVENT_RESYNC_CAPABILITY } from "./socket-peer-recovery.ts";
 
 export type RawWriter = (chunk: string) => void;
 export type BackpressureWaiter = () => Promise<void>;
@@ -34,44 +33,20 @@ type RegisteredConnection = {
 	readonly actor: SocketEventSinkActor;
 };
 
-/**
- * A replayable snapshot line.
- *
- * `placeholderLine` is the `media_placeholders` variant. The writer supplies it only when
- * a capable connection was already attached when the record was emitted; a connection that
- * attaches later still needs it, so the frozen line supplies the source on the first
- * capable replay. Only the derived line is memoized; no provider object is retained.
- * `mayCarryMedia` is the type gate taken at acceptance: a record whose type cannot carry
- * media (every `message_update` partial) replays its `line` with no parse at all; only
- * media-bearing records parse their frozen line, once.
- */
-type SnapshotRecord = {
-	readonly line: string;
-	placeholderLine?: string;
-	readonly hasMessage: boolean;
-	readonly mayCarryMedia: boolean;
-};
-
-/** The placeholder variant of a remembered record, derived and memoized on first use. */
-function snapshotPlaceholderLine(record: SnapshotRecord): string {
-	if (record.placeholderLine !== undefined) return record.placeholderLine;
-	if (!record.mayCarryMedia) return record.line;
-	const source = JSON.parse(record.line) as Record<string, unknown>;
-	const redacted = omitNormalInlineMedia(source);
-	record.placeholderLine = redacted === source ? record.line : serializeJsonLine(redacted);
-	return record.placeholderLine;
-}
+/** A lane root pinned for one frozen view, released once on that view's end (R3.C1.5). */
+type PinnedRoot = { readonly lane: SessionAcceptanceLane; readonly root: FrozenAcceptedRoot; readonly epoch: string };
 
 export class SessionEventFanout {
 	onConnectionClosed?: (id: string) => void;
 	/** Each routing session's acceptance lane; retired when the session is sealed or forgotten. */
 	readonly acceptance = new Map<string, SessionAcceptanceLane>();
+	/** The retained legacy replay source every late peer's baseline is frozen from (S07b replaces it). */
+	readonly replay = new LegacyReplayStore();
 	private readonly connections = new Map<string, RegisteredConnection>();
-	private readonly sessionSnapshots = new Map<string, SnapshotRecord[]>();
-	private readonly lifecycleSnapshots = new Map<string, SnapshotRecord>();
-	private readonly pendingQuestions = new Map<string, Map<string, Record<string, unknown>>>();
 	private readonly connectionCapabilities = new Map<string, Set<string>>();
-	private readonly connectionSessions = new Map<string, Set<string>>();
+	/** Per connection, each attached session with the ordinal of the attach that holds it. */
+	private readonly connectionSessions = new Map<string, Map<string, number>>();
+	private attachOrdinal = 0;
 	private readonly registeredCapabilityConnections = new Set<string>();
 
 	registerConnection(
@@ -99,7 +74,7 @@ export class SessionEventFanout {
 		);
 		this.connections.set(id, { connection, actor });
 		this.connectionCapabilities.set(id, new Set());
-		this.connectionSessions.set(id, new Set());
+		this.connectionSessions.set(id, new Map());
 	}
 
 	unregisterConnection(id: string): void {
@@ -112,21 +87,32 @@ export class SessionEventFanout {
 		this.registeredCapabilityConnections.delete(id);
 	}
 
+	/**
+	 * A first attach freezes the cut C synchronously (the lane root and today's replay view) and installs that
+	 * peer's baseline barrier before the session is live for it; a repeated hold adds nothing. The attempt dies
+	 * with a detach, the peer, or a replacement (new lane epoch), and releases its root in every case.
+	 */
 	attachConnectionToSession(id: string, sessionId: string): void {
-		if (!this.connections.has(id)) return;
-		const sessions = this.connectionSessions.get(id) ?? new Set<string>();
+		const registered = this.connections.get(id);
+		if (!registered) return;
+		const sessions = this.connectionSessions.get(id) ?? new Map<string, number>();
 		if (sessions.has(sessionId)) return;
-		sessions.add(sessionId);
+		const ordinal = ++this.attachOrdinal;
+		sessions.set(sessionId, ordinal);
 		this.connectionSessions.set(id, sessions);
-		this.replaySnapshot(id, sessionId);
-		for (const frame of this.pendingQuestions.get(sessionId)?.values() ?? []) {
-			this.connections.get(id)?.actor.enqueue(
-				serializeJsonLine({
-					...frame,
-					remainingMs: typeof frame.deadlineAtMs === "number" ? Math.max(0, frame.deadlineAtMs - Date.now()) : 0,
-				}),
-			);
-		}
+		const pinned = this.pin([sessionId]);
+		const cursor = this.replay.freezeAttach(sessionId, {
+			placeholders: this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY),
+			now: Date.now(),
+			onRelease: () => this.unpin(pinned),
+		});
+		registered.actor.installBaseline(
+			cursor,
+			() =>
+				this.connections.get(id)?.actor === registered.actor &&
+				this.connectionSessions.get(id)?.get(sessionId) === ordinal &&
+				pinned.every(({ lane, epoch }) => lane.recoveryEpoch === epoch),
+		);
 	}
 
 	detachConnectionFromSession(id: string, sessionId: string): void {
@@ -139,17 +125,16 @@ export class SessionEventFanout {
 		this.connectionCapabilities.set(id, new Set(capabilities));
 		this.registeredCapabilityConnections.add(id);
 		if (capabilities.includes(EVENT_RESYNC_CAPABILITY)) {
+			// Frozen at the shed, before the actor awaits its drain (R3.C1.5); released when the recovery ends.
 			registered.actor.enableRecovery((reason) => {
-				const attached = [...(this.connectionSessions.get(id) ?? [])];
-				// Frozen at the shed, before the actor awaits its drain (R3.C1.5); released by the recovery.
-				const frozen = attached.flatMap((sessionId) => {
-					const lane = this.acceptance.get(sessionId);
-					return lane && !lane.retired ? [{ lane, root: lane.freeze() }] : [];
-				});
-				return Object.assign(() => this.resyncSnapshot(id, reason, attached), {
-					release: () => {
-						for (const { lane, root } of frozen) lane.release(root);
-					},
+				const attached = [...(this.connectionSessions.get(id)?.keys() ?? [])];
+				const pinned = this.pin(attached);
+				return this.replay.freezeResync({
+					sessions: attached,
+					reason,
+					placeholders: this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY),
+					closedNow: (sessionId) => !this.connectionSessions.get(id)?.has(sessionId),
+					onRelease: () => this.unpin(pinned),
 				});
 			});
 		} else registered.actor.disableRecovery();
@@ -217,7 +202,7 @@ export class SessionEventFanout {
 
 	/** Pending `question` frames a session has asked and nobody answered yet. */
 	pendingQuestionCount(sessionId: string): number {
-		return this.pendingQuestions.get(sessionId)?.size ?? 0;
+		return this.replay.pendingQuestionCount(sessionId);
 	}
 
 	/** Deliver one line to the connections attached to a session, never to the rest of the fanout. */
@@ -227,76 +212,23 @@ export class SessionEventFanout {
 	}
 
 	rememberSnapshot(sessionId: string, value: Record<string, unknown>, line: string, placeholderLine?: string): void {
-		const record: SnapshotRecord = {
-			line,
-			placeholderLine,
-			hasMessage: value.message != null,
-			mayCarryMedia: carriesMedia(value),
-		};
-		if (value.type === "session_lifecycle") {
-			this.lifecycleSnapshots.set(sessionId, record);
-			return;
-		}
-		if (value.type === "extension_ui_request" && value.method === "question" && typeof value.id === "string") {
-			const pending = this.pendingQuestions.get(sessionId) ?? new Map<string, Record<string, unknown>>();
-			// Writer acceptance already detached and JSON-normalized the frame.
-			pending.set(value.id, { ...value });
-			this.pendingQuestions.set(sessionId, pending);
-			return;
-		}
-		if (value.type === "question_resolved" && typeof value.id === "string") {
-			this.pendingQuestions.get(sessionId)?.delete(value.id);
-			return;
-		}
-		if (value.type === "question_updated" && typeof value.id === "string") {
-			const frame = this.pendingQuestions.get(sessionId)?.get(value.id);
-			if (frame) Object.assign(frame, { deadlineAtMs: value.deadlineAtMs, remainingMs: value.remainingMs });
-			return;
-		}
-		const event = value.assistantMessageEvent as Record<string, unknown> | undefined;
-		if (value.type === "message_start" || (value.type === "message_update" && event?.type === "text_start")) {
-			this.sessionSnapshots.set(sessionId, [record]);
-		} else if (this.sessionSnapshots.has(sessionId)) {
-			this.sessionSnapshots.get(sessionId)?.push(record);
-		}
-		if (value.type === "message_end") this.sessionSnapshots.delete(sessionId);
+		this.replay.remember(sessionId, value, line, placeholderLine);
 	}
 
 	forgetSession(sessionId: string): void {
 		this.acceptance.get(sessionId)?.retire("close");
 		this.acceptance.delete(sessionId);
-		this.pendingQuestions.delete(sessionId);
-		this.sessionSnapshots.delete(sessionId);
-		this.lifecycleSnapshots.delete(sessionId);
+		this.replay.forget(sessionId);
 	}
 
-	private replaySnapshot(id: string, sessionId: string): void {
-		const actor = this.connections.get(id)?.actor;
-		if (!actor) return;
-		const placeholders = this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY);
-		const lifecycle = this.lifecycleSnapshots.get(sessionId);
-		if (lifecycle) actor.enqueue(placeholders ? snapshotPlaceholderLine(lifecycle) : lifecycle.line);
-		for (const record of this.sessionSnapshots.get(sessionId) ?? [])
-			actor.enqueue(placeholders ? snapshotPlaceholderLine(record) : record.line);
-	}
-
-	private resyncSnapshot(id: string, reason: ResyncReason, attached: readonly string[]): readonly object[] {
-		const placeholders = this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY);
-		const current = this.connectionSessions.get(id) ?? new Set<string>();
-		return [...new Set([...attached, ...current])].map((sessionId) => {
-			const records = this.sessionSnapshots.get(sessionId) ?? [];
-			const latest = records.findLast((record) => record.hasMessage);
-			// The producer may mutate its partial object after emission. The serialized
-			// record, not that object, fixes the recovery cut before later deltas enqueue.
-			const frozen: unknown = latest === undefined ? undefined : JSON.parse(latest.line);
-			const record: RpcSessionResyncRequired = {
-				type: "resync_required",
-				sessionId,
-				reason,
-				message: typeof frozen === "object" && frozen !== null && "message" in frozen ? frozen.message : null,
-				...(!current.has(sessionId) ? { closed: true as const } : {}),
-			};
-			return placeholders ? omitNormalInlineMedia(record) : record;
+	private pin(sessionIds: readonly string[]): readonly PinnedRoot[] {
+		return sessionIds.flatMap((sessionId) => {
+			const lane = this.acceptance.get(sessionId);
+			return lane && !lane.retired ? [{ lane, root: lane.freeze(), epoch: lane.recoveryEpoch }] : [];
 		});
+	}
+
+	private unpin(pinned: readonly PinnedRoot[]): void {
+		for (const { lane, root } of pinned) lane.release(root);
 	}
 }
