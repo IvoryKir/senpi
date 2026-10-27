@@ -17,10 +17,10 @@ it.each(
 			async writeFile(path, data) {
 				files.set(path, Buffer.from(data));
 			},
-			async readFile(path) {
+			async readFile(path, range) {
 				const data = files.get(path);
 				if (!data) throw new Error("missing backing file");
-				return Buffer.from(data);
+				return Buffer.from(range ? data.subarray(range.offset, range.offset + range.length) : data);
 			},
 			async unlink(path) {
 				files.delete(path);
