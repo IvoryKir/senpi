@@ -6,7 +6,7 @@
  * the engine's own entrypoint without its trust.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,24 +71,52 @@ describe("bundled bun shim of an adopted generation (POSIX)", () => {
 		expect(new Set([first, second, none]).size).toBe(3);
 	});
 
-	it("runs the engine with the generation, clears the switches, and notices a fallback once", () => {
-		const h = host();
-		const fake = join(h.shimRoots[0] ?? "", "fake-engine.sh");
+	// Paths holding a quote and a newline: POSIX single quotes must carry every byte.
+	const hostile = (h: BundledBunHost) => {
+		const base = join(h.shimRoots[0] ?? "", "it's\nhere");
+		mkdirSync(base);
+		const fake = join(base, "fake-engine.sh");
 		writeFileSync(
 			fake,
-			'#!/bin/sh\nflag=unset; [ -n "$NODE_USE_SYSTEM_CA" ] && flag=set\nprintf "%s|%s|%s|%s|%s\\n" "$BUN_BE_BUN" "$NODE_EXTRA_CA_CERTS" "$flag" "$SSL_CERT_DIR" "$*"\n',
+			'#!/bin/sh\nset_or_unset() { if [ -n "$1" ]; then printf set; else printf unset; fi; }\nprintf "%s|%s|%s|%s|%s|%s\\n" "$BUN_BE_BUN" "$NODE_EXTRA_CA_CERTS" "$(set_or_unset "$NODE_USE_SYSTEM_CA")" "$(set_or_unset "$BUN_OPTIONS")" "$SSL_CERT_DIR" "$*"\n',
 		);
 		chmodSync(fake, 0o755);
-		const fallback = { ...serverMarker, automatic: "fallback" as const, fallbackReason: "helper-timeout" as const };
-		const dir = bundledBunDir({ ...h, execPath: fake, trust: fallback });
+		const trust = {
+			...serverMarker,
+			automatic: "fallback" as const,
+			fallbackReason: "helper-timeout" as const,
+			file: join(base, "gen'$(x)`y`.pem"),
+		};
+		return { fake, trust };
+	};
+	const ambient = { PATH: "/usr/bin:/bin", NODE_USE_SYSTEM_CA: "1", BUN_OPTIONS: "--use-system-ca" };
+
+	it("runs the engine with the generation through hostile paths, clears both switches, and notices a fallback once", () => {
+		const h = host();
+		const { fake, trust } = hostile(h);
+		const dir = bundledBunDir({ ...h, execPath: fake, trust });
 		if (dir === undefined) throw new Error("no shim directory");
-		const env = { PATH: "/usr/bin:/bin", NODE_USE_SYSTEM_CA: "1", BUN_OPTIONS: "--use-system-ca" };
-		const runs = [1, 2].map(() => spawnSync(join(dir, "bun"), ["test", "a b"], { env, encoding: "utf8" }));
+		const runs = [1, 2].map(() => spawnSync(join(dir, "bun"), ["test", "a b"], { env: ambient, encoding: "utf8" }));
 		expect(runs.map((run) => run.status)).toEqual([0, 0]);
-		expect(runs[0]?.stdout).toBe(`1|${serverMarker.file}|unset|${serverMarker.defaults?.dir}|test a b\n`);
+		expect(runs[0]?.stdout).toBe(`1|${trust.file}|unset|unset|${serverMarker.defaults?.dir}|test a b\n`);
 		expect(runs[0]?.stderr).toContain("(helper-timeout)");
 		expect(runs[0]?.stderr).toContain(engineTrustAction("helper-timeout").text);
 		expect(runs[1]?.stderr).toBe("");
+	});
+
+	it("still runs the engine when the notice sentinel cannot be written (senpi#4529 review)", () => {
+		const h = host();
+		const { fake, trust } = hostile(h);
+		const dir = bundledBunDir({ ...h, execPath: fake, trust });
+		if (dir === undefined) throw new Error("no shim directory");
+		chmodSync(dir, 0o555);
+		try {
+			const run = spawnSync(join(dir, "bun"), ["x"], { env: ambient, encoding: "utf8" });
+			expect(run.status).toBe(0);
+			expect(run.stdout).toBe(`1|${trust.file}|unset|unset|${serverMarker.defaults?.dir}|x\n`);
+		} finally {
+			chmodSync(dir, 0o755);
+		}
 	});
 });
 

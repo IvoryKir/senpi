@@ -39,7 +39,10 @@ export function posixShimFiles(execPath: string, dir: string, trust: EngineTrust
 		const notice = noticeText(trust);
 		if (notice !== undefined) {
 			const sentinel = quote(`${dir}/.fallback-noted`);
-			lines.push(`[ -e ${sentinel} ] || { printf '%s\\n' ${quote(notice)} >&2; : > ${sentinel} 2>/dev/null; }`);
+			// `:` is a special built-in: its failed redirect would exit the shell before the exec.
+			lines.push(
+				`[ -e ${sentinel} ] || { printf '%s\\n' ${quote(notice)} >&2; true 2>/dev/null > ${sentinel} || :; }`,
+			);
 		}
 		if (trust.owner === "server") lines.push("unset NODE_USE_SYSTEM_CA BUN_OPTIONS");
 		const closure =
