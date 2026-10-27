@@ -69,13 +69,27 @@ export class CompactIndexCompactor {
 		let draft = i.base;
 		i.bases.adjust(draft, 1, 0);
 		try {
-			for (const [key, value] of i.overlays.entries(cut.overrides)) {
-				const page = (await i.bases.get(cut.base, key))?.page;
-				if (!i.pending.has(key) && (!page || !touched || page.path === touched.path)) {
-					selected.set(key, value);
-					touched ??= page;
+			const entries = i.overlays.entries(cut.overrides);
+			while (selected.size < 128) {
+				const batch: (readonly [string, IndexOverride])[] = [];
+				for (let n = 0; n < 128; n++) {
+					const next = entries.next();
+					if (next.done) break;
+					batch.push(next.value);
 				}
-				if (selected.size === 128) break;
+				if (!batch.length) break;
+				const locations = await i.bases.getMany(
+					cut.base,
+					batch.map(([key]) => key),
+				);
+				for (const [key, value] of batch) {
+					const page = locations.get(key)?.page;
+					if (!i.pending.has(key) && (!page || !touched || page.path === touched.path)) {
+						selected.set(key, value);
+						touched ??= page;
+					}
+					if (selected.size === 128) break;
+				}
 			}
 			let small: IndexPage | undefined;
 			for (const page of i.pages) {

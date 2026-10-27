@@ -1,10 +1,14 @@
 import { expect, it, vi } from "vitest";
-import { CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
+import { type BaseRow, CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore } from "../../../src/modes/rpc/compact-content-store.ts";
 import { spoolRoot } from "../compact-storage-support.ts";
 
 // senpi#4272: count real leaf hydration, not elapsed time or mocked navigation.
-it.each([256, 1024])("bounds hydration while compacting %i rows", async (count) => {
+it.each(
+	[256, 1024].flatMap((count) =>
+		(["bounded", "cache-disabled", "per-row-get"] as const).map((mode) => ({ count, mode })),
+	),
+)("bounds hydration while compacting $count rows ($mode)", async ({ count, mode }) => {
 	const root = await spoolRoot();
 	const files = new Map<string, Buffer>();
 	const store = new CompactContentStore({
@@ -25,18 +29,40 @@ it.each([256, 1024])("bounds hydration while compacting %i rows", async (count) 
 	});
 	const index = new CompactContentIndex<{ n: number }>(store, () => [], 1);
 	const pause = vi.spyOn(index["compactor"], "schedule").mockImplementation(() => undefined);
+	const cached = vi.spyOn(index.bases, "cached");
+	const batched = vi.spyOn(index.bases, "getMany");
+	const points = vi.spyOn(index.bases, "get");
+	// Mutation seams call the real operations: only the optimizations are removed.
+	if (mode === "cache-disabled") cached.mockImplementation((operation) => operation());
+	if (mode === "per-row-get")
+		batched.mockImplementation(async (base, keys) => {
+			const found = new Map<string, BaseRow>();
+			for (const key of keys) {
+				const row = await index.bases.get(base, key);
+				if (row) found.set(key, row);
+			}
+			return found;
+		});
 	try {
 		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
 		pause.mockRestore();
 		const reads = vi.spyOn(store, "readLeaf");
+		const started = performance.now();
 		index.maybeCompact();
 		await store.idle();
 		const hydrations = reads.mock.calls.length;
 		reads.mockRestore();
-		console.info(`compaction count=${count} leafReads=${hydrations}`);
-		// Includes value reads: at most two hydrations per row per binary-tree level.
-		expect(hydrations).toBeLessThanOrEqual(2 * count * Math.ceil(Math.log2(count)));
+		console.info(
+			`compaction count=${count} mode=${mode} leafReads=${hydrations} pointDescents=${points.mock.calls.length} durationMs=${performance.now() - started}`,
+		);
+		// New nodes stay decoded; each 128-row append round rehydrates only its upper path.
+		const bound = Math.ceil(count / 128) * Math.ceil(Math.log2(count));
+		if (mode === "cache-disabled") expect(hydrations).toBeGreaterThan(bound);
+		else expect(hydrations).toBeLessThanOrEqual(bound);
+		// A warm path can hide disk reads, but must not hide one root descent per overlay key.
+		if (mode === "per-row-get") expect(points.mock.calls.length).toBeGreaterThanOrEqual(count);
+		else expect(points.mock.calls.length).toBe(0);
 		expect(index.status()).toMatchObject({ baseRows: count, overrideSlots: 0 });
 		expect(store.status()).toMatchObject({ structuredBytes: { resident: 0 }, failures: [] });
 		expect(index.bases["cache"]).toBeUndefined();
@@ -48,6 +74,9 @@ it.each([256, 1024])("bounds hydration while compacting %i rows", async (count) 
 		}
 	} finally {
 		pause.mockRestore();
+		cached.mockRestore();
+		batched.mockRestore();
+		points.mockRestore();
 		await store.retire();
 		await root.cleanup();
 	}

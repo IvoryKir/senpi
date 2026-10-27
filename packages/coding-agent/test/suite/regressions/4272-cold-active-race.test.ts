@@ -5,7 +5,10 @@ import { controlledIo, spoolRoot, startBlock } from "../compact-storage-support.
 // senpi#4272 / RULING-33: an active target belongs exclusively to synchronous acceptance.
 it.each(
 	(["message_status", "message_remove"] as const).flatMap((type) =>
-		(["enqueue", "lookup", "publication", "publication-settled"] as const).map((step) => ({ type, step })),
+		(["enqueue", "lookup", "lookup-settled", "publication", "publication-settled"] as const).map((step) => ({
+			type,
+			step,
+		})),
 	),
 )("rejects active $type at $step", async ({ type, step }) => {
 	const root = await spoolRoot();
@@ -40,9 +43,14 @@ it.each(
 		const cold = state.applyCold({ type, messageId: "target", persistence: "failed" });
 		let followup: ReturnType<typeof state.applyCold> | undefined;
 		if (step === "enqueue") {
-			// Settlement before queued execution must not turn a refused active operation into a cold one.
+			// Admission rejects immediately, even while unrelated cold work is blocked.
+			expect(await cold).toEqual({ kind: "rejected", reason: "active_message", afterSequence: sequence });
+		} else if (step.startsWith("lookup")) state.accept(startBlock("target", "live"));
+		if (step === "lookup-settled") {
 			state.accept({ type: "message_status", messageId: "target", persistence: "appended" });
-		} else if (step === "lookup") state.accept(startBlock("target", "live"));
+			followup = state.applyCold({ type: "message_status", messageId: "target", persistence: "appended" });
+			expect(spy.mock.calls.some(([, key]) => key === "target")).toBe(false);
+		}
 		hold.release();
 		if (step.startsWith("publication")) {
 			await entered.promise;

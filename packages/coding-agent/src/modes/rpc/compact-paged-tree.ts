@@ -21,7 +21,7 @@ export class CompactPagedTree<T> {
 	private readonly leavesOf: (value: T) => readonly LeafId[];
 	private dirty: LeafId[] = [];
 	private dirtyBytes = 0;
-	private cache: Map<LeafId, { node: Node<T>; name: string }> | undefined;
+	private cache: Map<LeafId, { node: Node<T>; name: string; bytes: number }> | undefined;
 	private cacheBytes = 0;
 	allocatedNodes = 0;
 
@@ -35,7 +35,7 @@ export class CompactPagedTree<T> {
 		if (root) this.store.adjust(root.ref.owner, live, pins);
 	}
 
-	/** A serial compaction round shares decoded paths, bounded to 32 KiB plus map entries. */
+	/** A round-local 32 KiB LRU retains reused upper paths, including newly built ones. */
 	async cached<R>(operation: () => Promise<R>): Promise<R> {
 		this.cache = new Map();
 		this.cacheBytes = 0;
@@ -49,19 +49,31 @@ export class CompactPagedTree<T> {
 
 	private async read(root: PagedRoot) {
 		const cached = this.cache?.get(root.ref.node);
-		if (cached) return cached;
+		if (cached) {
+			this.cache?.delete(root.ref.node);
+			this.cache?.set(root.ref.node, cached);
+			return cached;
+		}
 		const text = await this.store.readLeaf(root.ref.node);
 		const node: Node<T> = JSON.parse(text);
 		const name = await this.values.read(node.key);
 		if (typeof name !== "string") throw new CompactReadError("ownership");
-		const decoded = { node, name };
-		const bytes = (text.length + name.length) * 2 + 128;
+		return this.remember(root.ref.node, node, name, text.length);
+	}
+
+	private remember(id: LeafId, node: Node<T>, name: string, units: number) {
+		const existing = this.cache?.get(id);
+		if (existing) return existing;
+		const bytes = (units + name.length) * 2 + 128;
+		const decoded = { node, name, bytes };
 		if (this.cache && bytes <= 32_768) {
-			if (this.cacheBytes + bytes > 32_768) {
-				this.cache.clear();
-				this.cacheBytes = 0;
+			while (this.cacheBytes + bytes > 32_768) {
+				const oldest = this.cache.entries().next().value;
+				if (!oldest) break;
+				this.cache.delete(oldest[0]);
+				this.cacheBytes -= oldest[1].bytes;
 			}
-			this.cache.set(root.ref.node, decoded);
+			this.cache.set(id, decoded);
 			this.cacheBytes += bytes;
 		}
 		return decoded;
@@ -145,6 +157,8 @@ export class CompactPagedTree<T> {
 		// Intermediate changed paths can die before their first write; bound the draft buffer, not each update.
 		if (this.dirtyBytes >= 32_768) await this.flush();
 		const text = JSON.stringify(node);
+		// Decode before allocating: a failed key read must not strand a new leaf.
+		const name = this.cache ? await this.values.read(node.key) : undefined;
 		const leaf = this.store.createLeaf(text, true);
 		const owner = this.store.text.own([
 			leaf,
@@ -157,6 +171,7 @@ export class CompactPagedTree<T> {
 		this.dirty.push(leaf);
 		this.dirtyBytes += text.length * 2;
 		this.allocatedNodes++;
+		if (this.cache && typeof name === "string") this.remember(leaf, node, name, text.length);
 		return {
 			ref: { node: leaf, owner },
 			height: 1 + Math.max(node.left?.height ?? 0, node.right?.height ?? 0),
