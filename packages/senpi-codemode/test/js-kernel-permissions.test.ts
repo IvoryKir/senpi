@@ -92,8 +92,14 @@ describe("permission lifetime", () => {
 						}),
 			});
 			try {
-				for (const source of ["promise", "message-port"]) {
-					const path = join(root, source);
+				// A timed-out or interrupted cell ends its run like settlement does; its worker and globals survive.
+				for (const [source, ending] of [
+					["promise", "settled"],
+					["message-port", "settled"],
+					["promise", "timeout"],
+					["promise", "interrupt"],
+				] as const) {
+					const path = join(root, `${source}-${ending}`);
 					const setup =
 						source === "promise"
 							? `var gate = Promise.withResolvers(); var result = gate.promise.then(effect); var trigger = () => gate.resolve();`
@@ -101,16 +107,21 @@ describe("permission lifetime", () => {
 						var result = new Promise(resolve => channel.port1.once("message", () => {
 							resolve(effect()); channel.port1.close(); channel.port2.close();
 						})); var trigger = () => channel.port2.postMessage(null);`;
-					expect(
-						await kernel.run({
-							cellId: crypto.randomUUID(),
-							code: `
+					const first = kernel.run({
+						cellId: crypto.randomUUID(),
+						code: `
 					var effect = () => { try { require("node:fs").writeFileSync(${JSON.stringify(path)}, "ok"); return "wrote"; }
 						catch (error) { return error.code; } }; ${setup}
+					${ending === "interrupt" ? "await tool.parked({});" : ""}
+					${ending === "settled" ? "" : "await new Promise(() => {});"}
 				`,
-							timeoutMs: 8_000,
-						}),
-					).toMatchObject({ ok: true });
+						timeoutMs: ending === "timeout" ? 500 : 8_000,
+					});
+					if (ending === "interrupt") {
+						await kernel.nextToolCall();
+						await kernel.interrupt("continuation interrupt");
+					}
+					expect(await first).toMatchObject({ ok: ending === "settled" });
 					expect(
 						await kernel.run({
 							cellId: crypto.randomUUID(),

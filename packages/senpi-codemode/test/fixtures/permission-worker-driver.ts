@@ -4,9 +4,20 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { MessagePort } from "node:worker_threads";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
 
 const scenario = process.argv[2];
+if (scenario === "transfer") {
+	// A host forward that cannot be cloned must reach the cell as messageerror, never escape the host listener.
+	const postMessage = MessagePort.prototype.postMessage;
+	MessagePort.prototype.postMessage = function (this: MessagePort, value: unknown, ...rest: unknown[]) {
+		if (value !== null && typeof value === "object" && "value" in value && value.value === "unforwardable") {
+			throw new DOMException("forced clone failure", "DataCloneError");
+		}
+		return Reflect.apply(postMessage, this, [value, ...rest]);
+	};
+}
 const root = await mkdtemp(join(tmpdir(), "worker-transparency-"));
 const failures: string[] = [];
 let rows = 0;
@@ -67,7 +78,8 @@ try {
 						script,
 						`
 						import {parentPort} from "node:worker_threads";
-						const values=[null,undefined,false,0,"value",1n,[],{}, {type:"cell-worker-message",value:"user"}];
+						const values=[null,undefined,false,0,"value",1n,[],{}, {type:"cell-worker-message",value:"user"},
+							{key:"user",value:"inner",transfer:[]}];
 						onmessage=()=>{for(const value of values) parentPort.postMessage(value); postMessage("done");};
 						postMessage("ready");
 					`,
@@ -78,13 +90,49 @@ try {
 						var frames=[]; var received=new Promise(resolve=>child.onmessage=e=>{
 							if(e.data==="done") resolve(); else frames.push(e.data);
 						}); child.postMessage(null); await received; child.terminate();
-						var valid = frames.length===9 && frames[0]===null && frames[1]===undefined &&
+						var valid = frames.length===10 && frames[0]===null && frames[1]===undefined &&
 							frames[2]===false && frames[3]===0 && frames[4]==="value" && frames[5]===1n &&
 							Array.isArray(frames[6]) && Object.keys(frames[7]).length===0 &&
-							frames[8].type==="cell-worker-message" && frames[8].value==="user";
+							frames[8].type==="cell-worker-message" && frames[8].value==="user" &&
+							frames[9].key==="user" && frames[9].value==="inner" && Array.isArray(frames[9].transfer);
 						if(!valid) throw new Error(JSON.stringify(frames, (_,v)=>typeof v==="bigint" ? String(v)+"n" : v));
 						return valid;`),
 						"true",
+					);
+				} else if (scenario === "transfer") {
+					await writeFile(
+						script,
+						`
+						import {MessageChannel, parentPort} from "node:worker_threads";
+						const open=()=>{const {port1,port2}=new MessageChannel(); port1.on("message",m=>port1.postMessage("pong:"+m)); return port2;};
+						onmessage=()=>{
+							const bare=open(); parentPort.postMessage(bare,[bare]);
+							const nested=open(); parentPort.postMessage({p:nested},[nested]);
+							const keyed=open(); postMessage({p:keyed},[keyed]);
+							parentPort.postMessage("unforwardable");
+							postMessage("done");
+						};
+						postMessage("ready");
+					`,
+					);
+					assert.equal(
+						await run(`var child = new Worker(${JSON.stringify(pathToFileURL(script).href)});
+						await new Promise((resolve,reject)=>{child.onmessage=resolve;child.onerror=reject});
+						var frames=[]; var errors=[]; child.onmessageerror=e=>errors.push(e.data?.message);
+						var received=new Promise(resolve=>child.onmessage=e=>{if(e.data==="done") resolve(); else frames.push(e.data);});
+						child.postMessage(null); await received;
+						var ports=[frames[0], frames[1]?.p, frames[2]?.p];
+						var replies=await Promise.all(ports.map(port=>new Promise((resolve,reject)=>{
+							if(typeof port?.postMessage!=="function") return reject(new Error("missing port: "+String(port)));
+							port.on("message",reply=>{port.close(); resolve(reply);}); port.postMessage("ping");
+						})));
+						child.terminate();
+						return {frames:frames.length, replies, errors};`),
+						JSON.stringify({
+							frames: 3,
+							replies: ["pong:ping", "pong:ping", "pong:ping"],
+							errors: ["Worker message could not be forwarded (DataCloneError): forced clone failure"],
+						}),
 					);
 				} else if (scenario === "worker-data") {
 					await writeFile(

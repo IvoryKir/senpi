@@ -6,12 +6,14 @@
 				"imports/extension/packages/senpi-codemode/src/kernels/js/permission-host.ts",
 				"imports/extension/packages/senpi-codemode/src/kernels/js/permission-sessions.ts",
 				"imports/extension/packages/senpi-codemode/src/kernels/js/permission-slots.mjs",
+				"imports/extension/packages/senpi-codemode/src/kernels/js/permission-worker-frames.ts",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/interpose.js",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-authority.mjs",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-host.ts",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-runtime.js",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-sessions.ts",
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-slots.mjs",
+				"imports/firstKernel/packages/senpi-codemode/src/kernels/js/permission-worker-frames.ts",
 				"legacyContracts/test/js-kernel-permissions-bun.test.ts/enforces Bun spawn, static imports and pre-enforcement Workers through real eval",
 				"legacyContracts/test/js-kernel-permissions.test.ts/eval permission core (worker) enforces only active deny rules (active=true)",
 				"legacyContracts/test/js-kernel-permissions.test.ts/eval permission core (worker) enforces only active deny rules (active=false)",
@@ -26,6 +28,7 @@
 				"legacyContracts/test/js-kernel-permissions.test.ts/permission lifetime keeps concurrent invocation tokens distinct across awaits",
 				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker lifetime through real Bun eval",
 				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker frames through real Bun eval",
+				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker transfer through real Bun eval",
 				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker worker-data through real Bun eval",
 				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker error through real Bun eval",
 				"legacyContracts/test/js-kernel-worker-transparency.test.ts/preserves Worker close through real Bun eval",
@@ -49,7 +52,7 @@
 				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) validates the oversized answer before using it",
 				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) refuses an oversized request without waking the host"
 			],
-			"reason": "senpi#4387: reviewed permission host/session/slot imports and first-kernel interposition/authority/runtime imports; exact regression cases cover denied effects, inactive continuation parity, Worker frames/data/events, slot ownership, and revocation. Existing baseline cells and gate comparisons remain unchanged."
+			"reason": "senpi#4387: reviewed permission host/session/slot/worker-frame imports and first-kernel interposition/authority/runtime imports; exact regression cases cover denied effects, inactive continuation parity (including timed-out and interrupted cells), Worker frames/data/events, transferred MessagePorts and unforwardable frames, slot ownership, and revocation. Existing baseline cells and gate comparisons remain unchanged."
 		},
 		"senpi#3612": {
 			"additions": [

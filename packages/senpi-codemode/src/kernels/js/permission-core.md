@@ -46,7 +46,8 @@ Authority follows `AsyncLocalStorage` rather than a mutable current-cell global.
 No-token operations pass only when every bound token is alive and inactive;
 idle code consults the kernel word. Settlement kills active tokens, but leaves
 inactive continuations alive without retaining them in the host registry.
-Cancellation still kills the invocation token. A dead kernel word overrides
+An interrupt or timeout releases tokens the same way. Cancellation still
+kills the invocation token. A dead kernel word overrides
 every token, including inactive tokens from settled runs. A token's death
 takes precedence over its inactive bit.
 
@@ -58,7 +59,10 @@ exit, not merely a termination request or a DEAD word. Inactive Workers use the
 kernel lifetime, so later cells can use them or create them from a continuation.
 User workerData is restored before user imports and preloads. User frames,
 including primitives and objects resembling transport frames, remain data;
-internal transfer envelopes carry a per-Worker key. Error events carry the error
+internal transfer envelopes carry a per-Worker key. MessagePorts transferred
+through a raw `parentPort` frame are transferred on to the cell; a frame the
+host cannot forward becomes a `messageerror` event and never throws in the
+host listener. Error events carry the error
 and its available source coordinates, and observed exit dispatches close.
 
 ## Scope boundary

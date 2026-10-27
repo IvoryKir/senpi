@@ -4,6 +4,7 @@ import type { WorkerRetirement } from "./interrupt-bounds.ts";
 import type { CellAuthorityToken, JavaScriptKernelOptions } from "./kernel-contract.ts";
 import type { KernelToolsInvokeOptions, KernelToolsInvokeRequest } from "./kernel-tools-types.ts";
 import { type PermissionSession, registerPermissionKernel, unregisterPermissionKernel } from "./permission-sessions.ts";
+import { forwardWorkerMessage, workerErrorFrame } from "./permission-worker-frames.ts";
 import {
 	createPermissionSlots,
 	interruptPermissionSlots,
@@ -111,7 +112,11 @@ export class KernelPermissionHost {
 		} else if (message.type === "kernel-tool-invoke") {
 			token = this.#invocations.get(message.call_id);
 		} else if (message.type === "interrupt" || message.type === "close") {
-			for (const token of this.#tokens.values()) this.#kill(token);
+			// An interrupt (including a timeout) ends work like settlement: inactive continuations survive.
+			for (const token of this.#tokens.values()) {
+				if (message.type === "interrupt") this.#release(token);
+				else this.#kill(token);
+			}
 			for (const pool of this.#pools) interruptPermissionSlots(pool);
 		}
 		return token ? { ...message, authority: this.wireToken(token) } : message;
@@ -235,8 +240,8 @@ export class KernelPermissionHost {
 				"transfer" in frame &&
 				Array.isArray(frame.transfer)
 			) {
-				message.port.postMessage({ type: "message", value: frame.value }, frame.transfer);
-			} else message.port.postMessage({ type: "message", value: frame });
+				forwardWorkerMessage(message.port, frame.value, frame.transfer);
+			} else forwardWorkerMessage(message.port, frame, []);
 		});
 		message.port.on("message", (frame: { type: string; value?: unknown; transfer?: Transferable[] }) => {
 			if (frame.type === "terminate") void worker.terminate();
@@ -289,16 +294,4 @@ export class KernelPermissionHost {
 		this.revoke();
 		unregisterPermissionKernel(this.#options.sessionId, this);
 	}
-}
-
-function workerErrorFrame(value: unknown) {
-	const error = value instanceof Error ? value : new Error(String(value));
-	return {
-		type: "error",
-		error,
-		message: error.message,
-		filename: "fileName" in error ? error.fileName : "sourceURL" in error ? error.sourceURL : "",
-		lineno: "lineNumber" in error ? error.lineNumber : "line" in error ? error.line : 0,
-		colno: "columnNumber" in error ? error.columnNumber : "column" in error ? error.column : 0,
-	};
 }

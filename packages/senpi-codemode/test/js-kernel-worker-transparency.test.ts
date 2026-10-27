@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 
-it.each(["lifetime", "frames", "worker-data", "error", "close"])(
+it.each(["lifetime", "frames", "transfer", "worker-data", "error", "close"])(
 	"preserves Worker %s through real Bun eval",
 	async (scenario) => {
 		const driver = fileURLToPath(new URL("./fixtures/permission-worker-driver.ts", import.meta.url));

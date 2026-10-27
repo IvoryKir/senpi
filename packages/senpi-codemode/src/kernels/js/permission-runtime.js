@@ -83,6 +83,10 @@ export async function initializePermissionRuntime(install, workerData) {
 						});
 						this.onerror?.(event);
 						this.dispatchEvent(event);
+					} else if (frame.type === "messageerror") {
+						const event = new MessageEvent("messageerror", { data: frame.error });
+						this.onmessageerror?.(event);
+						this.dispatchEvent(event);
 					} else if (frame.type === "open") {
 						const event = new Event("open");
 						this.onopen?.(event);
