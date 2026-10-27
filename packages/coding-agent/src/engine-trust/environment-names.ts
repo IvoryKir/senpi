@@ -6,7 +6,7 @@
  */
 export type EnvironmentEntries = Readonly<Record<string, string | undefined>>;
 
-export function caseFormsOf(env: EnvironmentEntries, name: string, platform: NodeJS.Platform): string[] {
+function caseFormsOf(env: EnvironmentEntries, name: string, platform: NodeJS.Platform): string[] {
 	if (platform !== "win32") return name in env ? [name] : [];
 	const upper = name.toUpperCase();
 	return Object.keys(env).filter((key) => key.toUpperCase() === upper);
