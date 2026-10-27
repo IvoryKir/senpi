@@ -49,18 +49,27 @@ function legacyMessage(message: ActiveMessageView, layout: "current" | "start"):
 	return { ...(role === undefined ? {} : { role }), content, ...rest };
 }
 
+/** Per content index of one message, the resolved tool name its call kept at the cut. */
+type ResolvedNames = ReadonlyMap<number, string>;
+
 /**
  * The frames that rebuild one streamed block: its start, one delta carrying the whole current prefix, and its
  * end only when the block had already ended at the cut (design section 4). A block the start carried whole
- * (`initial`) needs no frame.
+ * (`initial`) needs no frame. A tool call's start and end carry its resolved name as the live frames do.
  */
-function* blockFrames({ contentIndex, text, phase, block }: ActiveBlockView, usage: unknown): Generator<Frame> {
+function* blockFrames(
+	{ contentIndex, text, phase, block }: ActiveBlockView,
+	usage: unknown,
+	resolved: ResolvedNames,
+): Generator<Frame> {
 	if (phase === undefined || phase === "initial" || block === undefined) return;
 	const ended = phase === "ended";
-	const update = (assistantMessageEvent: Frame): Frame => ({
+	const resolvedToolName = resolved.get(contentIndex);
+	const update = (assistantMessageEvent: Frame, named = false): Frame => ({
 		type: "message_update",
 		...(usage === undefined ? {} : { usage }),
 		assistantMessageEvent,
+		...(named && resolvedToolName !== undefined ? { resolvedToolName } : {}),
 	});
 	switch (block.type) {
 		case "text":
@@ -71,9 +80,9 @@ function* blockFrames({ contentIndex, text, phase, block }: ActiveBlockView, usa
 			return;
 		}
 		case "toolCall": {
-			yield update({ type: "toolcall_start", contentIndex, id: block.id, toolName: block.name });
+			yield update({ type: "toolcall_start", contentIndex, id: block.id, toolName: block.name }, true);
 			if (text.length > 0) yield update({ type: "toolcall_delta", contentIndex, delta: text });
-			if (ended) yield update({ type: "toolcall_end", contentIndex, toolCall: block });
+			if (ended) yield update({ type: "toolcall_end", contentIndex, toolCall: block }, true);
 			return;
 		}
 		default:
@@ -81,12 +90,12 @@ function* blockFrames({ contentIndex, text, phase, block }: ActiveBlockView, usa
 	}
 }
 
-function* messageFrames(message: ActiveMessageView): Generator<Frame> {
+function* messageFrames(message: ActiveMessageView, resolved: ResolvedNames): Generator<Frame> {
 	const start = legacyMessage(message, "start");
 	if (!start) return;
 	yield { type: "message_start", message: start };
 	if (!("role" in start) || start.role !== "assistant") return;
-	for (const block of message.blocks) yield* blockFrames(block, message.fields?.usage);
+	for (const block of message.blocks) yield* blockFrames(block, message.fields?.usage, resolved);
 }
 
 function remainingMs(dialog: CompactDialog, now: number): number {
@@ -99,25 +108,42 @@ async function activeMessage({ lane, root }: LegacyViewSource): Promise<ActiveMe
 	return messages.find((message) => message.messageId === root.activeMessageId);
 }
 
+/** The resolved names the calls component kept at the cut for the blocks of one message, by content index. */
+async function resolvedNames({ lane, root }: LegacyViewSource, messageId: string): Promise<ResolvedNames> {
+	const names = new Map<number, string>();
+	for (const call of (await lane.readCurrentCalls(root)).calls)
+		if (call.owningMessageId === messageId && call.contentIndex !== null && call.resolvedName !== null)
+			names.set(call.contentIndex, call.resolvedName);
+	return names;
+}
+
 /**
  * Today's floor from the frozen view (RULING-25 Q1, Q4): the latest lifecycle, the active message as its start
  * plus prefix deltas, then each still-open broadcast question with its original id and the remaining time at the
- * freeze clock. Every root is read before the first frame leaves, so a failed read delivers nothing at all.
+ * freeze clock. Every root is read before the first frame leaves, so a failed read delivers nothing at all; a read
+ * that failed because the view was cancelled meanwhile (cursor released, lane replaced or retired) is not reported.
  */
-async function* attachFrames(sessionId: string, source: LegacyViewSource, view: LegacyAttachView) {
+async function* attachFrames(
+	sessionId: string,
+	source: LegacyViewSource,
+	view: LegacyAttachView,
+	cancelled: () => boolean,
+) {
 	let components: Awaited<ReturnType<SessionAcceptanceLane["readCurrentComponents"]>>;
 	let message: ActiveMessageView | undefined;
+	let resolved: ResolvedNames = new Map();
 	try {
 		components = await source.lane.readCurrentComponents(source.root);
 		message = await activeMessage(source);
+		if (message) resolved = await resolvedNames(source, message.messageId);
 	} catch (cause) {
-		unavailable(sessionId, cause);
+		if (!cancelled()) unavailable(sessionId, cause);
 		return;
 	}
 	const encode = (frame: Frame) => serializeJsonLine(view.placeholders ? omitNormalInlineMedia(frame) : frame);
 	const tag = (frame: Frame): Frame => ({ ...frame, sessionId });
 	if (isFrame(components.lifecycle)) yield encode(tag(components.lifecycle));
-	if (message) for (const frame of messageFrames(message)) yield encode(tag(frame));
+	if (message) for (const frame of messageFrames(message, resolved)) yield encode(tag(frame));
 	for (const dialog of components.dialogs)
 		if (dialog.audience === "broadcast" && isFrame(dialog.request))
 			yield encode({ ...tag(dialog.request), remainingMs: remainingMs(dialog, view.now) });
@@ -137,10 +163,16 @@ export function legacyAttachView(
 		(current.components.lifecycle === undefined &&
 			current.components.dialogCounts.broadcast === 0 &&
 			source.root.activeMessageId === null);
+	let released = false;
+	const epoch = source?.lane.recoveryEpoch;
+	const cancelled = () => released || source?.lane.retired === true || source?.lane.recoveryEpoch !== epoch;
 	return new GeneratedFramesCursor(
 		empty,
-		() => (source ? attachFrames(sessionId, source, view) : (async function* () {})()),
-		onRelease,
+		() => (source ? attachFrames(sessionId, source, view, cancelled) : (async function* () {})()),
+		() => {
+			released = true;
+			onRelease();
+		},
 	);
 }
 

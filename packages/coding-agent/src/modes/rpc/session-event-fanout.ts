@@ -241,9 +241,13 @@ export class SessionEventFanout {
 		return [...this.connections.keys()].filter((id) => this.connectionSessions.get(id)?.has(sessionId));
 	}
 
-	/** Pending `question` frames a session has asked and nobody answered yet: the lane's hot count, else today's. */
-	pendingQuestionCount(sessionId: string): number {
-		return this.acceptance.get(sessionId)?.openBroadcastDialogs ?? this.replay.pendingQuestionCount(sessionId);
+	/**
+	 * Pending `question` frames a session has asked and nobody answered yet: the lane's hot count, today's count for a
+	 * session without a lane, and undefined (unknown) for a lane whose compact state is unavailable.
+	 */
+	pendingQuestionCount(sessionId: string): number | undefined {
+		const lane = this.acceptance.get(sessionId);
+		return lane ? lane.openBroadcastDialogs : this.replay.pendingQuestionCount(sessionId);
 	}
 
 	/** Deliver one line to the connections attached to a session, never to the rest of the fanout. */
