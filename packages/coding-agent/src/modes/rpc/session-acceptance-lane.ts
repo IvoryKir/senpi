@@ -12,6 +12,7 @@ import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
 import type { FrozenCompactState } from "./compact-state-view.ts";
 import type { CompactContentStoreOptions } from "./compact-content-store.ts";
+import { foldCompactRecord, foldCompactTransition } from "./session-acceptance-compact.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
 interface AcceptedRef {
@@ -158,8 +159,7 @@ export class SessionAcceptanceLane {
 		for (const transition of transitions) {
 			this.sequence += 1;
 			this.transcript.apply(transition);
-			if (transition.kind === "append" && this.transcript.available) this.settled.append(transition);
-			this.current.transcript(transition, this.settled, this.nonce);
+			foldCompactTransition(this.compact(), transition, this.transcript.available, this.nonce);
 		}
 	}
 
@@ -168,24 +168,28 @@ export class SessionAcceptanceLane {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
 		this.acceptCorrelation(record);
-		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
-		const turnId = this.turnId;
+		// The calls component folds first, at the sequence and turn this record would take: an ignored call-only record
+		// changes no component, takes no sequence, mints no turn and publishes no root (RULING-13 Q9), so the lane commits
+		// nothing before it decides.
+		const mintsTurn = type === "turn_start" || (this.turnId === null && turnScoped(type, record));
+		const turnId = mintsTurn ? randomUUID() : this.turnId;
 		const next = this.sequence + 1;
-		if (canonical) this.current.fold(canonical, next, turnId);
-		if (COMPONENT_RECORDS.has(type)) this.current.foldComponent(record, next);
 		const call = CALL_RECORDS.has(type) ? this.current.foldCall(record, next, turnId) : undefined;
-		// An ignored call-only record changes no component, takes no sequence and publishes no root (RULING-13 Q9).
 		if (call && !call.changed && CALL_ONLY_RECORDS.has(type)) return undefined;
+		this.turnId = turnId;
 		this.sequence = next;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
-		if (type === "message_end") this.settled.end(record, carrier, this.sequence, turnId, call?.projection);
-		if (type === "transcript_write_failed") this.settled.fail(carrier, String(field(record, "errorMessage")));
-		// A failed write, or a terminal whose entry was committed before it, settles its compact persistence too.
-		const persisted = type === "message_end" && carrier?.durableEntryId ? "appended" : undefined;
-		const status = type === "transcript_write_failed" ? "failed" : persisted;
-		if (status && this.settled.valid(carrier)) this.current.status(carrier.messageId, status);
+		foldCompactRecord(this.compact(), {
+			record,
+			type,
+			carrier,
+			canonical,
+			sequence: this.sequence,
+			turnId,
+			call: call?.projection,
+		});
 		if (type === "message_end" && this.activeMessageId === messageId) this.activeMessageId = null;
 		return {
 			sessionEpoch: this.epoch,
@@ -257,6 +261,8 @@ export class SessionAcceptanceLane {
 	storageStatus() {
 		return this.settled.storageStatus();
 	}
+
+	private compact = () => ({ settled: this.settled, current: this.current });
 
 	async idle(): Promise<void> {
 		await this.cleanup;

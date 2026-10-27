@@ -162,6 +162,55 @@ it("Q9 ignored execution records take no sequence and publish no calls root", as
 	}
 });
 
+it("Q9 a folded execution record takes the lane sequence the cut and the calls root publish", async () => {
+	const rig = await callsRig();
+	try {
+		rig.record({ type: "turn_start" });
+		const started = rig.record({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
+		const executing = await rig.calls();
+		expect(started?.sequence).toBe(executing.root.sequence);
+		expect(executing.sequence, "the calls root moved at the record's own sequence").toBe(executing.root.sequence);
+		expect(executing.calls[0]).toMatchObject({
+			runtimeItemKey: `${executing.root.sessionEpoch}:${started?.sequence}.0`,
+			startSequence: started?.sequence,
+		});
+		const ghost = { type: "tool_execution_end", toolCallId: "ghost", toolName: "bash", result: "x", isError: false };
+		expect(rig.record(ghost)).toBeUndefined();
+		const ended = rig.record({ ...ghost, toolCallId: "c1" });
+		const completed = await rig.calls();
+		expect(ended?.sequence, "the ignored end left no gap").toBe((started?.sequence ?? 0) + 1);
+		expect(completed.root.sequence).toBe(ended?.sequence);
+		expect(completed.sequence).toBe(ended?.sequence);
+		expect(completed.counters.ignored).toEqual({ unknown: 1, late: 0 });
+		rig.lane.release(executing.root);
+		rig.lane.release(completed.root);
+	} finally {
+		await rig.close();
+	}
+});
+
+it("Q9 an ignored execution end outside a turn mints no turn and leaves the lane untouched", async () => {
+	const rig = await callsRig();
+	try {
+		const before = rig.lane.freeze();
+		const ghost = { type: "tool_execution_end", toolCallId: "ghost", toolName: "t", result: "x", isError: false };
+		expect(rig.lane.accept(ghost, undefined)).toBeUndefined();
+		const after = await rig.calls();
+		expect(after.root.turnId).toBeNull();
+		expect(after.root.sequence).toBe(before.sequence);
+		expect(after.root.correlation).toBe(before.correlation);
+		expect(after.root.activeMessageId).toBeNull();
+		expect(after.calls).toEqual([]);
+		expect(after.counters.ignored).toEqual({ unknown: 1, late: 0 });
+		const next = rig.record({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
+		expect(next?.sequence).toBe(before.sequence + 1);
+		rig.lane.release(before);
+		rig.lane.release(after.root);
+	} finally {
+		await rig.close();
+	}
+});
+
 it("C3.3 a duplicate execution end is late, changes nothing and takes no sequence", async () => {
 	const rig = await callsRig();
 	try {

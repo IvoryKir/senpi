@@ -23,13 +23,19 @@ export const SESSION_WORKER_LIMITS = {
 	controlMs: 5_000,
 } as const;
 
+/** The bytes a transition carries: its entry, plus the owned message copies of the flow it journals (senpi#4460). */
+function transitionBytes(transition: TranscriptTransition): number {
+	const entry = transition.kind === "append" ? Buffer.byteLength(transition.entry ?? "") : 0;
+	const flow = transition.kind === "append" || transition.kind === "leaf" ? transition.flow : undefined;
+	return entry + (flow ? Buffer.byteLength(JSON.stringify(flow)) : 0);
+}
+
 /** A transition over the frame limit leaves its epoch's transcript unavailable; S12 transfers it in fragments. */
 export function withinFrameLimit(transitions: readonly TranscriptTransition[]): TranscriptTransition[] {
 	// Reserve fixed metadata space; content is charged in the same raw UTF-8 bytes as the accepted tail.
 	const entryOverhead = 1024;
 	return transitions.map((transition) =>
-		(transition.kind === "append" ? Buffer.byteLength(transition.entry ?? "") : 0) + entryOverhead >
-		SESSION_WORKER_LIMITS.outputBytes
+		transitionBytes(transition) + entryOverhead > SESSION_WORKER_LIMITS.outputBytes
 			? { kind: "unavailable", reason: "transition_over_worker_frame_limit" }
 			: transition,
 	);
