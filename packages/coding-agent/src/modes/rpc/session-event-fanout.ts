@@ -1,7 +1,8 @@
+import { compactUpdatesEnabled } from "../../core/engine-socket-flag.ts";
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
 import { LegacyReplayStore } from "./legacy-replay-store.ts";
 import type { FrozenAcceptedRoot, SessionAcceptanceLane } from "./session-acceptance-lane.ts";
-import { SocketEventSinkActor } from "./socket-event-fanout.ts";
+import { type ShedMode, SocketEventSinkActor } from "./socket-event-fanout.ts";
 import { EVENT_RESYNC_CAPABILITY } from "./socket-peer-recovery.ts";
 
 export type RawWriter = (chunk: string) => void;
@@ -42,6 +43,8 @@ export class SessionEventFanout {
 	readonly acceptance = new Map<string, SessionAcceptanceLane>();
 	/** The retained legacy replay source every late peer's baseline is frozen from (S07b replaces it). */
 	readonly replay = new LegacyReplayStore();
+	/** Today's shed path with the compact-updates flag off; the cut frozen at the shed with it on. */
+	private readonly shedMode: ShedMode = compactUpdatesEnabled() ? "capture" : "drop";
 	private readonly connections = new Map<string, RegisteredConnection>();
 	private readonly connectionCapabilities = new Map<string, Set<string>>();
 	/** Per connection, each attached session with the ordinal of the attach that holds it. */
@@ -71,6 +74,7 @@ export class SessionEventFanout {
 			},
 			options.maxQueueBytes,
 			options.stallMs,
+			this.shedMode,
 		);
 		this.connections.set(id, { connection, actor });
 		this.connectionCapabilities.set(id, new Set());
@@ -125,17 +129,19 @@ export class SessionEventFanout {
 		this.connectionCapabilities.set(id, new Set(capabilities));
 		this.registeredCapabilityConnections.add(id);
 		if (capabilities.includes(EVENT_RESYNC_CAPABILITY)) {
-			// Frozen at the shed, before the actor awaits its drain (R3.C1.5); released when the recovery ends.
-			registered.actor.enableRecovery((reason) => {
-				const attached = [...(this.connectionSessions.get(id)?.keys() ?? [])];
+			// Roots pinned at the shed, before the actor awaits its drain (R3.C1.5); released when the recovery ends.
+			registered.actor.enableRecovery((reason, carried = []) => {
+				const attached = this.held(id);
 				const pinned = this.pin(attached);
-				return this.replay.freezeResync({
-					sessions: attached,
+				const view = {
 					reason,
 					placeholders: this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY),
-					closedNow: (sessionId) => !this.connectionSessions.get(id)?.has(sessionId),
+					closedNow: (sessionId: string) => !this.holds(id, sessionId),
 					onRelease: () => this.unpin(pinned),
-				});
+				};
+				return this.shedMode === "capture"
+					? this.replay.freezeResync([...new Set([...carried, ...attached])], view)
+					: this.replay.deferResync(attached, () => this.held(id), view);
 			});
 		} else registered.actor.disableRecovery();
 	}
@@ -175,6 +181,13 @@ export class SessionEventFanout {
 			: [undefined];
 	}
 
+	/** For a record that reaches `id` because it holds `sessionId`: whether it still does; undefined for every other audience. */
+	attachmentOf(id: string, sessionId: string, isTargeted: boolean, recordType: unknown): (() => boolean) | undefined {
+		if (isTargeted || (typeof recordType === "string" && BROADCAST_LIFECYCLE_RECORDS.has(recordType)))
+			return undefined;
+		return this.holds(id, sessionId) ? () => this.holds(id, sessionId) : undefined;
+	}
+
 	get(id: string): RegisteredConnection | undefined {
 		return this.connections.get(id);
 	}
@@ -208,7 +221,8 @@ export class SessionEventFanout {
 	/** Deliver one line to the connections attached to a session, never to the rest of the fanout. */
 	deliverToSession(sessionId: string, line: string): void {
 		for (const [id, { actor }] of this.connections)
-			if (this.connectionSessions.get(id)?.has(sessionId)) actor.enqueue(line);
+			if (this.holds(id, sessionId))
+				actor.enqueue(line, undefined, undefined, undefined, false, () => this.holds(id, sessionId));
 	}
 
 	rememberSnapshot(sessionId: string, value: Record<string, unknown>, line: string, placeholderLine?: string): void {
@@ -219,6 +233,14 @@ export class SessionEventFanout {
 		this.acceptance.get(sessionId)?.retire("close");
 		this.acceptance.delete(sessionId);
 		this.replay.forget(sessionId);
+	}
+
+	private holds(id: string, sessionId: string): boolean {
+		return this.connectionSessions.get(id)?.has(sessionId) ?? false;
+	}
+
+	private held(id: string): readonly string[] {
+		return [...(this.connectionSessions.get(id)?.keys() ?? [])];
 	}
 
 	private pin(sessionIds: readonly string[]): readonly PinnedRoot[] {

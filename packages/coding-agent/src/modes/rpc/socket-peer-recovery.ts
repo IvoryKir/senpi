@@ -3,8 +3,11 @@ import type { LegacyViewCursor } from "./legacy-view-cursor.ts";
 
 export const EVENT_RESYNC_CAPABILITY = "event_resync";
 export type ResyncReason = "overflow" | "stall";
-/** A shed's recovery cut, frozen at the shed: read by the peer's barrier after the gap, released on every end. */
-export type ResyncCut = LegacyViewCursor;
+/**
+ * A shed's recovery cut: read by the peer's barrier after the gap, released on every end. `sessions` are the ones
+ * it reports, carried into a re-cut so a session detached in between is still reported closed.
+ */
+export type ResyncCut = LegacyViewCursor & { readonly sessions: readonly string[] };
 export type RpcSessionResyncRequired = {
 	readonly type: "resync_required";
 	readonly sessionId: string;

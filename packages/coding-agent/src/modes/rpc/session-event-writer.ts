@@ -488,7 +488,7 @@ export class SessionEventWriter {
 			const registered = target === undefined ? undefined : this.fanout.get(target);
 			const wants =
 				placeholderLine !== undefined && this.fanout.connectionHas(target, MEDIA_PLACEHOLDERS_CAPABILITY);
-			if (registered) {
+			if (registered && target !== undefined) {
 				const keyed = compactDelta(tagged) !== undefined && tagged.message !== null;
 				registered.actor.enqueue(
 					wants ? placeholderLine : line,
@@ -496,6 +496,9 @@ export class SessionEventWriter {
 					undefined,
 					keyed ? serializeJsonLine(demoteToDeltaOnly(tagged)) : undefined,
 					isCorrelatedReply(tagged),
+					mirrors.includes(target)
+						? undefined
+						: this.fanout.attachmentOf(target, sessionId, isTargeted, record.type),
 				);
 			} else this.appendSessionRecord(sessionId, wants ? (redacted as RpcRecord) : tagged, target);
 		}
@@ -549,7 +552,8 @@ export class SessionEventWriter {
 		const line = serializeJsonLine({ type: "loaded_surfaces_changed", sessionId });
 		for (const id of this.fanout.attachedConnections(sessionId)) {
 			if (!this.surfaceDedupe.announce(id, sessionId, previous, digest)) continue;
-			this.fanout.get(id)?.actor.enqueue(line);
+			const held = this.fanout.attachmentOf(id, sessionId, false, "loaded_surfaces_changed");
+			this.fanout.get(id)?.actor.enqueue(line, undefined, undefined, undefined, false, held);
 		}
 		this.requestFlush();
 	}

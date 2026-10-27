@@ -9,32 +9,44 @@ export interface LegacyViewCursor {
 	release(): void;
 }
 
-/** A cursor over `count` frames, each derived on demand from a frozen source the owner releases once. */
+/** The frames of one view: how many, and each one derived on demand from the frozen source. */
+export type FrozenFrames = { readonly count: number; readonly frame: (index: number) => string };
+
+/**
+ * A cursor over frames the owner releases once. `source` runs on the first read (`next` or `empty`): an owner that
+ * fixes the view at the freeze passes the frames it already built, one that fixes it at the read passes a thunk.
+ */
 export class FrozenFramesCursor implements LegacyViewCursor {
 	private index = 0;
 	private released = false;
-	private readonly count: number;
-	private readonly frame: (index: number) => string;
+	private frames: FrozenFrames | undefined;
+	private readonly source: () => FrozenFrames;
 	private readonly onRelease: () => void;
 
-	constructor(count: number, frame: (index: number) => string, onRelease: () => void) {
-		this.count = count;
-		this.frame = frame;
+	constructor(source: () => FrozenFrames, onRelease: () => void) {
+		this.source = source;
 		this.onRelease = onRelease;
 	}
 
 	get empty(): boolean {
-		return this.count === 0;
+		return this.read().count === 0;
 	}
 
 	async next(): Promise<string | undefined> {
-		if (this.released || this.index >= this.count) return undefined;
-		return this.frame(this.index++);
+		if (this.released) return undefined;
+		const frames = this.read();
+		if (this.index >= frames.count) return undefined;
+		return frames.frame(this.index++);
 	}
 
 	release(): void {
 		if (this.released) return;
 		this.released = true;
 		this.onRelease();
+	}
+
+	private read(): FrozenFrames {
+		this.frames ??= this.source();
+		return this.frames;
 	}
 }

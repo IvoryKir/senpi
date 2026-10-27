@@ -2,34 +2,23 @@ import type { LegacyViewCursor } from "./legacy-view-cursor.ts";
 import { BaselineBarrier } from "./socket-baseline-barrier.ts";
 import { type DrainStallPeer, waitForDrainOrStall } from "./socket-drain-stall.ts";
 import { SocketEventQueueOverflowError } from "./socket-event-queue-errors.ts";
-import { type ResyncCut, type ResyncReason, SocketPeerRecovery } from "./socket-peer-recovery.ts";
+import {
+	type AttachEntry,
+	isBarrier,
+	type QueueEntry,
+	type RecoveryEntry,
+	SocketEventQueue,
+} from "./socket-event-queue.ts";
+import { type ResyncReason, SocketPeerRecovery } from "./socket-peer-recovery.ts";
+import { type ResyncSnapshot, type ShedMode, SocketPeerShed } from "./socket-peer-shed.ts";
 
 export { SocketEventQueueOverflowError, SocketEventQueueStallError } from "./socket-event-queue-errors.ts";
+export type { ResyncSnapshot, ShedMode } from "./socket-peer-shed.ts";
 
 type SocketSink = {
 	writeRaw(chunk: string): void;
 	waitForBackpressure(): Promise<void>;
 };
-
-type QueueEntry = {
-	line: string;
-	bytes: number;
-	key?: string;
-	/**
-	 * The record with its cumulative snapshot fields blanked (delta kept). When a
-	 * later record with the same key supersedes this one, the entry is rewritten to
-	 * this line instead of being replaced, so a stalled reader never loses a delta.
-	 */
-	demotedLine?: string;
-	onWritten?: () => void;
-	reply: boolean;
-};
-
-/** A baseline in FIFO position: an attach's frozen view, or a shed's gap plus its recovery cut. */
-type BarrierEntry = { readonly barrier: BaselineBarrier; readonly recovery: boolean };
-type QueueItem = QueueEntry | BarrierEntry;
-
-const isBarrier = (item: QueueItem): item is BarrierEntry => "barrier" in item;
 
 // A handful of image tool results is several MiB of base64 each; four of them
 // blew the previous 4 MiB cap in one burst on a healthy reader. Overflow is a
@@ -57,15 +46,17 @@ export const DEFAULT_STALL_MS = 30_000;
 
 /** Independent FIFO actor for one socket. It never shares a drain promise with another sink. */
 export class SocketEventSinkActor {
-	private readonly queue: QueueItem[] = [];
-	private queuedBytes = 0;
+	private readonly queue = new SocketEventQueue();
 	private draining?: Promise<void>;
 	private closed = false;
 	private failure?: unknown;
 	private recovery?: SocketPeerRecovery;
 	private recoveryEnabled = false;
-	private snapshot?: (reason: ResyncReason) => ResyncCut;
+	private snapshot?: ResyncSnapshot;
+	private readonly shed: SocketPeerShed;
 	private attempt?: BaselineBarrier;
+	/** The attach frame in flight, charged against the budget until the sink accepted it. */
+	private frameBytes = 0;
 	private readonly stopped = new AbortController();
 
 	private readonly sink: SocketSink;
@@ -78,25 +69,27 @@ export class SocketEventSinkActor {
 		onFailure: (cause: unknown) => void,
 		maxQueueBytes = DEFAULT_QUEUE_BYTES,
 		stallMs = DEFAULT_STALL_MS,
+		shedMode: ShedMode = "drop",
 	) {
 		this.sink = sink;
 		this.onFailure = onFailure;
 		this.maxQueueBytes = maxQueueBytes;
+		this.shed = new SocketPeerShed(this.queue, shedMode);
 		this.stallPeer = {
 			sink,
 			stallMs,
 			stopped: this.stopped.signal,
-			queuedBytes: () => this.queuedBytes,
+			queuedBytes: () => this.queue.bytes,
 			shedAndPing: () => {
 				if (!this.recovery || !this.recoveryEnabled) return false;
-				this.shed("stall");
+				this.cutOnce("stall");
 				this.recovery.ping();
 				return true;
 			},
 		};
 	}
 
-	enableRecovery(snapshot: (reason: ResyncReason) => ResyncCut): void {
+	enableRecovery(snapshot: ResyncSnapshot): void {
 		this.recoveryEnabled = true;
 		this.snapshot = snapshot;
 		this.recovery ??= new SocketPeerRecovery((line) => this.sink.writeRaw(line));
@@ -111,70 +104,57 @@ export class SocketEventSinkActor {
 	/**
 	 * A newly attached session's baseline, frozen by the caller: it takes this FIFO position, so every record
 	 * enqueued after it follows it, and a stale attempt (`live` false) writes nothing. Never holds credit. A view
-	 * with no frame installs nothing, so the next record goes in flight exactly as before the attach.
+	 * with no frame installs nothing, so the next record goes in flight exactly as before the attach; while a
+	 * recovery drops records the view is dropped too, covered by the cut read at the delivery.
 	 */
 	installBaseline(cursor: LegacyViewCursor, live: () => boolean): void {
-		if (this.closed || cursor.empty) {
+		if (this.closed || cursor.empty || this.shed.dropsRecords) {
 			cursor.release();
 			return;
 		}
-		this.queue.push({ barrier: new BaselineBarrier(cursor, live), recovery: false });
+		this.queue.push({ kind: "attach", barrier: new BaselineBarrier(cursor, live) });
 		void this.drain();
 	}
 
-	enqueue(line: string, key?: string, onWritten?: () => void, demotedLine?: string, reply = false): void {
+	/** `held`, for a record that reaches this peer because it holds a session: whether it still does. */
+	enqueue(
+		line: string,
+		key?: string,
+		onWritten?: () => void,
+		demotedLine?: string,
+		reply = false,
+		held?: () => boolean,
+	): void {
 		if (this.closed) return;
 		const bytes = Buffer.byteLength(line);
-		if (key !== undefined) {
-			const existing = this.queue.find((entry) => !isBarrier(entry) && entry.key === key);
-			if (existing && !isBarrier(existing)) {
-				// Lossless supersession. The old behaviour replaced the queued line
-				// outright, which threw away every delta a stalled reader had not yet
-				// received (a desktop client assembles text from deltas). Keep the
-				// superseded record - demoted to its delta-only form when the producer
-				// supplied one - and let only the newest record carry the snapshot.
-				if (existing.demotedLine !== undefined) {
-					this.queuedBytes -= existing.bytes;
-					existing.line = existing.demotedLine;
-					existing.bytes = Buffer.byteLength(existing.line);
-					this.queuedBytes += existing.bytes;
-					existing.demotedLine = undefined;
-				}
-				existing.key = undefined;
-			}
+		if (this.shed.dropsRecords) {
+			if (reply) this.admitReply({ line, bytes, onWritten, reply });
+			else onWritten?.();
+			return;
 		}
-		if (this.queuedBytes + bytes > this.maxQueueBytes) {
+		if (key !== undefined) this.queue.supersede(key);
+		if (!this.fits(bytes)) {
 			if (this.recovery && this.recoveryEnabled) {
-				// The cut frozen now covers this record; only a reply still needs its own place behind it.
-				this.cut("overflow");
-				if (reply && this.queuedBytes + bytes <= this.maxQueueBytes) {
-					this.queue.push({ line, bytes, onWritten, reply });
-					this.queuedBytes += bytes;
-				} else {
-					if (reply) this.recovery.loseReply();
-					onWritten?.();
-				}
+				if (this.shed.isPending) this.shed.supersede();
+				else this.cut("overflow");
+				// The cut covers this record; only a reply still needs its own place.
+				if (reply) this.admitReply({ line, bytes, onWritten, reply });
+				else onWritten?.();
 				void this.drain();
 				return;
 			}
-			const overflow = new SocketEventQueueOverflowError(
-				this.queuedBytes,
-				bytes,
-				this.maxQueueBytes,
-				line.slice(0, 120),
-			);
-			this.closed = true;
-			this.dropQueue();
-			try {
-				this.sink.writeRaw(`${JSON.stringify({ type: "overflow", error: "overflow, resync required" })}\n`);
-			} catch (cause) {
-				this.onFailure(cause);
-			}
-			this.onFailure(overflow);
+			this.failOverflow(bytes, line);
 			return;
 		}
-		this.queue.push({ line, bytes, key, demotedLine, onWritten, reply });
-		this.queuedBytes += bytes;
+		this.queue.push({
+			line,
+			bytes,
+			key,
+			demotedLine,
+			onWritten,
+			reply,
+			held: this.shed.isPending ? held : undefined,
+		});
 		void this.drain();
 	}
 
@@ -201,38 +181,55 @@ export class SocketEventSinkActor {
 		this.stopped.abort();
 	}
 
+	private fits(bytes: number): boolean {
+		return this.queue.bytes + this.frameBytes + bytes <= this.maxQueueBytes;
+	}
+
+	private admitReply(entry: QueueEntry): void {
+		if (!this.fits(entry.bytes)) {
+			this.recovery?.loseReply();
+			entry.onWritten?.();
+			return;
+		}
+		this.shed.admitReply(entry);
+		void this.drain();
+	}
+
+	/** A plain peer's overflow: the notice, then fail closed so the client resyncs. */
+	private failOverflow(bytes: number, line: string): void {
+		const overflow = new SocketEventQueueOverflowError(
+			this.queue.bytes + this.frameBytes,
+			bytes,
+			this.maxQueueBytes,
+			line.slice(0, 120),
+		);
+		this.closed = true;
+		this.dropQueue();
+		try {
+			this.sink.writeRaw(`${JSON.stringify({ type: "overflow", error: "overflow, resync required" })}\n`);
+		} catch (cause) {
+			this.onFailure(cause);
+		}
+		this.onFailure(overflow);
+	}
+
 	/** Ends every queued baseline and the one in flight, then empties the queue. */
 	private dropQueue(): void {
-		for (const item of this.queue) if (isBarrier(item)) item.barrier.cancel();
+		this.queue.clear();
 		this.attempt?.cancel();
-		this.queue.length = 0;
-		this.queuedBytes = 0;
+		this.shed.clear();
 	}
 
 	/** The stall deadline's shed: one cut per pending recovery, never a re-cut while the peer stays idle. */
-	private shed(reason: ResyncReason): void {
+	private cutOnce(reason: ResyncReason): void {
 		if (!this.recovery?.pending) this.cut(reason);
 	}
 
-	/**
-	 * Freeze the cut C now: keep the replies, release every record and baseline the cut covers, and queue the
-	 * recovery barrier (gap, then C's frames) ahead of the post-C suffix. While a cut is already pending this
-	 * supersedes it: the predecessor is released and its captured suffix, which overflowed, is covered by C.
-	 */
 	private cut(reason: ResyncReason): void {
 		if (!this.recovery || !this.snapshot) return;
-		const replies: QueueEntry[] = [];
-		for (const item of this.queue) {
-			if (isBarrier(item)) item.barrier.cancel();
-			else if (item.reply) replies.push(item);
-			else item.onWritten?.();
-		}
 		this.attempt?.cancel();
-		this.queue.length = 0;
-		for (const reply of replies) this.queue.push(reply);
-		this.queuedBytes = replies.reduce((bytes, entry) => bytes + entry.bytes, 0);
 		this.recovery.shed(reason);
-		this.queue.push({ barrier: new BaselineBarrier(this.snapshot(reason), () => !this.closed), recovery: true });
+		this.shed.cut(reason, this.snapshot, () => !this.closed);
 	}
 
 	private async write(line: string): Promise<void> {
@@ -240,21 +237,50 @@ export class SocketEventSinkActor {
 		await waitForDrainOrStall(this.stallPeer, Buffer.byteLength(line));
 	}
 
-	/** A recovery barrier first waits for the peer to drain again, then opens with the gap; both kinds then stream C. */
-	private async deliver(entry: BarrierEntry): Promise<void> {
-		this.attempt = entry.barrier;
+	/** An attach frame is charged like the replay line it replaces: one that does not fit sheds, or overflows a plain peer. */
+	private async writeFrame(line: string): Promise<void> {
+		const bytes = Buffer.byteLength(line);
+		if (!this.fits(bytes)) {
+			if (this.recovery && this.recoveryEnabled) this.cutOnce("overflow");
+			else this.failOverflow(bytes, line);
+			return;
+		}
+		this.frameBytes = bytes;
 		try {
-			if (entry.recovery) {
-				await waitForDrainOrStall(this.stallPeer, 0);
-				if (this.closed || !entry.barrier.active || !this.recovery) return;
-				const gap = this.recovery.takeGap();
-				if (!this.recoveryEnabled) this.recovery = undefined;
-				await this.write(gap);
-			}
-			await entry.barrier.deliver((line) => this.write(line));
+			await this.write(line);
 		} finally {
+			this.frameBytes = 0;
+		}
+	}
+
+	private async deliver(entry: AttachEntry | RecoveryEntry): Promise<void> {
+		if (entry.kind === "attach") {
+			await this.stream(entry.barrier, (line) => this.writeFrame(line));
+			return;
+		}
+		// A recovery first waits for the peer to drain again; then the gap opens the frames.
+		await waitForDrainOrStall(this.stallPeer, 0);
+		if (this.closed || !this.recovery) {
 			entry.barrier.end();
-			if (this.attempt === entry.barrier) this.attempt = undefined;
+			return;
+		}
+		const barrier = this.shed.take(entry, this.snapshot, () => !this.closed);
+		const gap = this.recovery.takeGap();
+		if (!this.recoveryEnabled) this.recovery = undefined;
+		await this.stream(barrier, (line) => this.write(line), gap);
+	}
+
+	private async stream(
+		barrier: BaselineBarrier,
+		write: (line: string) => Promise<void>,
+		head?: string,
+	): Promise<void> {
+		this.attempt = barrier;
+		try {
+			await barrier.deliver(write, head);
+		} finally {
+			barrier.end();
+			if (this.attempt === barrier) this.attempt = undefined;
 		}
 	}
 
@@ -263,15 +289,18 @@ export class SocketEventSinkActor {
 		this.draining = (async () => {
 			try {
 				while (!this.closed && this.queue.length > 0) {
-					const entry = this.queue.shift();
-					if (entry === undefined) break;
-					if (isBarrier(entry)) {
-						await this.deliver(entry);
+					const item = this.queue.shift();
+					if (item === undefined) break;
+					if (isBarrier(item)) {
+						await this.deliver(item);
 						continue;
 					}
-					this.queuedBytes -= entry.bytes;
-					await this.write(entry.line);
-					entry.onWritten?.();
+					if (item.held !== undefined && !item.held()) {
+						item.onWritten?.();
+						continue;
+					}
+					await this.write(item.line);
+					item.onWritten?.();
 				}
 			} catch (cause) {
 				this.failure = cause;

@@ -32,13 +32,18 @@ export class BaselineBarrier {
 		this.cursor.release();
 	}
 
-	/** Writes the frames in order through `write`, which resolves once the sink accepted the line. */
-	async deliver(write: (line: string) => Promise<void>): Promise<void> {
+	/**
+	 * Writes `head` (a recovery's gap line) once the cursor has fixed its view, then the frames in order; `write`
+	 * resolves once the sink accepted the line.
+	 */
+	async deliver(write: (line: string) => Promise<void>, head?: string): Promise<void> {
 		try {
-			while (this.active) {
-				const line = await this.cursor.next();
-				if (line === undefined || !this.active) return;
+			if (!this.active) return;
+			let line = await this.cursor.next();
+			if (head !== undefined && this.active) await write(head);
+			while (line !== undefined && this.active) {
 				await write(line);
+				line = await this.cursor.next();
 			}
 		} finally {
 			this.end();

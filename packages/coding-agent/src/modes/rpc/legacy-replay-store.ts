@@ -1,7 +1,7 @@
 import { serializeJsonLine } from "./jsonl.ts";
-import { FrozenFramesCursor, type LegacyViewCursor } from "./legacy-view-cursor.ts";
+import { type FrozenFrames, FrozenFramesCursor, type LegacyViewCursor } from "./legacy-view-cursor.ts";
 import { carriesMedia, omitNormalInlineMedia } from "./media-placeholders.ts";
-import type { ResyncReason, RpcSessionResyncRequired } from "./socket-peer-recovery.ts";
+import type { ResyncCut, ResyncReason, RpcSessionResyncRequired } from "./socket-peer-recovery.ts";
 
 /**
  * A replayable snapshot line.
@@ -39,12 +39,41 @@ export interface FrozenAttachView {
 }
 
 export interface FrozenResyncView {
-	readonly sessions: readonly string[];
 	readonly reason: ResyncReason;
 	readonly placeholders: boolean;
-	/** Read when the frame is written: whether the peer still holds the session then (`closed` otherwise). */
+	/** Read when the cut is read: whether the peer still holds the session then (`closed` otherwise). */
 	readonly closedNow: (sessionId: string) => boolean;
 	readonly onRelease: () => void;
+}
+
+/** One session's line of a resync cut; a session without a record resumes nothing (`message: null`). */
+type ResyncEntry = {
+	readonly sessionId: string;
+	readonly record: SnapshotRecord | undefined;
+	readonly closed: boolean;
+};
+
+function resyncFrame(entry: ResyncEntry, view: FrozenResyncView): string {
+	// The producer may mutate its partial object after emission. The serialized
+	// record, not that object, fixes the recovery cut before later deltas enqueue.
+	const frozen: unknown = entry.record === undefined ? undefined : JSON.parse(entry.record.line);
+	const resync: RpcSessionResyncRequired = {
+		type: "resync_required",
+		sessionId: entry.sessionId,
+		reason: view.reason,
+		message: typeof frozen === "object" && frozen !== null && "message" in frozen ? frozen.message : null,
+		...(entry.closed ? { closed: true as const } : {}),
+	};
+	return serializeJsonLine(view.placeholders ? omitNormalInlineMedia(resync) : resync);
+}
+
+class ResyncCursor extends FrozenFramesCursor implements ResyncCut {
+	readonly sessions: readonly string[];
+
+	constructor(sessions: readonly string[], source: () => FrozenFrames, onRelease: () => void) {
+		super(source, onRelease);
+		this.sessions = sessions;
+	}
 }
 
 /**
@@ -122,49 +151,77 @@ export class LegacyReplayStore {
 			}),
 		);
 		const variant = (record: SnapshotRecord) => (view.placeholders ? snapshotPlaceholderLine(record) : record.line);
-		return this.open(
-			head + length + questions.length,
-			(index) => {
+		const frames: FrozenFrames = {
+			count: head + length + questions.length,
+			frame: (index) => {
 				if (lifecycle !== undefined && index === 0) return variant(lifecycle);
 				const at = index - head;
 				if (at < length) return variant(records[at]);
 				return questions[at - length];
 			},
-			view.onRelease,
+		};
+		return new FrozenFramesCursor(() => frames, this.closing(view.onRelease));
+	}
+
+	/**
+	 * A shed's cut frozen at the shed (the compact-updates path): per session the latest retained record that carries
+	 * a message, read with `closed` as of the read; a session the peer no longer holds resumes nothing.
+	 */
+	freezeResync(sessions: readonly string[], view: FrozenResyncView): ResyncCut {
+		const latest = sessions.map((sessionId) => ({ sessionId, record: this.latestMessage(sessionId) }));
+		return this.openResync(
+			sessions,
+			() =>
+				latest.map(({ sessionId, record }) => {
+					const closed = view.closedNow(sessionId);
+					return { sessionId, closed, record: closed ? undefined : record };
+				}),
+			view,
 		);
 	}
 
-	/** A shed's recovery cut, frozen now: per attached session, the latest retained record that carries a message. */
-	freezeResync(view: FrozenResyncView): LegacyViewCursor {
-		const latest = view.sessions.map((sessionId) => ({
-			sessionId,
-			record: this.sessionSnapshots.get(sessionId)?.findLast((record) => record.hasMessage),
-		}));
-		return this.open(
-			latest.length,
-			(index) => {
-				const { sessionId, record } = latest[index];
-				// The producer may mutate its partial object after emission. The serialized
-				// record, not that object, fixes the recovery cut before later deltas enqueue.
-				const frozen: unknown = record === undefined ? undefined : JSON.parse(record.line);
-				const resync: RpcSessionResyncRequired = {
-					type: "resync_required",
+	/**
+	 * Today's drain-time cut (the compact-updates flag off), read when the gap is delivered: the sessions held at
+	 * the shed and those held then, each with its latest retained record at that moment.
+	 */
+	deferResync(sessions: readonly string[], heldNow: () => readonly string[], view: FrozenResyncView): ResyncCut {
+		return this.openResync(
+			sessions,
+			() =>
+				[...new Set([...sessions, ...heldNow()])].map((sessionId) => ({
 					sessionId,
-					reason: view.reason,
-					message: typeof frozen === "object" && frozen !== null && "message" in frozen ? frozen.message : null,
-					...(view.closedNow(sessionId) ? { closed: true as const } : {}),
-				};
-				return serializeJsonLine(view.placeholders ? omitNormalInlineMedia(resync) : resync);
-			},
-			view.onRelease,
+					closed: view.closedNow(sessionId),
+					record: this.latestMessage(sessionId),
+				})),
+			view,
 		);
 	}
 
-	private open(count: number, frame: (index: number) => string, onRelease: () => void): LegacyViewCursor {
+	private latestMessage(sessionId: string): SnapshotRecord | undefined {
+		return this.sessionSnapshots.get(sessionId)?.findLast((record) => record.hasMessage);
+	}
+
+	private openResync(
+		sessions: readonly string[],
+		entries: () => readonly ResyncEntry[],
+		view: FrozenResyncView,
+	): ResyncCut {
+		return new ResyncCursor(
+			sessions,
+			() => {
+				const frozen = entries();
+				return { count: frozen.length, frame: (index) => resyncFrame(frozen[index], view) };
+			},
+			this.closing(view.onRelease),
+		);
+	}
+
+	/** Counts the view open until its release runs once. */
+	private closing(onRelease: () => void): () => void {
 		this.cursors += 1;
-		return new FrozenFramesCursor(count, frame, () => {
+		return () => {
 			this.cursors -= 1;
 			onRelease();
-		});
+		};
 	}
 }

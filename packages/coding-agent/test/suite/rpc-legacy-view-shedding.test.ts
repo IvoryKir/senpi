@@ -1,11 +1,15 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionAcceptanceLane } from "../../src/modes/rpc/session-acceptance-lane.ts";
 import { SessionEventWriter } from "../../src/modes/rpc/session-event-writer.ts";
 import { EVENT_RESYNC_CAPABILITY } from "../../src/modes/rpc/socket-peer-recovery.ts";
 
-// Part of #4272 (S07a, R3.C6.4 T6-L5): a shed freezes the cut C at the shed, keeps the pre-cut replies, and
-// captures every post-C record behind the recovery baseline instead of dropping it; a suffix that overflows
-// supersedes the cut with a newer one.
+// Part of #4272 (S07a, R3.C6.4 T6-L5): with the compact-updates flag on, a shed freezes the cut C at the shed,
+// keeps the pre-cut replies, and captures every post-C record behind the recovery baseline instead of dropping
+// it; a suffix that overflows releases the cut and reads one fresh cut at the delivery. With the flag off the
+// shed path is today's (issue-3728-live-peer-resync.test.ts).
+
+beforeEach(() => vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1"));
+afterEach(() => vi.unstubAllEnvs());
 
 const BUDGET = 360;
 const start = { type: "message_start", message: { role: "assistant", content: "" } };
@@ -85,7 +89,7 @@ it("T6-L5 shed: pre-cut replies, then the gap and the resync frozen at C, then t
 	writer.unregisterConnection("peer");
 });
 
-it("T6-L5 supersede: a suffix that overflows replaces the pending cut with a newer one and releases the old", async () => {
+it("T6-L5 supersede: a suffix that overflows releases the pending cut; one fresh cut is read at the delivery", async () => {
 	const writer = new SessionEventWriter(() => {});
 	const lane = new SessionAcceptanceLane();
 	lane.bootstrap({ transcript: [] });
@@ -100,20 +104,16 @@ it("T6-L5 supersede: a suffix that overflows replaces the pending cut with a new
 	writer.enqueue("s", start);
 	for (let index = 1; index <= 3; index++) writer.enqueue("s", update(index));
 	expect(freeze, "the shed froze C").toHaveBeenCalledTimes(2);
-	// When: the captured suffix (4, 5) overflows at 6; 7 follows the new cut.
+	// When: the captured suffix (4, 5) overflows at 6; 6 and 7 are dropped like today's path, not cut one by one.
 	for (let index = 4; index <= 7; index++) writer.enqueue("s", update(index));
-	expect(freeze, "the overflowing suffix cut again").toHaveBeenCalledTimes(3);
-	expect(release, "the superseded cut was released").toHaveBeenCalledTimes(2);
-	expect(lane.liveRoots).toBe(1);
+	expect(freeze, "no cut per overflowing record").toHaveBeenCalledTimes(2);
+	expect(release, "the cut at C was released at the overflow").toHaveBeenCalledTimes(2);
+	expect(lane.liveRoots).toBe(0);
 	peer.release();
 	await writer.flush();
-	expect(shape(peer.lines)).toEqual([
-		"rpc_ping",
-		"message_start",
-		"resync:overflow:gap",
-		"resync:overflow:06",
-		"update:07",
-	]);
+	// Then: the one fresh cut read at the delivery covers everything dropped since C.
+	expect(freeze, "one cut at the delivery").toHaveBeenCalledTimes(3);
+	expect(shape(peer.lines)).toEqual(["rpc_ping", "message_start", "resync:overflow:gap", "resync:overflow:07"]);
 	expect(release).toHaveBeenCalledTimes(3);
 	expect(lane.liveRoots).toBe(0);
 	expect(writer.openLegacyViews).toBe(0);
