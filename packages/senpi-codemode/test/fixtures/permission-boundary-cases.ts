@@ -1,7 +1,8 @@
 export const capabilityCases = [
 	["bun:ffi", "await import('bun:ffi')"],
 	["node:vm", "require('node:vm')"],
-	["node:worker_threads", "require('node:worker_threads')"],
+	["node:worker_threads import", "await import('node:worker_threads')"],
+	["node:worker_threads builtin", "process.getBuiltinModule('node:worker_threads')"],
 	["process.binding", "process.binding('fs')"],
 	["process._linkedBinding", "process._linkedBinding('missing_permission_fixture')"],
 	["process.dlopen", "process.dlopen({exports:{}},'/missing_permission_fixture.node')"],

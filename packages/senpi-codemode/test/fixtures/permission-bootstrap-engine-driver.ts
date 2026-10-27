@@ -56,8 +56,13 @@ async function probe(entry?: URL): Promise<Record<string, string>> {
 		const preludeWrite = await cell(
 			`try{await write(${JSON.stringify(target)},"mutated");return "wrote";}catch(error){return error?.code ?? error?.name ?? "none";}`,
 		);
+		// require hands back only the port primitives a cell already owns as globals; the bindings that
+		// would escape the interposition stay absent.
+		const workerThreads = await cell(
+			`const wt=require("node:worker_threads");return JSON.stringify([wt.Worker===undefined,wt.parentPort===undefined,wt.workerData===undefined,wt.MessageChannel===globalThis.MessageChannel]);`,
+		);
 		// Read after the cells: the kernel picks its mode when it starts, not when it is constructed.
-		return { mode: kernel.mode, deniedWrite, allowedWrite, preludeRead, preludeWrite };
+		return { mode: kernel.mode, deniedWrite, allowedWrite, preludeRead, preludeWrite, workerThreads };
 	} finally {
 		await kernel.close();
 	}
@@ -86,6 +91,7 @@ const expected = {
 	allowedWrite: "wrote",
 	preludeRead: "cell_permission_denied",
 	preludeWrite: "cell_permission_denied",
+	workerThreads: "[true,true,true,true]",
 };
 
 try {

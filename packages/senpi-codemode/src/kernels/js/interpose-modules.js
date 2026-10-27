@@ -12,6 +12,18 @@ export function installModulePermissions(check) {
 	// re-entry is one import still being decided, not another import, so it must not ask again.
 	let resolving = false;
 	const forbidden = /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
+	const workerThreads = /^(?:node:)?worker_threads$/u;
+	// A cell already owns these as globals, so handing them back over require grants nothing, while
+	// Worker, parentPort and workerData stay out of reach: the raw Worker would spawn an uninterposed
+	// one. Only require can substitute a namespace, so import and getBuiltinModule stay refused.
+	const portPrimitives = () =>
+		Object.freeze(
+			Object.fromEntries(
+				["MessageChannel", "MessagePort", "BroadcastChannel"]
+					.filter((name) => name in globalThis)
+					.map((name) => [name, globalThis[name]]),
+			),
+		);
 	const pathLike = (name) => name.startsWith(".") || isAbsolute(name) || name.startsWith("file:");
 	const guard = (source, importer) => {
 		const specifier = String(source);
@@ -43,6 +55,7 @@ export function installModulePermissions(check) {
 	}
 	const originalRequire = module.prototype.require;
 	module.prototype.require = function (specifier) {
+		if (sealed && workerThreads.test(String(specifier))) return portPrimitives();
 		guard(specifier, this.filename);
 		if (specifier === "bun" && globalThis.Bun) return globalThis[Symbol.for("senpi.kernel.bun")] ?? globalThis.Bun;
 		return originalRequire.call(this, specifier);
@@ -51,6 +64,7 @@ export function installModulePermissions(check) {
 	module.createRequire = function (...args) {
 		const require = originalCreateRequire.apply(this, args);
 		const guarded = function (specifier) {
+			if (sealed && workerThreads.test(String(specifier))) return portPrimitives();
 			guard(specifier, requestedPath(args[0]) ?? String(args[0]));
 			if (specifier === "bun" && globalThis.Bun) return globalThis[Symbol.for("senpi.kernel.bun")] ?? globalThis.Bun;
 			return require(specifier);
