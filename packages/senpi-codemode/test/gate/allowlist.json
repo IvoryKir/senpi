@@ -109,7 +109,8 @@
 				"legacyContracts/test/js-kernel-permission-bootstrap-engine.test.ts/keeps the worker bootstrap and the engine hooks as separate runtime arguments",
 				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens drops an invoker binding once its retained continuation ends",
 				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) keeps waiting when a park ends on something other than the answer",
-				"legacyContracts/test/js-kernel-permission-module-surface.test.ts/hands a cell the engine's own worker_threads module unless the decision refuses it"
+				"legacyContracts/test/js-kernel-permission-module-surface.test.ts/hands a cell the engine's own worker_threads module unless the decision refuses it",
+				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) keeps waiting while the host holds the slot it claimed"
 			],
 			"reason": "senpi#4391: operation interposition and engine file helpers are new first-kernel modules; the operation, boundary, lexical-eval, numeric-open and native-loader proof contracts exercise the added JS enforcement. The bootstrap/engine contract added while restacking onto #4390 proves the worker bootstrap and the engine hooks stay separate runtime arguments and that dropping either one is caught. Inherited imports and contracts belong to the earlier stack PRs and are not approved here."
 		},
