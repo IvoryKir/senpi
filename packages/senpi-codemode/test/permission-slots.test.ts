@@ -70,6 +70,29 @@ describe("permission slot ownership (#4309)", () => {
 		expect(seen).toEqual([request]);
 	});
 
+	it("keeps waiting when a park ends on something other than the answer", async () => {
+		const slots = createPermissionSlots();
+		let serving: Promise<void> | undefined;
+		let parks = 0;
+		let pending: { slot: number; generation: number } | undefined;
+		const client = createPermissionRequester(slots, {
+			wake: (slot, generation) => {
+				pending = { slot, generation };
+			},
+			// The host claims the slot before it answers and that claim does not notify, so the first park
+			// can end with no answer written. Giving up there is what loses an allowed operation.
+			wait: () => {
+				parks++;
+				if (parks === 1) return "not-equal";
+				if (pending) serving = servePermissionSlot(slots, pending.slot, pending.generation, () => pass);
+				return "ok";
+			},
+		});
+		expect(client.check(request)).toEqual(pass);
+		expect(parks).toBe(2);
+		await serving;
+	});
+
 	it("does not reuse WRITING while a late host answer completes", async () => {
 		const slots = createPermissionSlots();
 		const claimed = Promise.withResolvers<void>();
