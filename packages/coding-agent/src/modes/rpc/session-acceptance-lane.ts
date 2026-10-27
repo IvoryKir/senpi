@@ -5,13 +5,14 @@ import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 import { correlatedRecord } from "./client-message-events.ts";
-import { CALL_ONLY_RECORDS, CALL_RECORDS } from "./compact-call-model.ts";
+import { CALL_RECORDS } from "./compact-call-model.ts";
 import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import { CompactLaneCurrent } from "./compact-lane-current.ts";
 import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
 import type { FrozenCompactState } from "./compact-state-view.ts";
 import type { CompactContentStoreOptions } from "./compact-content-store.ts";
+import { admitRecord, field } from "./session-acceptance-admission.ts";
 import { foldCompactRecord, foldCompactTransition } from "./session-acceptance-compact.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
@@ -69,17 +70,6 @@ const SEQUENCED = new Set([
 	...COMPONENT_RECORDS,
 	...CALL_RECORDS,
 ]);
-
-function field(record: object, key: string): unknown {
-	return key in record ? Reflect.get(record, key) : undefined;
-}
-
-function turnScoped(type: string, record: object): boolean {
-	if (type === "turn_end" || type.startsWith("tool_execution_")) return true;
-	if (!type.startsWith("message_")) return false;
-	const role = field(Object(field(record, "message")), "role");
-	return role === "assistant" || role === "toolResult";
-}
 
 /**
  * The ordered acceptance lane of one routing session. Every record reaches it synchronously, before
@@ -167,18 +157,16 @@ export class SessionAcceptanceLane {
 	accept(record: object, carrier: RecoveryCarrier | undefined, canonical?: CanonicalUnit): AcceptedRef | undefined {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
-		// The calls component folds first, at the sequence and turn this record would take: an ignored call-only record
-		// changes no component, takes no sequence, mints no turn, commits no correlation and publishes no root
-		// (RULING-13 Q9), so the lane commits nothing before it decides.
+		// The calls component decides first, before the lane commits anything for this record, its correlation change
+		// included (RULING-13 Q9); a correlation change takes the sequence just before its record.
 		const correlation = this.correlationChange(record);
-		const mintsTurn = type === "turn_start" || (this.turnId === null && turnScoped(type, record));
-		const turnId = mintsTurn ? randomUUID() : this.turnId;
-		const next = this.sequence + (correlation ? 2 : 1);
-		const call = CALL_RECORDS.has(type) ? this.current.foldCall(record, next, turnId) : undefined;
-		if (call && !call.changed && CALL_ONLY_RECORDS.has(type)) return undefined;
-		if (correlation) this.correlation = Object.freeze({ sequence: next - 1, ...correlation });
+		const at = { sequence: this.sequence + (correlation ? 1 : 0), turnId: this.turnId };
+		const place = admitRecord(this.current, record, type, at);
+		if (!place) return undefined;
+		if (correlation) this.correlation = Object.freeze({ sequence: place.sequence - 1, ...correlation });
+		const { turnId, call } = place;
 		this.turnId = turnId;
-		this.sequence = next;
+		this.sequence = place.sequence;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
