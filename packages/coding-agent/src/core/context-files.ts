@@ -161,12 +161,18 @@ function applyContextFileLimits(files: ContextFile[], limits: ContextFileLimits)
 	return Object.assign(kept, { diagnostics });
 }
 
+/** Compares directories by their real path, ignoring case where the filesystem does (Windows). */
+function directoryKey(dir: string): string {
+	const real = canonicalizePath(resolvePath(dir));
+	return process.platform === "win32" ? real.toLowerCase() : real;
+}
+
 export function loadProjectContextFiles(
 	options: { cwd: string; agentDir: string; homeDir?: string } & ContextFileLimits,
 ): ContextFiles {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
-	const resolvedHomeDir = resolvePath(options.homeDir ?? homedir());
+	const homeKey = directoryKey(options.homeDir ?? homedir());
 
 	const contextFiles: ContextFile[] = [];
 	const seenPaths = new Set<string>();
@@ -188,7 +194,7 @@ export function loadProjectContextFiles(
 			shadowedContextFile !== undefined && canonicalizePath(contextFile?.path ?? "") === shadowedContextFile;
 		if (contextFile && !isShadowed && !seenPaths.has(contextFile.path)) {
 			ancestorContextFiles.unshift(
-				resolvePath(currentDir) === resolvedHomeDir ? { ...contextFile, scope: "user" } : contextFile,
+				directoryKey(currentDir) === homeKey ? { ...contextFile, scope: "user" } : contextFile,
 			);
 			seenPaths.add(contextFile.path);
 		}

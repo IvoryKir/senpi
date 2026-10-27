@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -35,6 +35,16 @@ describe("user instruction files are ranked as the user's own, ahead of project 
 			[join(home, "AGENTS.md"), "user"],
 			[join(cwd, "AGENTS.md"), undefined],
 		]);
+	});
+
+	it("recognizes the home file when home is given through a symlink", () => {
+		const { home, agentDir, cwd } = layout();
+		const linkedHome = `${home}-link`;
+		symlinkSync(home, linkedHome);
+
+		const files = loadProjectContextFiles({ cwd, agentDir, homeDir: linkedHome });
+
+		expect(files.find((file) => file.path === join(home, "AGENTS.md"))?.scope).toBe("user");
 	});
 
 	it("emits the user files under their own header part, before the project header and files", () => {
