@@ -85,7 +85,7 @@ describe("compact content store: failed writes and unlinks (L4, L5)", () => {
 		settle(state, "m1", "u".repeat(LEAF));
 		await state.idle();
 		const first = control.hold("unlink", (path) => /[/\\]leaf-/.test(path));
-		state.accept({ type: "message_remove", messageId: "m1" });
+		await state.applyCold({ type: "message_remove", messageId: "m1" });
 		await first.entered;
 		first.fail(injected("EBUSY"));
 		await state.idle();
@@ -110,7 +110,7 @@ describe("compact content store: failed writes and unlinks (L4, L5)", () => {
 		await state.idle();
 		const structured = state.storageStatus().structuredBytes.spilled;
 		failUnlink = true;
-		state.accept({ type: "message_remove", messageId: "m1" });
+		await state.applyCold({ type: "message_remove", messageId: "m1" });
 		await state.idle();
 		expect(state.storageStatus()).toMatchObject({ reclaimDebtBytes: 17 * 65_536 + structured, spillHalted: true });
 	});
@@ -216,13 +216,16 @@ describe("compact content store: reads, churn and retirement (L6, L7, L8)", () =
 		expect(steps).toBe(0);
 	});
 
-	it("drops unlinks queued after retirement without recording failures or debt", async () => {
+	it("refuses cold removal after retirement without recording failures or debt", async () => {
 		const { state } = await setup();
 		settle(state, "m1", "z".repeat(LEAF));
 		await state.idle();
 		await state.retire();
-		state.accept({ type: "message_remove", messageId: "m1" });
+		expect(await state.applyCold({ type: "message_remove", messageId: "m1" })).toMatchObject({
+			kind: "rejected",
+			reason: "retired",
+		});
 		await state.idle();
-		expect(state.storageStatus()).toMatchObject({ failures: [], reclaimDebtBytes: 0, spilledLiveBytes: 0 });
+		expect(state.storageStatus()).toMatchObject({ failures: [], reclaimDebtBytes: 0, spilledLiveBytes: LEAF * 2 });
 	});
 });

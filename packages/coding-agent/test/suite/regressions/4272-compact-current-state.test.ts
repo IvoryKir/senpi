@@ -131,7 +131,11 @@ describe("4272 compact current state: declared coverage and exact UTF-16 content
 
 	it("rejects backwards, partially covered and conflicting overlap with a typed error and no partial apply", async () => {
 		const { state } = await setup();
-		const seed = (messageId: string, value: string, covered: number): CompactTransition => ({
+		const seed = (
+			messageId: string,
+			value: string,
+			covered: number,
+		): Extract<CompactTransition, { type: "block_start" }> => ({
 			type: "block_start",
 			...startIdentity(),
 			messageId,
@@ -140,7 +144,8 @@ describe("4272 compact current state: declared coverage and exact UTF-16 content
 			seed: value,
 			coveredCodeUnits: covered,
 		});
-		state.accept(seed("plain", "abc", 0));
+		const plain = seed("plain", "abc", 0);
+		state.accept(plain);
 		state.accept({ type: "block_delta", messageId: "plain", contentIndex: 0, offset: 3, text: "def" });
 		state.accept(seed("replay", "abc", 3));
 
@@ -152,7 +157,7 @@ describe("4272 compact current state: declared coverage and exact UTF-16 content
 				"conflicting_overlap",
 			],
 			[{ type: "block_delta", messageId: "missing", contentIndex: 0, offset: 0, text: "x" }, "unknown_block"],
-			[seed("plain", "again", 0), "duplicate_block"],
+			[{ ...plain, seed: "again", ...startIdentity(plain.firstOrdinal) }, "duplicate_block"],
 			[seed("bad", "ab", 3), "invalid_coverage"],
 		];
 		const sequence = state.acceptedSequence;
