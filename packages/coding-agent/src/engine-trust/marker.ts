@@ -77,7 +77,7 @@ const markerSchema = z
 	// Only a standalone launch may opt out of the default-input closure (its user chose Bun's inputs),
 	// and only a server launch removes, and so records, BUN_OPTIONS.
 	.refine((marker) => marker.owner === "standalone" || marker.defaults !== null)
-	.refine((marker) => marker.owner === "server" || !("BUN_OPTIONS" in marker.restore));
+	.refine((marker) => marker.owner === "server" || marker.restore.BUN_OPTIONS === undefined);
 
 export type EngineTrustMarker = Readonly<z.infer<typeof markerSchema>>;
 export type EngineTrustRestore = EngineTrustMarker["restore"];

@@ -87,7 +87,7 @@ export function applyEngineTrustRestore(
 	restore: EngineTrustRestore,
 	platform: NodeJS.Platform,
 ): void {
-	const names = "BUN_OPTIONS" in restore ? ENGINE_TRUST_RESTORE_NAMES : ALWAYS_RESTORED_NAMES;
+	const names = restore.BUN_OPTIONS === undefined ? ALWAYS_RESTORED_NAMES : ENGINE_TRUST_RESTORE_NAMES;
 	for (const name of names) {
 		const value = restore[name];
 		if (typeof value === "string") setName(env, name, value, platform);
