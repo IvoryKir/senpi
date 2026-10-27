@@ -162,6 +162,10 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=10240
         run: npm run check
 
+      # Dead-code check: fails on a new unused file, export or dependency (knip.jsonc; senpi#4419).
+      - name: Knip dead-code check
+        run: npm run knip:check
+
       - name: Snapshot OS temp before tests
         id: test_temp_snapshot
         shell: bash
