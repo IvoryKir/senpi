@@ -28,6 +28,9 @@ import { createTestResourceLoader } from "../../utilities.ts";
 const SIGNED_OUT_KEY_ENV = "SENPI_TEST_4410_SIGNED_OUT_KEY";
 const SAVED = { provider: "lab-signed-out", id: "claude-opus-5-5", contextWindow: 1_000_000 };
 const REPLACEMENT = { provider: "lab-signed-in", id: "gpt-5.6-luna", contextWindow: 272_000 };
+// A saved direct-Anthropic model whose only signed-in lane is the subscription (senpi#3259).
+const SAVED_ANTHROPIC = { provider: "anthropic", id: "claude-opus-5-5" };
+const SUBSCRIPTION_LANE = "anthropic-subscription";
 const LIVE_CONTEXT_TOKENS = 586_000;
 const TURNS = 20;
 
@@ -56,6 +59,18 @@ const MODELS_JSON = {
 			api: "openai-completions",
 			apiKey: "faux-key",
 			models: [catalogModel(REPLACEMENT.id, REPLACEMENT.contextWindow)],
+		},
+		[SAVED_ANTHROPIC.provider]: {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+			apiKey: `$${SIGNED_OUT_KEY_ENV}`,
+			models: [catalogModel(SAVED_ANTHROPIC.id, SAVED.contextWindow)],
+		},
+		[SUBSCRIPTION_LANE]: {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+			apiKey: "faux-key",
+			models: [catalogModel(SAVED_ANTHROPIC.id, SAVED.contextWindow)],
 		},
 	},
 };
@@ -190,6 +205,9 @@ describe("resume keeps a saved model whose provider is signed out (senpi#4410, o
 		vi.stubEnv("OMO_CODING_AGENT_DIR", join(scratch, "agent"));
 		vi.stubEnv("PI_OFFLINE", "1");
 		vi.stubEnv("SENPI_OFFLINE", "1");
+		for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) {
+			vi.stubEnv(name, undefined);
+		}
 		expect(process.env[SIGNED_OUT_KEY_ENV]).toBeUndefined();
 	});
 
@@ -226,6 +244,24 @@ describe("resume keeps a saved model whose provider is signed out (senpi#4410, o
 		},
 		60_000,
 	);
+
+	it("createAgentSession keeps a saved anthropic model when only the subscription lane is signed in", async () => {
+		const fixture = seedSession(scratch);
+		fixture.sessionManager.appendModelChange(SAVED_ANTHROPIC.provider, SAVED_ANTHROPIC.id);
+		const modelChangesBefore = fixture.sessionManager
+			.getBranch()
+			.filter((entry) => entry.type === "model_change").length;
+		const resumed = await ENTRY_POINTS[0][1](fixture);
+		try {
+			expect({ provider: resumed.model?.provider, id: resumed.model?.id }).toEqual(SAVED_ANTHROPIC);
+			expect(resumed.fallbackMessage).toBeUndefined();
+			const modelChanges = fixture.sessionManager.getBranch().filter((entry) => entry.type === "model_change");
+			expect(modelChanges).toHaveLength(modelChangesBefore);
+			expect(modelChanges.at(-1)).toMatchObject({ provider: SAVED_ANTHROPIC.provider, modelId: SAVED_ANTHROPIC.id });
+		} finally {
+			await resumed.close();
+		}
+	}, 60_000);
 
 	it("still substitutes when the saved model is gone from the catalog", async () => {
 		const fixture = seedSession(scratch);

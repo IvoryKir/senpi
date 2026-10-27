@@ -31,7 +31,6 @@ import {
 	type InitialModelProvenance,
 	resolveModelScope,
 	resolveStoredModelReference,
-	resolveStoredModelWithAuth,
 } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
@@ -325,8 +324,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && sessionModel) {
-		// A signed-out provider keeps its model; the first prompt asks for a login (senpi#4410).
-		const restored = resolveStoredModelWithAuth(sessionModel.provider, sessionModel.modelId, modelRuntime);
+		// Keep the saved reference exactly, signed out or not; the first prompt asks for a login (senpi#4410).
+		const restored = resolveStoredModelReference(sessionModel.provider, sessionModel.modelId, modelRuntime);
 		if (restored) {
 			model = restored.model;
 			initialResolvedThinkingLevel = restored.thinkingLevel;

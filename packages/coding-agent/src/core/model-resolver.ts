@@ -336,7 +336,7 @@ type StoredModelAuthSource = Pick<ModelRuntime, "getModel" | "hasConfiguredAuth"
  * the direct `anthropic` provider to the Agent SDK lane (senpi#3259), so a saved `anthropic/<id>`
  * follows it to `anthropic-subscription/<id>` when only that lane holds auth.
  */
-export function resolveStoredModelWithAuth(
+function resolveStoredModelWithAuth(
 	provider: string,
 	modelId: string,
 	modelRuntime: StoredModelAuthSource,
