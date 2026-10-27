@@ -120,7 +120,7 @@ describe("RPC login progress (senpi#4436)", () => {
 
 		expect(end).toMatchObject({ provider: PROVIDER, success: true });
 		expect(progressEvents(collected)).toEqual([
-			{ type: "auth_login_progress", provider: PROVIDER, message: DOWNLOAD_LINE },
+			{ type: "auth_login_progress", provider: PROVIDER, text: DOWNLOAD_LINE },
 		]);
 		expect(logins).toEqual(["login ran"]);
 	});
@@ -148,7 +148,7 @@ describe("RPC login progress (senpi#4436)", () => {
 		await runRpcLogin(collected, harness);
 
 		expect(order).toEqual(["first", "second"]);
-		expect(progressEvents(collected).map((message) => message.message)).toEqual(["first handler", "second handler"]);
+		expect(progressEvents(collected).map((message) => message.text)).toEqual(["first handler", "second handler"]);
 	});
 
 	it("a throwing handler is reported and the login still runs", async () => {
@@ -173,8 +173,12 @@ describe("RPC login progress (senpi#4436)", () => {
 		expect(end).toMatchObject({ provider: PROVIDER, success: true });
 		expect(logins).toEqual(["login ran"]);
 		expect(errors).toEqual([
-			expect.objectContaining({ extensionPath: "<inline:host-0>", event: "provider_login_start", error: "handler failed" }),
+			expect.objectContaining({
+				extensionPath: "<inline:host-0>",
+				event: "provider_login_start",
+				error: "handler failed",
+			}),
 		]);
-		expect(progressEvents(collected).map((message) => message.message)).toEqual(["after the failure"]);
+		expect(progressEvents(collected).map((message) => message.text)).toEqual(["after the failure"]);
 	});
 });

@@ -1102,7 +1102,7 @@ export function createRpcConnectionHandler(
 				},
 				...createRpcLoginPromptCallbacks(createExtensionUIContext(), loginSignal),
 				onProgress: (message) => {
-					outputEvent({ type: "auth_login_progress", provider, message });
+					outputEvent({ type: "auth_login_progress", provider, text: message });
 				},
 				signal: controller.signal,
 			});
