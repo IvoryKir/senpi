@@ -2,6 +2,7 @@ import { type AssistantMessage, type AssistantProgress, seedNextOffset } from "@
 import type { SeededJsonMessageUpdateEvent } from "../json-event.ts";
 import { type ActiveBlock, appendBlock, deltaBlock } from "./compact-active-block.ts";
 import { type CompactSeededDraft, type SeededFields } from "./compact-seeded-draft.ts";
+import type { FrozenBlock } from "./compact-text-view.ts";
 import { CompactTransitionError } from "./compact-transition.ts";
 
 type PublicBlock = AssistantMessage["content"][number];
@@ -13,7 +14,8 @@ export interface SeededBlock {
 	readonly fields: SeededFields;
 	readonly body: ActiveBlock;
 	readonly signature: ActiveBlock;
-	readonly phase: "open" | "ended";
+	/** `initial`: a slot from a message start's content, taken over by that index's own block start. */
+	readonly phase: "initial" | "open" | "ended";
 	readonly parsedThrough: number;
 }
 type Frontier = {
@@ -28,7 +30,7 @@ function parseFrontier(next: number, length: number, previous = 0): void {
 		throw new CompactTransitionError("invalid_parse_frontier", `${next} outside [${previous}, ${length}]`);
 }
 
-function seedBlock(draft: CompactSeededDraft, block: PublicBlock, frontier?: Frontier): SeededBlock {
+export function seedBlock(draft: CompactSeededDraft, block: PublicBlock, frontier?: Frontier): SeededBlock {
 	const text =
 		block.type === "text"
 			? block.text
@@ -79,7 +81,8 @@ export function foldSeededBlock(
 		case "text_start":
 		case "thinking_start":
 		case "toolcall_start":
-			if (old) throw new CompactTransitionError("duplicate_block", `${event.contentIndex}`);
+			if (old && old.phase !== "initial")
+				throw new CompactTransitionError("duplicate_block", `${event.contentIndex}`);
 			return seedBlock(draft, event.seed.block, event.seed);
 		case "message_block_state": {
 			if (event.phase === "end" && !old) throw new CompactTransitionError("unknown_block", `${event.contentIndex}`);
@@ -161,6 +164,17 @@ export function frozenSeededBlock(block: SeededBlock) {
 	};
 }
 export type FrozenSeededBlock = ReturnType<typeof frozenSeededBlock>;
+/** The published component row of one active block, seeded or legacy. */
+export function frozenBlock(contentIndex: number, block: ActiveBlock): FrozenBlock {
+	return {
+		contentIndex,
+		kind: block.kind,
+		root: block.root,
+		tail: "",
+		tailRoot: block.tailRoot,
+		...(block.seeded ? { seeded: frozenSeededBlock(block.seeded) } : {}),
+	};
+}
 export function seededBlockLeaves(block: FrozenSeededBlock): readonly number[] {
 	return [block.signature.root, block.signature.tailRoot, ...Object.values(block.fields).map((ref) => ref.owner)];
 }
