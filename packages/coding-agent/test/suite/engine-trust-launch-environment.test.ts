@@ -12,7 +12,7 @@ import {
 	EngineTrustContractError,
 	parseEngineTrustMarker,
 	serializeEngineTrustMarker,
-} from "../../src/core/engine-trust/index.ts";
+} from "../../src/engine-trust/index.ts";
 import { serverMarker, standaloneMarker } from "./engine-trust-fixtures.ts";
 
 type Env = Record<string, string | undefined>;

@@ -1,4 +1,4 @@
-import type { EngineTrustMarker } from "../../src/core/engine-trust/index.ts";
+import type { EngineTrustMarker } from "../../src/engine-trust/index.ts";
 
 export const serverMarker: EngineTrustMarker = {
 	v: 1,

@@ -11,7 +11,7 @@ import {
 	parseEngineTrustMarker,
 	recordAdoptedEngineTrust,
 	serializeEngineTrustMarker,
-} from "../../src/core/engine-trust/index.ts";
+} from "../../src/engine-trust/index.ts";
 import { daemonEnvironment } from "../../src/modes/rpc/host-daemon-env.ts";
 import { createHostDaemonPaths } from "../../src/modes/rpc/host-daemon-paths.ts";
 import { initialHostEnvironment } from "../../src/modes/rpc/host-spawn-environment.ts";

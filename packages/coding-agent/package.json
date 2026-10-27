@@ -45,8 +45,8 @@
 			"import": "./dist/core/extensions/builtin/prompt-preset/public.js"
 		},
 		"./engine-trust": {
-			"types": "./dist/core/engine-trust/index.d.ts",
-			"import": "./dist/core/engine-trust/index.js"
+			"types": "./dist/engine-trust/index.d.ts",
+			"import": "./dist/engine-trust/index.js"
 		}
 	},
 	"files": [

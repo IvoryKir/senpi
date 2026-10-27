@@ -10,7 +10,7 @@ import {
 	type EngineTrustMarker,
 	parseEngineTrustMarker,
 	serializeEngineTrustMarker,
-} from "../../src/core/engine-trust/index.ts";
+} from "../../src/engine-trust/index.ts";
 import { serverMarker, standaloneMarker } from "./engine-trust-fixtures.ts";
 
 function variant(patch: Record<string, unknown>): string {

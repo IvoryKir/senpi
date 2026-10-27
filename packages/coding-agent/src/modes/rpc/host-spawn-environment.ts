@@ -1,5 +1,5 @@
 import { ENV_AGENT_DIR, getAgentDir } from "../../config.ts";
-import { adoptedEngineTrust, engineTrustHandOffEnvironment } from "../../core/engine-trust/index.ts";
+import { adoptedEngineTrust, engineTrustHandOffEnvironment } from "../../engine-trust/index.ts";
 import { RPC_CLIENT_CAPABILITIES_ENV } from "./custom-capability.ts";
 import { daemonEnvironment } from "./host-daemon-env.ts";
 import { HOST_DAEMON_DIR_ENV, type HostDaemonPaths } from "./host-daemon-paths.ts";
