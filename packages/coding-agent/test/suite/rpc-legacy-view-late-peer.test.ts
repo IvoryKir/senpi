@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { CompactLaneCurrent } from "../../src/modes/rpc/compact-lane-current.ts";
+import { CompactSettledMessages } from "../../src/modes/rpc/compact-settled-messages.ts";
 import { SessionAcceptanceLane } from "../../src/modes/rpc/session-acceptance-lane.ts";
 import { SessionEventWriter } from "../../src/modes/rpc/session-event-writer.ts";
 import { EVENT_RESYNC_CAPABILITY } from "../../src/modes/rpc/socket-peer-recovery.ts";
@@ -12,6 +14,7 @@ import { LaneProducer } from "./regressions/4272-legacy-view-support.ts";
 afterEach(() => {
 	vi.unstubAllEnvs();
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 });
 
 type Peer = { readonly lines: string[]; release(): void };
@@ -125,6 +128,58 @@ it.each([
 		writer.unregisterConnection("peer");
 		writer.unregisterConnection("closer");
 		lane.retire("close");
+		await lane.idle();
+	},
+);
+
+it.each(["peer drop", "detach"] as const)(
+	"Q2=A seal, then a %s: the kept root of the queued baseline is released by the cancellation and the lane's storage retires",
+	async (cause) => {
+		vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
+		const writer = new SessionEventWriter(() => {});
+		const lane = new SessionAcceptanceLane();
+		lane.bootstrap({ transcript: [] });
+		writer.registerAcceptance("s", lane);
+		const storage = [
+			vi.spyOn(CompactLaneCurrent.prototype, "retire"),
+			vi.spyOn(CompactSettledMessages.prototype, "retire"),
+		];
+		const retirements = () => storage.map((spy) => spy.mock.calls.length);
+		const closer = heldPeer(writer, "closer");
+		closer.release();
+		const peer = heldPeer(writer, "peer");
+		writer.attachConnectionToSession("peer", "other");
+		// Given: the transport is held on an earlier record, so the attach baseline of `s` is still queued at the seal.
+		writer.enqueue("other", { type: "message_start", message: { role: "assistant", content: [] } });
+		const producer = new LaneProducer(writer, lane, "s");
+		const message = { role: "assistant", content: [] };
+		producer.assistant({ type: "message_start", message }, { type: "message_start", message });
+		producer.blockStart("text", 0);
+		producer.blockDelta("text", 0, "one", 0);
+		writer.attachConnectionToSession("peer", "s");
+		writer.withConnection("closer", () =>
+			writer.closeSession("s", { type: "response", command: "close_session", success: true }, "client_close"),
+		);
+		expect(lane.retired, "the seal retired the lane").toBe(true);
+		expect(lane.liveRoots, "the queued view keeps its root past the seal").toBe(1);
+		expect(retirements(), "storage is kept while that root is held").toEqual([0, 0]);
+		// When: the view is cancelled before a byte of it is written: the peer goes away, or it detaches the session.
+		if (cause === "peer drop") writer.unregisterConnection("peer");
+		else writer.detachConnectionFromSession("peer", "s");
+		const atCancel = shape(peer.lines);
+		writer.enqueue("other", delta("sibling"));
+		peer.release();
+		await writer.flush();
+		// Then: no frame of the baseline is written; a dropped peer gets nothing more at all.
+		expect(atCancel).toEqual(["other:message_start"]);
+		expect(shape(peer.lines)).toEqual(
+			cause === "peer drop" ? atCancel : ["other:message_start", "s:session_closed", "other:sibling"],
+		);
+		// And: the cancellation released the kept root, and that last release retired the lane's storage, once.
+		expect(lane.liveRoots, "live roots after the cancellation").toBe(0);
+		expect(writer.openLegacyViews, "open views after the cancellation").toBe(0);
+		expect(retirements(), "current and settled storage retired by the last release").toEqual([1, 1]);
+		for (const id of ["peer", "closer"]) writer.unregisterConnection(id);
 		await lane.idle();
 	},
 );
