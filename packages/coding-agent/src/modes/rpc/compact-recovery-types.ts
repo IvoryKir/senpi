@@ -46,14 +46,23 @@ export type RepairReason =
 	| "foreign_session"
 	| "lane_retired"
 	| "stale_epoch"
-	| "superseded";
+	| "peer_gone";
+
+/** A token of an older generation of its stream (RULING-50 (2)): `newerGeneration` is the stream's current one. */
+export interface SupersededToken {
+	readonly kind: "repair_needed";
+	readonly reason: "superseded_token";
+	readonly newerGeneration: number;
+}
 
 /**
  * The typed failure of every token operation (S14-Q2 shape): `repair_needed` when the consumer must admit again
- * (its token is retired, foreign or superseded), `storage_unavailable` when the host could not serve the pinned cut.
+ * (its token is retired, foreign, superseded or its peer is gone), `storage_unavailable` when the host could not
+ * serve the pinned cut.
  */
 export type RecoveryFailure =
 	| { readonly kind: "repair_needed"; readonly reason: RepairReason }
+	| SupersededToken
 	| { readonly kind: "storage_unavailable"; readonly reason: string };
 
 export type RecoveryOutcome<T> =

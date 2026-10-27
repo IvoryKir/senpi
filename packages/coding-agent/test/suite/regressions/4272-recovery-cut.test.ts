@@ -154,7 +154,7 @@ it("T5 the pinned transcript keeps its version, leaf and ids across a later bran
 		expect(after.cut.historyVersion).toBeGreaterThan(token.cut.historyVersion);
 		expect(checkpoints.transcript(token, caller), "one token per stream: the newer cut supersedes").toEqual({
 			ok: false,
-			failure: { kind: "repair_needed", reason: "superseded" },
+			failure: { kind: "repair_needed", reason: "superseded_token", newerGeneration: 2 },
 		});
 		const read = readTranscriptRoot(pinned);
 		expect(read.ok && read.entries.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
@@ -165,6 +165,44 @@ it("T5 the pinned transcript keeps its version, leaf and ids across a later bran
 		expect(readTranscriptRoot(pinned)).toEqual({ ok: false, error: "base_file_truncated" });
 		checkpoints.release(token);
 		checkpoints.release(after);
+		expect(lane.liveRoots).toBe(0);
+		lane.retire("close");
+		await lane.idle();
+	} finally {
+		manager.dispose();
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+it("RULING-50 (3) the pinned transcript root is not reclaimed while its token is live: other tokens' releases, another peer's forget and later history leave it readable for S11", async () => {
+	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
+	const dir = await mkdtemp(join(tmpdir(), "senpi-4272-s08a-live-"));
+	const manager = SessionManager.create(dir, dir);
+	try {
+		const checkpoints = owner();
+		const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+		await manager.persistHeaderNow();
+		const lane = new SessionAcceptanceLane();
+		lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
+		const token = unwrap(checkpoints.freeze(route(), lane)).token;
+		const pinned = unwrap(checkpoints.transcript(token, caller));
+		const foreign = unwrap(checkpoints.freeze({ ...route(), socketEpoch: "socket-2" }, lane)).token;
+		const sibling = unwrap(checkpoints.freeze(route("t"), lane)).token;
+		checkpoints.release(sibling);
+		checkpoints.forgetPeer("socket-2");
+		manager.appendMessage({ role: "user", content: "later", timestamp: 2 });
+		lane.applyTranscript(manager.drainTranscript());
+		expect(lane.liveRoots, "only the live token's root stays pinned").toBe(1);
+		expect(unwrap(checkpoints.transcript(token, caller)), "the same pinned root, not a newer one").toBe(pinned);
+		const read = readTranscriptRoot(pinned);
+		expect(read.ok && read.entries.filter((entry) => entry.type === "message").map((entry) => entry.id)).toEqual([
+			firstId,
+		]);
+		expect(checkpoints.transcript(foreign, { ...caller, socketEpoch: "socket-2" })).toEqual({
+			ok: false,
+			failure: { kind: "repair_needed", reason: "unknown_token" },
+		});
+		checkpoints.release(token);
 		expect(lane.liveRoots).toBe(0);
 		lane.retire("close");
 		await lane.idle();

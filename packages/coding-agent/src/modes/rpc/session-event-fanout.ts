@@ -248,7 +248,8 @@ export class SessionEventFanout {
 
 	/**
 	 * Pending `question` frames a session has asked and nobody answered yet: the lane's hot count, today's count for a
-	 * session without a lane, and undefined (unknown) for a lane whose compact state is unavailable.
+	 * session without a lane, and undefined (unknown) for a lane whose compact state is unavailable. The unknown count
+	 * is output-equivalent to the old 0: `liveStatus` reads it as `?? 0`, so the runtime's own count decides.
 	 */
 	pendingQuestionCount(sessionId: string): number | undefined {
 		const lane = this.acceptance.get(sessionId);

@@ -54,9 +54,9 @@ it("T5 a release is idempotent and per token: an older token's release never tou
 	expect([older.admission.generation, newer.admission.generation]).toEqual([1, 2]);
 	expect(older.id).not.toBe(newer.id);
 	expect(lane.liveRoots).toBe(2);
-	expect(await checkpoints.readActive(older, caller)).toEqual({
+	expect(await checkpoints.readActive(older, caller), "RULING-50 (2): typed, naming the newer generation").toEqual({
 		ok: false,
-		failure: { kind: "repair_needed", reason: "superseded" },
+		failure: { kind: "repair_needed", reason: "superseded_token", newerGeneration: 2 },
 	});
 	checkpoints.release(older);
 	checkpoints.release(older);
@@ -132,6 +132,48 @@ it("T5 X04 a lane retired during a held read is a lane_retired failure; a later 
 	checkpoints.release(token);
 	expect(checkpoints.open).toBe(0);
 	expect(lane.liveRoots).toBe(0);
+	await lane.idle();
+});
+
+it("RULING-50 (2) a holder that never releases pins nothing past its peer: forgetting the peer reclaims every root it froze, the superseded one at once and the one under a read once it unwinds", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "senpi-4272-s08a-forget-"));
+	cleanups.push(() => rm(dir, { recursive: true, force: true }));
+	const control = controlledIo();
+	const hold = control.hold("read", (path) => /[/\\]leaf-/.test(path));
+	const checkpoints = owner();
+	const lane = streamedLane({ dir, spillAboveBytes: 0, spillTargetBytes: 0, io: control.io });
+	await lane.idle();
+	const older = unwrap(checkpoints.freeze(route, lane)).token;
+	const newer = unwrap(checkpoints.freeze(route, lane)).token;
+	const other = unwrap(checkpoints.freeze({ ...route, socketEpoch: "socket-2" }, lane)).token;
+	const reading = checkpoints.readActive(newer, caller);
+	await hold.entered;
+	checkpoints.forgetPeer("socket-1");
+	expect(lane.liveRoots, "the superseded root went at once").toBe(2);
+	hold.release();
+	expect(await reading).toEqual({ ok: false, failure: { kind: "repair_needed", reason: "peer_gone" } });
+	expect(lane.liveRoots, "only the other peer's root stays").toBe(1);
+	expect(checkpoints.tokens()).toEqual([other]);
+	checkpoints.release(older);
+	checkpoints.release(newer);
+	expect(lane.liveRoots, "a late release by the holder touches nothing").toBe(1);
+	checkpoints.release(other);
+	expect(lane.liveRoots).toBe(0);
+	lane.retire("close");
+	await lane.idle();
+});
+
+it("RULING-50 (2) a forgotten session's lane releases the roots its tokens pinned though no holder released them", async () => {
+	const checkpoints = owner();
+	const lane = streamedLane();
+	const token = unwrap(checkpoints.freeze(route, lane)).token;
+	lane.retire("close");
+	expect(lane.liveRoots).toBe(0);
+	expect(await checkpoints.readActive(token, caller)).toEqual({
+		ok: false,
+		failure: { kind: "repair_needed", reason: "lane_retired" },
+	});
+	checkpoints.release(token);
 	await lane.idle();
 });
 

@@ -3,7 +3,7 @@ import { serializeJsonLine } from "../../../src/modes/rpc/jsonl.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.ts";
 import { EVENT_RESYNC_CAPABILITY } from "../../../src/modes/rpc/socket-peer-recovery.ts";
-import { LaneProducer, update, usage } from "./4272-legacy-view-support.ts";
+import { heldPeer as peer, LaneProducer, update, usage } from "./4272-legacy-view-support.ts";
 
 // Part of #4272 (S08a, RULING-46 item 1): the fanout's attach and shed are the real producers of the admission
 // descriptor before S15; each freezes its cut synchronously as that admission's checkpoint and releases it on end.
@@ -12,34 +12,6 @@ afterEach(() => {
 	vi.useRealTimers();
 	vi.restoreAllMocks();
 });
-
-type Peer = { readonly lines: string[]; hold(): void; release(): void };
-
-function peer(writer: SessionEventWriter, id: string, capabilities: readonly string[] = []): Peer {
-	const lines: string[] = [];
-	let blocked = false;
-	const waiters: (() => void)[] = [];
-	writer.registerConnection(
-		id,
-		{
-			writeRaw: (chunk) => void lines.push(chunk),
-			waitForBackpressure: () =>
-				blocked ? new Promise<void>((resolve) => void waiters.push(resolve)) : Promise.resolve(),
-		},
-		{ maxQueueBytes: 600 },
-	);
-	if (capabilities.length > 0) writer.setConnectionCapabilities(id, capabilities);
-	return {
-		lines,
-		hold: () => {
-			blocked = true;
-		},
-		release: () => {
-			blocked = false;
-			for (const resolve of waiters.splice(0)) resolve();
-		},
-	};
-}
 
 const start = { role: "assistant", content: [], api: "faux", provider: "faux", model: "fixture", usage };
 

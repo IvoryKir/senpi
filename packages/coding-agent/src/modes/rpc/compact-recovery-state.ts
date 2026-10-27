@@ -102,10 +102,16 @@ export class RecoveryCheckpoints {
 		this.checkpoints.get(token.id)?.lease.release();
 	}
 
-	/** A peer incarnation is gone: its streams end, so any operation still in flight on them is refused. */
+	/**
+	 * A peer incarnation is gone: its streams end and every checkpoint it froze is released whether or not its holder
+	 * ever releases it (the bound on a never-releasing holder, RULING-50 (2)); an operation still in flight on one is
+	 * refused as `peer_gone` and its root goes once that operation unwinds.
+	 */
 	forgetPeer(socketEpoch: string): void {
 		for (const stream of this.generations.keys())
 			if (stream.startsWith(`${socketEpoch}\u0000`)) this.generations.delete(stream);
+		for (const { token, lease } of [...this.checkpoints.values()])
+			if (token.admission.socketEpoch === socketEpoch) lease.release();
 	}
 
 	/** The pinned transcript root (version, leaf, accepted ids, base identity); its bytes are read by S11's page route. */
@@ -169,8 +175,10 @@ export class RecoveryCheckpoints {
 	private staleness(token: CheckpointToken, lane: SessionAcceptanceLane): RecoveryFailure | undefined {
 		if (lane.retired) return { kind: "repair_needed", reason: "lane_retired" };
 		if (lane.sessionEpoch !== token.cut.sessionEpoch) return { kind: "repair_needed", reason: "stale_epoch" };
-		if (this.generations.get(streamOf(token.admission)) !== token.admission.generation)
-			return { kind: "repair_needed", reason: "superseded" };
+		const current = this.generations.get(streamOf(token.admission));
+		if (current === undefined) return { kind: "repair_needed", reason: "peer_gone" };
+		if (current !== token.admission.generation)
+			return { kind: "repair_needed", reason: "superseded_token", newerGeneration: current };
 		return undefined;
 	}
 
