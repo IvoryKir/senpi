@@ -121,7 +121,8 @@ async function resolvedNames({ lane, root }: LegacyViewSource, messageId: string
  * Today's floor from the frozen view (RULING-25 Q1, Q4): the latest lifecycle, the active message as its start
  * plus prefix deltas, then each still-open broadcast question with its original id and the remaining time at the
  * freeze clock. Every root is read before the first frame leaves, so a failed read delivers nothing at all; a read
- * that failed because the view was cancelled meanwhile (cursor released, lane replaced or retired) is not reported.
+ * that failed because the view was cancelled meanwhile (cursor released, lane replaced, or its root released by a
+ * retirement) is not reported. A seal keeps a queued view's root, so that view is delivered (RULING-51 Q2=A).
  */
 async function* attachFrames(
 	sessionId: string,
@@ -165,7 +166,8 @@ export function legacyAttachView(
 			source.root.activeMessageId === null);
 	let released = false;
 	const epoch = source?.lane.recoveryEpoch;
-	const cancelled = () => released || source?.lane.retired === true || source?.lane.recoveryEpoch !== epoch;
+	const cancelled = () =>
+		released || (source !== undefined && !source.lane.holds(source.root)) || source?.lane.recoveryEpoch !== epoch;
 	return new GeneratedFramesCursor(
 		empty,
 		() => (source ? attachFrames(sessionId, source, view, cancelled) : (async function* () {})()),

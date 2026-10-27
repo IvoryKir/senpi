@@ -4,7 +4,7 @@ import { type FrozenCheckpoint, RecoveryCheckpoints } from "./compact-recovery-s
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
 import { LegacyReplayStore } from "./legacy-replay-store.ts";
 import { resyncCut } from "./legacy-resync-view.ts";
-import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
+import type { FrozenAcceptedRoot, SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { type ShedMode, SocketEventSinkActor } from "./socket-event-fanout.ts";
 import { EVENT_RESYNC_CAPABILITY } from "./socket-peer-recovery.ts";
 
@@ -58,6 +58,8 @@ export class SessionEventFanout {
 	/** Per connection, each attached session with the ordinal of the attach that holds it. */
 	private readonly connectionSessions = new Map<string, Map<string, number>>();
 	private attachOrdinal = 0;
+	/** Roots an attach baseline still reads; a seal keeps them readable until that view ends (RULING-51 Q2=A). */
+	private readonly attachViews = new Set<FrozenAcceptedRoot>();
 	private readonly registeredCapabilityConnections = new Set<string>();
 
 	registerConnection(
@@ -117,15 +119,15 @@ export class SessionEventFanout {
 		sessions.set(sessionId, ordinal);
 		this.connectionSessions.set(id, sessions);
 		const pinned = this.pin(id, [sessionId]);
+		for (const { root } of pinned) this.attachViews.add(root);
+		const release = () => {
+			for (const { root } of pinned) this.attachViews.delete(root);
+			this.unpin(pinned);
+		};
 		const view = { placeholders: this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY), now: Date.now() };
 		const cursor = this.acceptance.has(sessionId)
-			? legacyAttachView(
-					sessionId,
-					pinned[0],
-					view,
-					this.replay.track(() => this.unpin(pinned)),
-				)
-			: this.replay.freezeAttach(sessionId, { ...view, onRelease: () => this.unpin(pinned) });
+			? legacyAttachView(sessionId, pinned[0], view, this.replay.track(release))
+			: this.replay.freezeAttach(sessionId, { ...view, onRelease: release });
 		registered.actor.installBaseline(
 			cursor,
 			() =>
@@ -270,7 +272,7 @@ export class SessionEventFanout {
 	}
 
 	forgetSession(sessionId: string): void {
-		this.acceptance.get(sessionId)?.retire("close");
+		this.acceptance.get(sessionId)?.retire("close", this.attachViews);
 		this.acceptance.delete(sessionId);
 		this.replay.forget(sessionId);
 	}
