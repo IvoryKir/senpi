@@ -74,6 +74,62 @@ describe.each(["worker", "inline"] as const)("eval permission core (%s)", (mode)
 });
 
 describe("permission lifetime", () => {
+	it.each(["absent", "inactive", "active"] as const)(
+		"checks continuations after settlement with %s permissions",
+		async (policy) => {
+			const root = await mkdtemp(join(tmpdir(), "eval-continuation-"));
+			const kernel = new JavaScriptKernel({
+				sessionId: crypto.randomUUID(),
+				cwd: root,
+				parallelPoolWidth: 2,
+				...(policy === "absent"
+					? {}
+					: {
+							permissions: {
+								state: () => ({ epoch: 1, active: policy === "active", rules: [] }),
+								decide: () => ({ action: "pass" as const }),
+							},
+						}),
+			});
+			try {
+				for (const source of ["promise", "message-port"]) {
+					const path = join(root, source);
+					const setup =
+						source === "promise"
+							? `var gate = Promise.withResolvers(); var result = gate.promise.then(effect); var trigger = () => gate.resolve();`
+							: `var channel = new (require("node:worker_threads").MessageChannel)();
+						var result = new Promise(resolve => channel.port1.once("message", () => {
+							resolve(effect()); channel.port1.close(); channel.port2.close();
+						})); var trigger = () => channel.port2.postMessage(null);`;
+					expect(
+						await kernel.run({
+							cellId: crypto.randomUUID(),
+							code: `
+					var effect = () => { try { require("node:fs").writeFileSync(${JSON.stringify(path)}, "ok"); return "wrote"; }
+						catch (error) { return error.code; } }; ${setup}
+				`,
+							timeoutMs: 8_000,
+						}),
+					).toMatchObject({ ok: true });
+					expect(
+						await kernel.run({
+							cellId: crypto.randomUUID(),
+							code: "trigger(); return await result;",
+							timeoutMs: 8_000,
+						}),
+					).toMatchObject({
+						ok: true,
+						valueRepr: JSON.stringify(policy === "active" ? "cell_permission_denied" : "wrote"),
+					});
+					expect(existsSync(path)).toBe(policy !== "active");
+				}
+			} finally {
+				await kernel.close();
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("bounds a held host decision and interrupts a parked check", async () => {
 		const requested = Promise.withResolvers<void>();
 		const answer = Promise.withResolvers<{ action: "pass" }>();

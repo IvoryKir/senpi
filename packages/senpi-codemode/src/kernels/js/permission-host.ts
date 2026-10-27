@@ -90,7 +90,7 @@ export class KernelPermissionHost {
 	invocation(request: KernelToolsInvokeRequest, options?: AbortSignal | KernelToolsInvokeOptions): () => void {
 		const token = this.resolveInvocationToken(request, options);
 		this.#invocations.set(request.call_id, token);
-		const cancel = () => this.#release(token);
+		const cancel = () => this.#kill(token);
 		token.signal?.addEventListener("abort", cancel, { once: true });
 		if (token.signal?.aborted) cancel();
 		return () => {
@@ -125,7 +125,8 @@ export class KernelPermissionHost {
 	}
 
 	#release(token: CellAuthorityToken): void {
-		this.#kill(token);
+		// Settled no-deny work keeps its async resources; the kernel word still revokes them.
+		if (Atomics.load(new Int32Array(token.authority), 0) & 1) this.#kill(token);
 		this.#tokens.delete(token.id);
 	}
 
@@ -192,17 +193,24 @@ export class KernelPermissionHost {
 			return;
 		}
 		const permission = this.#channel(token);
+		const messageKey = crypto.randomUUID();
 		const { preload, ...workerOptions } = message.options;
 		let worker: Worker;
 		try {
 			worker = new Worker(new URL("./permission-worker-entry.js", import.meta.url), {
 				...workerOptions,
-				workerData: { permission, script: message.script, preload },
+				workerData: {
+					permission: { ...permission, messageKey },
+					script: message.script,
+					preload,
+					userWorkerData: workerOptions.workerData,
+				},
 				transferList: [permission.port],
 			});
 		} catch (error) {
 			permission.port.close();
-			message.port.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
+			message.port.postMessage(workerErrorFrame(error));
+			message.port.postMessage({ type: "exit" });
 			message.port.close();
 			return;
 		}
@@ -215,11 +223,19 @@ export class KernelPermissionHost {
 			}),
 		);
 		this.#children.set(worker, exited);
-		worker.on("error", (error: Error) => message.port.postMessage({ type: "error", message: error.message }));
+		worker.on("error", (error: Error) => message.port.postMessage(workerErrorFrame(error)));
 		worker.on("online", () => message.port.postMessage({ type: "open" }));
-		worker.on("message", (frame: { type: string; value?: unknown; transfer?: Transferable[] }) => {
-			if (frame.type === "cell-worker-message") {
-				message.port.postMessage({ type: "message", value: frame.value }, frame.transfer ?? []);
+		worker.on("message", (frame: unknown) => {
+			if (
+				frame !== null &&
+				typeof frame === "object" &&
+				"key" in frame &&
+				frame.key === messageKey &&
+				"value" in frame &&
+				"transfer" in frame &&
+				Array.isArray(frame.transfer)
+			) {
+				message.port.postMessage({ type: "message", value: frame.value }, frame.transfer);
 			} else message.port.postMessage({ type: "message", value: frame });
 		});
 		message.port.on("message", (frame: { type: string; value?: unknown; transfer?: Transferable[] }) => {
@@ -273,4 +289,16 @@ export class KernelPermissionHost {
 		this.revoke();
 		unregisterPermissionKernel(this.#options.sessionId, this);
 	}
+}
+
+function workerErrorFrame(value: unknown) {
+	const error = value instanceof Error ? value : new Error(String(value));
+	return {
+		type: "error",
+		error,
+		message: error.message,
+		filename: "fileName" in error ? error.fileName : "sourceURL" in error ? error.sourceURL : "",
+		lineno: "lineNumber" in error ? error.lineNumber : "line" in error ? error.line : 0,
+		colno: "columnNumber" in error ? error.columnNumber : "column" in error ? error.column : 0,
+	};
 }

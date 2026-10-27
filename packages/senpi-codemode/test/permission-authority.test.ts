@@ -9,6 +9,35 @@ const token = (word: number) => {
 };
 
 describe("per-context permission authority", () => {
+	it.each([false, true])("settlement preserves only inactive continuations (active=%s)", async (active) => {
+		const host = new KernelPermissionHost(
+			{
+				sessionId: crypto.randomUUID(),
+				cwd: process.cwd(),
+				parallelPoolWidth: 2,
+				permissions: { state: () => ({ epoch: 1, active, rules: [] }), decide: () => ({ action: "pass" }) },
+			},
+			async () => "terminated",
+		);
+		const bootstrap = host.bootstrap();
+		try {
+			const frame = host.frame({ type: "run", cellId: "one", code: "" });
+			expect(frame.authority).toBeDefined();
+			host.settle({ type: "result", cellId: "one", ok: true, durationMs: 0 });
+			expect(authorityDecision(frame.authority, [], bootstrap.kernel)).toBe(active ? "refuse" : "pass");
+			host.revoke();
+			expect(authorityDecision(frame.authority, [], bootstrap.kernel)).toBe("refuse");
+		} finally {
+			bootstrap.port.close();
+			await host.terminateChildren();
+			host.dispose();
+		}
+	});
+
+	it("kernel revocation overrides a retained inactive token", () => {
+		expect(authorityDecision(token(6), [], token(4))).toBe("refuse");
+	});
+
 	it("uses only the current token and refuses dead even when inactive", () => {
 		const inactive = token(6);
 		const active = token(7);

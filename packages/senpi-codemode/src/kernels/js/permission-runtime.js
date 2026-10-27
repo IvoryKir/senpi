@@ -1,12 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { pathToFileURL } from "node:url";
-import { MessageChannel, parentPort, workerData } from "node:worker_threads";
+import { MessageChannel, parentPort } from "node:worker_threads";
 import { authorityDecision } from "./permission-authority.mjs";
 import { createPermissionRequester } from "./permission-slots.mjs";
 
 let initialized = false;
 
-export async function initializePermissionRuntime(install) {
+export async function initializePermissionRuntime(install, workerData) {
 	if (initialized) throw new Error("Permission runtime already initialized");
 	initialized = true;
 	const context = new AsyncLocalStorage();
@@ -62,27 +62,37 @@ export async function initializePermissionRuntime(install) {
 			onmessage = null;
 			onerror = null;
 			onopen = null;
+			onclose = null;
 			onmessageerror = null;
 			constructor(script, options = {}) {
 				super();
 				const token = context.getStore();
-				if (!(Atomics.load(new Int32Array(kernel.authority), 0) & 2)) throw refusal("Permission authority unavailable", kernel.rules[0]);
+				if (authorityDecision(token, [...bound.values()], kernel) === "refuse") throw refusal("Permission authority unavailable", token?.rules[0] ?? kernel.rules[0]);
 				const { port1, port2 } = new MessageChannel();
 				this.#port = port1;
 				port1.on("message", (frame) => {
 					if (frame.type === "message") {
 						const event = new MessageEvent("message", { data: frame.value });
+						if (frame.value === undefined) Object.defineProperty(event, "data", { value: undefined });
 						this.onmessage?.(event);
 						this.dispatchEvent(event);
 					} else if (frame.type === "error") {
-						const event = new ErrorEvent("error", { message: frame.message });
+						const event = new ErrorEvent("error", {
+							message: frame.message, error: frame.error,
+							filename: frame.filename, lineno: frame.lineno, colno: frame.colno,
+						});
 						this.onerror?.(event);
 						this.dispatchEvent(event);
 					} else if (frame.type === "open") {
 						const event = new Event("open");
 						this.onopen?.(event);
 						this.dispatchEvent(event);
-					} else if (frame.type === "exit") port1.close();
+					} else if (frame.type === "exit") {
+						port1.close();
+						const event = new Event("close");
+						this.onclose?.(event);
+						this.dispatchEvent(event);
+					}
 				});
 				port1.on("messageerror", (error) => {
 					const event = new MessageEvent("messageerror", { data: error });
@@ -90,7 +100,9 @@ export async function initializePermissionRuntime(install) {
 					this.dispatchEvent(event);
 				});
 				const href = new URL(String(script), pathToFileURL(`${process.cwd()}/`)).href;
-				data.port.postMessage({ type: "spawn", script: href, token: token?.id, port: port2, options }, [port2]);
+				// Inactive resources belong to the kernel lifetime, not the completed run's registry entry.
+				const activeToken = token && (Atomics.load(new Int32Array(token.authority), 0) & 1) ? token.id : undefined;
+				data.port.postMessage({ type: "spawn", script: href, token: activeToken, port: port2, options }, [port2]);
 			}
 			postMessage(value, options = []) {
 				const transfer = Array.isArray(options) ? options : options.transfer ?? [];
@@ -107,7 +119,7 @@ export async function initializePermissionRuntime(install) {
 		installSessionCwd(data.cwd, { permissionInterposed: true });
 		globalThis.postMessage = (value, options = []) => {
 			const transfer = Array.isArray(options) ? options : options.transfer ?? [];
-			parentPort.postMessage({ type: "cell-worker-message", value, transfer }, transfer);
+			parentPort.postMessage({ key: data.messageKey, value, transfer }, transfer);
 		};
 		globalThis.close = () => parentPort.close();
 		const events = new EventTarget();
@@ -115,6 +127,7 @@ export async function initializePermissionRuntime(install) {
 		globalThis.removeEventListener = events.removeEventListener.bind(events);
 		parentPort.on("message", (value) => context.run(data.token, () => {
 			const event = new MessageEvent("message", { data: value });
+			if (value === undefined) Object.defineProperty(event, "data", { value: undefined });
 			globalThis.onmessage?.(event);
 			events.dispatchEvent(event);
 		}));

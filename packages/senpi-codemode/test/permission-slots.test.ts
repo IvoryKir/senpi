@@ -11,6 +11,65 @@ const request = { token: "one", call: { tool: "write" as const, input: { path: "
 const pass = { action: "pass" as const };
 
 describe("permission slot ownership (#4309)", () => {
+	it.each(["interrupt", "timeout"] as const)("reclaims repeated %s requests beyond the pool size", async (kind) => {
+		const slots = createPermissionSlots();
+		let interrupted = true;
+		let serving: Promise<void> | undefined;
+		const client = createPermissionRequester(slots, {
+			wake: (slot, generation) => {
+				if (!interrupted) serving = servePermissionSlot(slots, slot, generation, () => pass);
+				else if (kind === "interrupt") interruptPermissionSlot(slots, slot, permissionControl(slots, slot));
+			},
+			wait: () => "timed-out",
+		});
+		for (let index = 0; index < 8; index++) {
+			expect(() => client.check(request)).toThrow("Permission check interrupted or timed out");
+		}
+		interrupted = false;
+		expect(client.check(request)).toEqual(pass);
+		await serving;
+	});
+
+	it.each(["interrupt", "timeout"] as const)("claims a stable request before decoding during %s", async (kind) => {
+		const slots = createPermissionSlots();
+		const release = Promise.withResolvers<void>();
+		const seen: unknown[] = [];
+		let serving: Promise<void> | undefined;
+		let ownedSlot = -1;
+		const client = createPermissionRequester(slots, {
+			wake: (slot, generation) => {
+				if (ownedSlot !== -1) {
+					expect(slot).not.toBe(ownedSlot);
+					return;
+				}
+				ownedSlot = slot;
+				serving = servePermissionSlot(
+					slots,
+					slot,
+					generation,
+					(value) => {
+						seen.push(value);
+						return pass;
+					},
+					{ claimed: () => release.promise },
+				);
+				if (kind === "interrupt") {
+					expect(interruptPermissionSlot(slots, slot, permissionControl(slots, slot))).toBe(false);
+				}
+			},
+			wait: () => "timed-out",
+		});
+		try {
+			expect(() => client.check(request)).toThrow();
+			expect(seen).toEqual([]);
+			expect(() => client.check({ ...request, token: "successor" })).toThrow();
+		} finally {
+			release.resolve();
+			await serving;
+		}
+		expect(seen).toEqual([request]);
+	});
+
 	it("does not reuse WRITING while a late host answer completes", async () => {
 		const slots = createPermissionSlots();
 		const claimed = Promise.withResolvers<void>();

@@ -80,6 +80,7 @@ export function createPermissionRequester(buffer, hooks) {
 				} finally {
 					// A WRITING slot belongs to the host even when the worker's deadline has expired.
 					Atomics.compareExchange(control, 0, requested, (generation << 3) | ABANDONED);
+					Atomics.compareExchange(control, 0, (generation << 3) | INTERRUPTED, (generation << 3) | ABANDONED);
 				}
 			}
 			throw new Error("No permission slot available");
@@ -95,12 +96,10 @@ function validRule(rule) {
 export function servePermissionSlot(buffer, index, generation, decide, hooks = {}) {
 	const { control, request, response } = slotViews(buffer, index);
 	const requested = (generation << 3) | REQUESTED;
-	if (Atomics.load(control, 0) !== requested) return Promise.resolve();
+	// Own the request bytes before reading them; an abandoned slot may otherwise be rewritten mid-decode.
+	if (Atomics.compareExchange(control, 0, requested, (generation << 3) | WRITING) !== requested) return Promise.resolve();
 	const finish = async (answer) => {
-		if (Atomics.compareExchange(control, 0, requested, (generation << 3) | WRITING) !== requested) return;
 		try {
-			const pending = hooks.claimed?.();
-			if (pending) await pending;
 			control[2] = encode(response, answer);
 		} catch {
 			control[2] = encode(response, { action: "error" });
@@ -108,12 +107,18 @@ export function servePermissionSlot(buffer, index, generation, decide, hooks = {
 		Atomics.compareExchange(control, 0, (generation << 3) | WRITING, (generation << 3) | ANSWERED);
 		Atomics.notify(control, 0);
 	};
+	const evaluate = () => {
+		try {
+			const result = decide(decode(request, control[1]));
+			return result instanceof Promise
+				? result.then(finish, () => finish({ action: "error" }))
+				: finish(result);
+		} catch {
+			return finish({ action: "error" });
+		}
+	};
 	try {
-		const result = decide(decode(request, control[1]));
-		return result instanceof Promise
-			? result.then(finish, () => finish({ action: "error" }))
-			: finish(result);
-	} catch {
-		return finish({ action: "error" });
-	}
+		const pending = hooks.claimed?.();
+		return pending ? pending.then(evaluate, () => finish({ action: "error" })) : evaluate();
+	} catch { return finish({ action: "error" }); }
 }

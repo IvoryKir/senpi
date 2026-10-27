@@ -1,4 +1,5 @@
 export function authorityDecision(current, bound, kernel) {
+	if (!(Atomics.load(new Int32Array(kernel.authority), 0) & 2)) return "refuse";
 	if (current) {
 		const word = Atomics.load(new Int32Array(current.authority), 0);
 		if (!(word & 2)) return "refuse";

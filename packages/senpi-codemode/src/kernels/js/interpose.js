@@ -3,6 +3,10 @@ const childProcess = process.getBuiltinModule("node:child_process");
 const fs = process.getBuiltinModule("node:fs");
 const path = process.getBuiltinModule("node:path");
 const url = process.getBuiltinModule("node:url");
+const workerThreads = process.getBuiltinModule("node:worker_threads");
+const bootstrap = workerThreads.workerData;
+// Restore the public value before any builtin namespace or user preload observes it.
+if (bootstrap.script) workerThreads.workerData = bootstrap.userWorkerData;
 const originalSpawnSync = childProcess.spawnSync;
 const originalWriteFileSync = fs.writeFileSync;
 const bun = globalThis.Bun;
@@ -58,4 +62,4 @@ if (originalBunSpawnSync) {
 
 // The sole bootstrap handoff is consumed before user code. Neither module exports the originals.
 const { initializePermissionRuntime } = await import("./permission-runtime.js");
-await initializePermissionRuntime((authorize) => { check = authorize; });
+await initializePermissionRuntime((authorize) => { check = authorize; }, bootstrap);
