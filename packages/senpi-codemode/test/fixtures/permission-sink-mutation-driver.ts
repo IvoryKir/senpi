@@ -4,83 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
+import { type SinkMutationRow, sinkMutations } from "./permission-sink-mutation-rows.ts";
 
 const kernelDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "kernels", "js");
-// A native handle for a denied path, obtained through the documented Bun.fetch read residual.
-const minted = "await (await Bun.fetch('file://'+p)).blob()";
-
-const sinks = [
-	{
-		sink: "bun-file-mint",
-		tool: "read",
-		guarded: "stand-in",
-		code: "if(Bun.file(p) instanceof Blob)throw new Error('native handle minted for a denied path');return 'guarded';",
-	},
-	{ sink: "bunfile-read", tool: "read", guarded: "refused", code: `return await (${minted}).text();` },
-	{
-		sink: "bunfile-write",
-		tool: "write",
-		guarded: "refused",
-		code: `return String(await (${minted}).write('mutated'));`,
-	},
-	{
-		sink: "bunfile-write-parts",
-		tool: "read",
-		guarded: "refused",
-		code: `return String(await Bun.file(q).write([${minted}]));`,
-	},
-	{
-		sink: "bunfile-writer",
-		tool: "write",
-		guarded: "refused",
-		code: `const w=(${minted}).writer();w.write('mutated');return String(await w.end());`,
-	},
-	{
-		sink: "bun-write-destination",
-		tool: "write",
-		guarded: "refused",
-		code: `return String(await Bun.write(${minted},'mutated'));`,
-	},
-	{
-		sink: "bun-write-parts",
-		tool: "read",
-		guarded: "refused",
-		code: `return String(await Bun.write(q,[${minted}]));`,
-	},
-	{
-		sink: "bun-serve",
-		tool: "read",
-		guarded: "refused",
-		code: `const s=Bun.serve({port:0,routes:{'/f':${minted}}});try{return await (await fetch(new URL('/f',s.url))).text();}finally{s.stop(true);}`,
-	},
-	{
-		sink: "spawn-stdin",
-		tool: "read",
-		guarded: "refused",
-		code: `const c=Bun.spawn({cmd:['/bin/cat'],stdin:${minted},stdout:'pipe'});return await new Response(c.stdout).text();`,
-	},
-	{
-		sink: "spawn-stdout",
-		tool: "write",
-		guarded: "refused",
-		code: `return String(await Bun.spawn({cmd:['/bin/echo','mutated'],stdout:${minted}}).exited);`,
-	},
-	{
-		sink: "spawn-stderr",
-		tool: "write",
-		guarded: "refused",
-		code: `return String(await Bun.spawn({cmd:['/bin/echo','mutated'],stderr:${minted}}).exited);`,
-	},
-	{
-		sink: "bun-file-mint",
-		tool: "read",
-		guarded: "stand-in",
-		code: "try{structuredClone(Bun.file(p));return 'copied';}catch(error){return error.name;}",
-		expect: "DataCloneError",
-	},
-] as const;
-
-type Row = (typeof sinks)[number];
 
 const root = mkdtempSync(join(tmpdir(), "permission-sink-mutations-"));
 const failures: string[] = [];
@@ -126,7 +52,7 @@ function openKernel(cwd: string, workerEntryUrl?: URL) {
 	});
 }
 
-async function run(kernel: JavaScriptKernel, row: Row) {
+async function run(kernel: JavaScriptKernel, row: SinkMutationRow) {
 	const dir = mkdtempSync(join(root, "row-"));
 	const p = join(dir, "target");
 	const q = join(dir, "source");
@@ -185,8 +111,8 @@ const importShapes = [
 
 const shared = openKernel(root);
 try {
-	for (const row of sinks) {
-		const label = `${row.sink}${"expect" in row ? "/copy" : ""}`;
+	for (const row of sinkMutations) {
+		const label = "label" in row ? row.label : `${row.sink}${"expect" in row ? "/copy" : ""}`;
 		const mutantEntry = mutate(row.sink);
 		const mutant = openKernel(root, mutantEntry);
 		try {

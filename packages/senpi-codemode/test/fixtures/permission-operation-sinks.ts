@@ -20,6 +20,34 @@ const writeSinks = [
 		"const result=Bun.spawnSync({cmd:['/bin/echo','spawned'],stdout:handle}).exitCode;",
 		"number",
 	],
+	// Bun gives an explicit stdio slot priority over the matching named option, so a row that sets both
+	// proves the slot itself is decided instead of the named key standing in for it.
+	[
+		"Bun.spawn(stdio[1] over stdout)",
+		"const result=await Bun.spawn({cmd:['/bin/echo','spawned'],stdout:'ignore',stdio:['ignore',handle,'ignore']}).exited;",
+		"number",
+	],
+	[
+		"Bun.spawn(stdio[2] over stderr)",
+		"const result=await Bun.spawn({cmd:['/bin/sh','-c','echo spawned >&2'],stderr:'ignore',stdio:['ignore','ignore',handle]}).exited;",
+		"number",
+	],
+	[
+		"Bun.spawnSync(stdio[1] over stdout)",
+		"const result=Bun.spawnSync({cmd:['/bin/echo','spawned'],stdout:'ignore',stdio:['ignore',handle,'ignore']}).exitCode;",
+		"number",
+	],
+] as const;
+
+// A slot at index 3 or above has no named option and is opened for both directions, so it is decided
+// for read and for write. The read decision is asked first, the order an O_RDWR open already uses, so
+// the refusal arrives there even though the child only writes to the descriptor.
+const extraSlotSinks = [
+	[
+		"Bun.spawn(stdio[3] write)",
+		"const result=await Bun.spawn({cmd:['/bin/sh','-c','echo spawned >&3'],stdio:['ignore','ignore','ignore',handle]}).exited;",
+		"number",
+	],
 ] as const;
 
 const readSinks = [
@@ -37,13 +65,48 @@ const readSinks = [
 		"Bun.serve(static)",
 		"let result;const s=Bun.serve({port:0,static:{'/f':handle},fetch(){return new Response('miss');}});try{result=await (await fetch(new URL('/f',s.url))).text();}finally{s.stop(true);}",
 	],
+	// The read direction of the same precedence gap: the slot wins, so the named key cannot be the
+	// only thing decided.
+	[
+		"Bun.spawn(stdio[0] over stdin)",
+		"const p2=Bun.spawn({cmd:['/bin/cat'],stdin:'ignore',stdio:[handle,'pipe','ignore']});const result=await new Response(p2.stdout).text();",
+	],
+	// Bun opens a slot at index 3 or above for reading too, so the child can read the file back out.
+	[
+		"Bun.spawn(stdio[3] read)",
+		"const p2=Bun.spawn({cmd:['/bin/sh','-c','cat <&3'],stdio:['ignore','pipe','ignore',handle]});const result=await new Response(p2.stdout).text();",
+	],
+	// A route value may be a per-method map; Bun reads the handle out of it exactly like the flat form.
+	[
+		"Bun.serve(per-method routes)",
+		"let result;const s=Bun.serve({port:0,routes:{'/f':{GET:handle}}});try{result=await (await fetch(new URL('/f',s.url))).text();}finally{s.stop(true);}",
+	],
 ] as const;
 
+// A read-denied path yields a stand-in, and its metadata is a read of the same file: these rows fail
+// unless the stand-in decides metadata the way it decides content.
+const metadataSinks: readonly OperationRow[] = [
+	{ api: "BunFile.size", tool: "read", shape: "number", code: "const result=Bun.file(p).size;" },
+	{ api: "BunFile.lastModified", tool: "read", shape: "number", code: "const result=Bun.file(p).lastModified;" },
+	{ api: "BunFile.exists", tool: "read", shape: "boolean", code: "const result=await Bun.file(p).exists();" },
+	{ api: "BunFile.stat", tool: "read", shape: "number", code: "const result=(await Bun.file(p).stat()).size;" },
+	{ api: "BunFile.slice().size", tool: "read", shape: "number", code: "const result=Bun.file(p).slice(0,1).size;" },
+];
+
 export const sinkOperations: readonly OperationRow[] = [
+	...metadataSinks,
 	...writeSinks.flatMap(([sink, code, shape]) =>
 		origins.map(([origin, mint]): OperationRow => ({
 			api: `${sink} via ${origin}`,
 			tool: "write",
+			shape,
+			code: `const handle=${mint};${code}`,
+		})),
+	),
+	...extraSlotSinks.flatMap(([sink, code, shape]) =>
+		origins.map(([origin, mint]): OperationRow => ({
+			api: `${sink} via ${origin}`,
+			tool: "read",
 			shape,
 			code: `const handle=${mint};${code}`,
 		})),

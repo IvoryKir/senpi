@@ -1,6 +1,7 @@
 import { checkPath, executionPath, replaceMethod } from "./interpose-paths.js";
 
 const READERS = ["text", "json", "bytes", "arrayBuffer", "stream", "formData", "image"];
+const ignore = () => {};
 const WRITERS = ["write", "delete", "unlink"];
 
 export function installBunPermissions(check, resources) {
@@ -14,6 +15,20 @@ export function installBunPermissions(check, resources) {
 		// Captured before any cell runs, so a per-instance "name" cannot redirect a decision away
 		// from the path the runtime will actually open.
 		const nativePath = Object.getOwnPropertyDescriptor(proto, "name").get;
+		const nativeStat = proto.stat;
+		// A memory Blob carries no file and answers nothing; anything the native stat does answer for is
+		// backed by a file this decision cannot name, which is what makes it undecidable rather than safe.
+		const fileBacked = (value) => {
+			let pending;
+			try {
+				pending = nativeStat.call(value);
+			} catch {
+				return true;
+			}
+			if (pending === undefined) return false;
+			if (typeof pending?.then === "function") pending.then(ignore, ignore);
+			return true;
+		};
 		const pathOf = (value) => {
 			try {
 				return nativePath.call(unwrap(value));
@@ -37,8 +52,10 @@ export function installBunPermissions(check, resources) {
 			}
 			if (granted(unwrap(value), mode)) return true;
 			if (!(unwrap(value) instanceof Blob)) return false;
-			// A file-backed handle whose path cannot be read cannot be decided, so it never receives bytes.
+			// A file-backed handle whose path cannot be read cannot be decided, so it never receives bytes
+			// and never hands any out either.
 			if (mode === "write") check(() => ({ unsupported: true }));
+			if (mode === "read") check(() => (fileBacked(unwrap(value)) ? { unsupported: true } : { granted: true })); // sink:undecidable-read
 			return true;
 		};
 		const source = (value) => {
@@ -51,23 +68,39 @@ export function installBunPermissions(check, resources) {
 		const native = (value) => (Array.isArray(value) ? value.map(unwrap) : unwrap(value));
 		Object.assign(files, { source, destination, handle });
 		const standIn = (file) => {
+			// Metadata answers for the same file the content was refused for, so it is decided the same way.
+			const metadata = () => checkPath(check, "read", nativePath.call(file));
 			const surface = {
-				get name() {
-					return nativePath.call(file);
+				exists: (...args) => {
+					metadata(); // sink:standin-metadata
+					return proto.exists.apply(file, args);
 				},
-				get type() {
-					return file.type;
+				stat: (...args) => {
+					metadata(); // sink:standin-metadata
+					return nativeStat.apply(file, args);
 				},
-				get size() {
-					return file.size;
-				},
-				get lastModified() {
-					return file.lastModified;
-				},
-				exists: (...args) => proto.exists.apply(file, args),
-				stat: (...args) => proto.stat.apply(file, args),
 				slice: (...args) => standIn(proto.slice.apply(file, args)),
 			};
+			// The native accessors live on the prototype, so these stay off the own enumerable surface too:
+			// a structured-clone walk still fails on the missing internal slots rather than on a check.
+			Object.defineProperties(surface, {
+				name: { get: () => nativePath.call(file), configurable: true },
+				type: { get: () => file.type, configurable: true },
+				size: {
+					get: () => {
+						metadata(); // sink:standin-metadata
+						return file.size;
+					},
+					configurable: true,
+				},
+				lastModified: {
+					get: () => {
+						metadata(); // sink:standin-metadata
+						return file.lastModified;
+					},
+					configurable: true,
+				},
+			});
 			for (const name of [...READERS, ...WRITERS, "writer"]) {
 				surface[name] = (...args) => proto[name].apply(file, args);
 			}
@@ -117,10 +150,22 @@ export function installBunPermissions(check, resources) {
 			source(data); // sink:bun-write-parts
 			return original.call(this, executionPath(unwrap(target)), native(data), ...args);
 		});
+		// A route value may be a per-method map ({'/f':{GET: handle}}), which Bun reads the handle out of
+		// exactly like the flat form, so every nested value is decided too.
+		const nestedRoutes = (value, depth, seen) => {
+			if (value === null || typeof value !== "object" || depth === 0 || seen.has(value)) return;
+			if (unwrap(value) instanceof Blob) return;
+			seen.add(value);
+			for (const inner of Object.values(value)) {
+				source(inner);
+				nestedRoutes(inner, depth - 1, seen);
+			}
+		};
 		replaceMethod(bun, "serve", (original) => function (options, ...args) {
 			for (const map of [options?.routes, options?.static]) {
 				for (const value of map === null || typeof map !== "object" ? [] : Object.values(map)) {
 					source(value); // sink:bun-serve
+					nestedRoutes(value, 3, new Set()); // sink:bun-serve-nested
 				}
 			}
 			return original.call(this, options, ...args);
