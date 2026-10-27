@@ -18,11 +18,12 @@ export class CompactLaneCurrent {
 		this.state = new CompactSessionState(options);
 	}
 
+	/** Never throws: building the transition from a worker frame's record is part of the fold that may fail. */
 	fold(unit: CanonicalUnit, sequence: number): void {
-		const transition = laneTransition(unit);
-		if (!this.state || !transition) return;
+		if (!this.state) return;
 		try {
-			this.state.accept(transition, sequence);
+			const transition = laneTransition(unit);
+			if (transition) this.state.accept(transition, sequence);
 		} catch (cause) {
 			this.fail(cause);
 		}
@@ -47,7 +48,8 @@ export class CompactLaneCurrent {
 
 	read(cut: FrozenCompactState | undefined) {
 		const owner = cut && this.owners.get(cut);
-		if (!cut || !owner) return Promise.reject(new CompactReadError("ownership"));
+		if (!cut) return Promise.reject(new CompactReadError("unavailable"));
+		if (!owner) return Promise.reject(new CompactReadError("ownership"));
 		return owner.read(cut);
 	}
 
@@ -61,7 +63,9 @@ export class CompactLaneCurrent {
 		return Promise.all([this.cleanup, this.state?.idle()]).then(() => {});
 	}
 
-	private fail(cause: unknown): void {
+	/** The epoch's compact component stops here: a fold failed, or a canonical record never reached this lane. */
+	fail(cause: unknown): void {
+		if (!this.state) return;
 		const reason = cause instanceof Error && "reason" in cause ? String(cause.reason) : String(cause);
 		process.stderr.write(`senpi rpc acceptance: compact current state unavailable: ${reason}\n`);
 		this.retire();

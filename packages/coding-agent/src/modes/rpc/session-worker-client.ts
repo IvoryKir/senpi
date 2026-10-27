@@ -470,8 +470,16 @@ export class SessionWorkerClient {
 				return;
 			}
 			case "canonical":
+			case "canonical_unavailable":
+				// Credited under the same condition as an output frame: only a bound, running incarnation accepts units.
+				if (!this.writer || !this.sessionId || this.stopped) {
+					acknowledge(message.signal, false);
+					return;
+				}
 				if (!this.inOrder(message)) return;
-				this.acceptance?.acceptControl(frameUnit({ ...message, canonical: message.record }));
+				if (message.type === "canonical")
+					this.acceptance?.acceptControl(frameUnit({ ...message, canonical: message.record }));
+				else this.acceptance?.compactUnavailable(message.reason);
 				acknowledge(message.signal, true);
 				return;
 			case "capabilities":

@@ -127,7 +127,7 @@ class WorkerEventWriter extends SessionEventWriter {
 		const canonical = carriedCanonical(record);
 		const order = ordered
 			? {
-					...stamp.stamp(recovery, canonical),
+					...stamp.stamp(recovery, canonical, record),
 					recovery,
 					...(canonical ? { canonical } : {}),
 					...(replaced
@@ -160,6 +160,12 @@ class WorkerEventWriter extends SessionEventWriter {
 		const { ordinal, firstOrdinal = ordinal } = stamp.stamp(control.carrier, control.record);
 		const { record, carrier: recovery } = control;
 		exchange((signal) => ({ type: "canonical", ordinal, firstOrdinal, recovery, record, signal }));
+	}
+	override canonicalUnavailable(_sessionId: string, cause: unknown): void {
+		if (!ordered) return;
+		const { ordinal } = stamp.stamp(undefined, undefined);
+		const reason = cause instanceof Error ? cause.message : String(cause);
+		exchange((signal) => ({ type: "canonical_unavailable", ordinal, reason, signal }));
 	}
 }
 

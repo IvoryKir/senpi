@@ -391,6 +391,9 @@ export class SessionEventWriter {
 	/** A worker isolate frames a canonical-only unit; an in-process host folds block controls in its own lane. */
 	enqueueCanonical(_sessionId: string, _control: CanonicalControl): void {}
 
+	/** A worker isolate reports a lost canonical record to its host lane; an in-process binding tells its lane directly. */
+	canonicalUnavailable(_sessionId: string, _cause: unknown): void {}
+
 	/** The session's records reach `lane` before `enqueue`; sealing or forgetting the session retires it. */
 	registerAcceptance(sessionId: string, lane: SessionAcceptanceLane): void {
 		if (!this.sealedSessions.has(sessionId)) this.fanout.acceptance.set(sessionId, lane);

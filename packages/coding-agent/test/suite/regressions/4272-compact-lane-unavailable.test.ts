@@ -27,7 +27,7 @@ it("a rejected canonical fold makes the epoch's compact state unavailable while 
 		expect(ref?.sequence).toBe(2);
 		const after = rig.lane.freeze();
 		expect(after.current).toBeUndefined();
-		await expect(rig.lane.readCurrent(after)).rejects.toMatchObject({ reason: "ownership" });
+		await expect(rig.lane.readCurrent(after)).rejects.toMatchObject({ reason: "unavailable" });
 		await expect(rig.lane.readCurrent(before)).rejects.toMatchObject({ reason: "retired" });
 		rig.lane.release(before);
 		rig.lane.release(after);

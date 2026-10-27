@@ -117,14 +117,24 @@ class SeededBlockGate {
  * The session's internal structured lane, correlated like its legacy records: seeded `toJsonEvent` projections of
  * every session event plus the three block controls, in session order. Never a legacy destination.
  */
-export function subscribeStructuredSessionRecords(session: AgentSession, output: (record: object) => void): () => void {
+export function subscribeStructuredSessionRecords(
+	session: AgentSession,
+	output: (record: object) => void,
+	failed: (cause: unknown) => void,
+): () => void {
 	const gate = new SeededBlockGate();
 	return subscribeSessionRecords(session, output, undefined, (listener) =>
 		session.subscribeStructured((record) => {
-			const accepted = gate.accept(record);
-			// Correlation reads only `type`, `role` and outer fields, which seeded records and controls keep.
-			// The projection keeps its event's recovery carrier, which pairs it with that event's legacy record.
-			if (accepted) listener(carryRecovery(record, accepted) as AgentSessionEvent);
+			// The session emits this before its legacy listeners: a failure anywhere on this path costs only the
+			// structured record, reported to `failed`, never the legacy and extension delivery of the event.
+			try {
+				const accepted = gate.accept(record);
+				// Correlation reads only `type`, `role` and outer fields, which seeded records and controls keep.
+				// The projection keeps its event's recovery carrier, which pairs it with that event's legacy record.
+				if (accepted) listener(carryRecovery(record, accepted) as AgentSessionEvent);
+			} catch (cause) {
+				failed(cause);
+			}
 		}),
 	);
 }

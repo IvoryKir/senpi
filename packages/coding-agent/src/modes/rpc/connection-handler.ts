@@ -213,6 +213,8 @@ export interface RpcConnectionSink {
 	writeRecord?(record: object): void;
 	/** The internal structured lane (senpi#4272): seeded records and block controls, never a legacy destination. */
 	writeStructured?(record: object): void;
+	/** A structured record was lost (its projection or a receiver threw); the event's legacy delivery continues. */
+	structuredFailed?(cause: unknown): void;
 	waitForBackpressure(): Promise<void>;
 	/** Tears the transport down once its event queue can no longer deliver (overflow, write failure). */
 	close?(): void;
@@ -1037,7 +1039,11 @@ export function createRpcConnectionHandler(
 			unsubscribe = unsubscribeBackpressure = undefined;
 			// Structured first: an Agent built outside the session layer refuses it before anything is installed.
 			unsubscribeStructured = sink.writeStructured
-				? subscribeStructuredSessionRecords(session, (record) => sink.writeStructured?.(tagSessionRecord(record)))
+				? subscribeStructuredSessionRecords(
+						session,
+						(record) => sink.writeStructured?.(tagSessionRecord(record)),
+						(cause) => sink.structuredFailed?.(cause),
+					)
 				: undefined;
 			unsubscribe = subscribeSessionRecords(session, outputEvent, (abortSource) => {
 				lastAbortSource = abortSource;

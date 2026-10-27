@@ -189,6 +189,11 @@ export class SessionAcceptanceLane {
 		return this.sequence;
 	}
 
+	/** A canonical record of this epoch was lost before folding, so its compact state can no longer be complete. */
+	compactUnavailable(cause: unknown): void {
+		if (!this.retired) this.current.fail(cause);
+	}
+
 	freeze(): FrozenAcceptedRoot {
 		const root: FrozenAcceptedRoot = Object.freeze({
 			sessionEpoch: this.epoch,

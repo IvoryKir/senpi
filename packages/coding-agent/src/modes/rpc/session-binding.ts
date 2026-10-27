@@ -58,8 +58,9 @@ export async function createRpcSessionBinding(
 	const unit = (
 		carrier: RecoveryCarrier | undefined,
 		record: CanonicalRecord | undefined,
+		legacy?: object,
 	): CanonicalUnit | undefined => {
-		const { ordinal, firstOrdinal } = stamp.stamp(carrier, record);
+		const { ordinal, firstOrdinal } = stamp.stamp(carrier, record, legacy);
 		return carrier && record && firstOrdinal !== undefined ? { record, carrier, ordinal, firstOrdinal } : undefined;
 	};
 	const enqueueRecord = (record: object): void => {
@@ -74,7 +75,7 @@ export async function createRpcSessionBinding(
 		} else if (lane) {
 			lane.applyTranscript(journaled?.drainTranscript() ?? []);
 			const carrier = recoveryCarrier(record);
-			lane.accept(record, carrier, unit(carrier, canonical));
+			lane.accept(record, carrier, unit(carrier, canonical, record));
 		} else if (canonical) carryCanonical(record, canonical);
 		writer.enqueue(sessionId, record);
 	};
@@ -125,6 +126,10 @@ export async function createRpcSessionBinding(
 				? {
 						writeStructured: (record: object) => {
 							if (entry.scope.state !== "closed") writeStructuredInScope(record);
+						},
+						structuredFailed: (cause: unknown) => {
+							if (lane) lane.compactUnavailable(cause);
+							else writer.canonicalUnavailable(sessionId, cause);
 						},
 					}
 				: {}),
