@@ -12,10 +12,26 @@
   // entry when its finding is fixed.
   // Root-workspace file ignores (knip reads the root workspace's ignoreIssues only at the top level).
   "ignoreIssues": {
+      // pre-existing at origin main aceb1cc1d9: unused export agent (run-by-path entry, newly export-checked)
+      "scripts/agent-treeshake-smoke-entry.ts": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/build-binaries-release-recovery.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export collectExternalPackages (run-by-path entry, newly export-checked)
+      "scripts/build-coding-agent-bundle.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/bun-bundle-provider-coverage.test.ts": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export DEPENDENCY_GROUPS (run-by-path entry, newly export-checked)
+      "scripts/bun-lock-workspace-specifiers.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports changelogBullets, insertTrackerEntries, insertChangelogBullets (run-by-path entry, newly export-checked)
+      "scripts/changes-fragments.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports CANONICAL_SECTIONS, isTestFile, isDocsFile, nearestTrackerFor, entryCovers (run-by-path entry, newly export-checked)
+      "scripts/changes-md-policy.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export foreignCommits (run-by-path entry, newly export-checked)
+      "scripts/check-bot-branch-commits.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export CHANGELOG_PATTERN (run-by-path entry, newly export-checked)
+      "scripts/check-pr-changelog-facts.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports validateGitRevision, isRuntimeSourceChange, main (run-by-path entry, newly export-checked)
+      "scripts/check-pr-changelog.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/ci-coding-agent-shards.test.mjs": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
@@ -24,6 +40,8 @@
       "scripts/ci-format-gate.test.mjs": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/ci-macos-combined.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export PR_FILES_API_LIMIT (run-by-path entry, newly export-checked)
+      "scripts/ci-platform-scope.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/ci-platform-scope.test.mjs": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
@@ -36,30 +54,93 @@
       "scripts/copy-codemode-sidecar-closure.test.mjs": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages fake-dependency, workspace-dependency, consumer-left, consumer-right; imports that do not resolve ./index.js
       "scripts/copy-codemode-sidecar.test.mjs": ["unlisted","unresolved"],
+      // pre-existing at origin main aceb1cc1d9: unused export updateClaudeAgentSdkPlatformLock (run-by-path entry, newly export-checked)
+      "scripts/generate-claude-agent-sdk-platform-lock.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export RATCHET_RULES (run-by-path entry, newly export-checked)
+      "scripts/lint-ratchet.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/model-catalog-opengateway-workflows.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports MODEL_CATALOG_REVISION_RE, isValidModelCatalogPiVersion (run-by-path entry, newly export-checked)
+      "scripts/model-catalog-protocol.ts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports refreshEntry, summaryMarkdown (run-by-path entry, newly export-checked)
+      "scripts/model-catalog-refresh.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export AI_CHANGELOG_FIXTURE (run-by-path entry, newly export-checked)
+      "scripts/model-catalog-refresh.test-support.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export CI_BUILD_STEP (run-by-path entry, newly export-checked)
+      "scripts/native-grep-addon.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports normalizeCallText, THIRD_PARTY_EXCLUDED_BUNDLES (run-by-path entry, newly export-checked)
+      "scripts/no-raw-tls-client-scan.test-support.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/node-bundle-reinstall.test.ts": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/node-bundle-smoke.test.ts": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export parityDir (run-by-path entry, newly export-checked)
+      "scripts/oxlint-biome-parity.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export default (run-by-path entry, newly export-checked)
+      "scripts/oxlint/biome-ports.ts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export default (run-by-path entry, newly export-checked)
+      "scripts/oxlint/copy.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export default (run-by-path entry, newly export-checked)
+      "scripts/oxlint/model-type-comparison.ts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export pinSenpiPeerDependency (run-by-path entry, newly export-checked)
+      "scripts/publish-manifest.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages semver
       "scripts/publish-registry-dependencies.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export default (run-by-path entry, newly export-checked)
+      "scripts/qa/fixtures/read-summary-provider.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports packageSourceDirs, grepCount, useSiteLines (run-by-path entry, newly export-checked)
+      "scripts/qa/fork-preservation-checks.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export runInstalledPlugin (run-by-path entry, newly export-checked)
+      "scripts/qa/omp-item2-plugin.d.mts": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages typebox
       "scripts/qa/omp-item8-fixture.ts": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports sha256, buildReadBinaries (run-by-path entry, newly export-checked)
+      "scripts/qa/read-summary-build.d.mts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export binaryTargets (run-by-path entry, newly export-checked)
+      "scripts/qa/read-summary-build.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export missingAssetAndBudget (run-by-path entry, newly export-checked)
+      "scripts/qa/read-summary-packaging.d.mts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export compiledReadParity (run-by-path entry, newly export-checked)
+      "scripts/qa/read-summary-parity.d.mts": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export frozenReadFiles (run-by-path entry, newly export-checked)
+      "scripts/qa/read-summary-parity.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/qa/webfetch-compiled.mjs": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @xterm/headless
-      "scripts/qa/xterm-render.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports assertRawStream, gridToHtml, renderToGrid, replayToSnapshots, runAssertion, verifyManifest (run-by-path entry, newly export-checked)
+      "scripts/qa/xterm-render.mjs": ["unlisted","exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
       "scripts/read-summary-release-contract.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports ISLAND_PREFIX, FORBIDDEN_ISLAND_ENTRIES, hashFile, hashManifests, diffManifestHashes (run-by-path entry, newly export-checked)
+      "scripts/regenerate-bun-lock-isolated.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export CAPTURE_MAX_BUFFER (run-by-path entry, newly export-checked)
+      "scripts/release-capture.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export extractUnreleasedSubsections (run-by-path entry, newly export-checked)
+      "scripts/release-changelog.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export SUPERVISOR_TIMEOUT_EXIT (run-by-path entry, newly export-checked)
+      "scripts/release-forced-test-supervisor.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/release-graph-codemode.test.ts": ["unlisted"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages zod
       "scripts/release-graph-exclusions.test.ts": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused export TRANSIENT_CODES (run-by-path entry, newly export-checked)
+      "scripts/rename-sync-retry.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export delegationRisk (run-by-path entry, newly export-checked)
+      "scripts/root-workspace-scripts.test.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages jiti
       "scripts/run-tests.test.mjs": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports UsageError, runWorkspaces (run-by-path entry, newly export-checked)
+      "scripts/run-workspaces.mjs": ["exports"],
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages chalk
       "scripts/session-transcripts.ts": ["unlisted"],
+      // pre-existing at origin main aceb1cc1d9: unused exports fromDiff, main (run-by-path entry, newly export-checked)
+      "scripts/sync-changes-fragments.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused export repoTempName (run-by-path entry, newly export-checked)
+      "scripts/test-temp-guard.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports TRACKED_HARNESS_ALLOWLIST, HARNESS_ROOT_PATTERNS, findTrackedHarnessPaths (run-by-path entry, newly export-checked)
+      "scripts/tracked-harness-artifacts-audit.test.mjs": ["exports"],
+      // pre-existing at origin main aceb1cc1d9: unused exports windowsTreeKillArgs, windowsTreeKillArgsAsync (run-by-path entry, newly export-checked)
+      "scripts/windows-process-tree.d.mts": ["exports"],
   },
   "workspaces": {
     ".": {
@@ -72,14 +153,62 @@
         "scripts/oxlint/*.{mjs,ts}",
         // These sidecars type an .mjs module for its importers and tests.
         "scripts/**/*.d.mts",
+        // Run by path from a package.json script or a CI workflow `run:` line. knip skips export checks for such
+        // files unless they are listed here by name in a workspace with includeEntryExports; the
+        // scripts/knip-entry-exports.test.mjs probe fails when one is missing.
+        "scripts/audit-changes-md.mjs",
+        "scripts/build-all.mjs",
+        "scripts/build-binaries-flags.test.mjs",
+        "scripts/build-coding-agent-bundle.mjs",
+        "scripts/check-browser-smoke.mjs",
+        "scripts/check-claude-code-model-support.mjs",
+        "scripts/check-conflict-markers.mjs",
+        "scripts/check-entry-graphs.mjs",
+        "scripts/check-pinned-deps.mjs",
+        "scripts/check-pr-changelog.mjs",
+        "scripts/check-runtime-deps.mjs",
+        "scripts/check-ts-relative-imports.mjs",
+        "scripts/ci-platform-scope.mjs",
+        "scripts/coding-agent-consumer.mjs",
+        "scripts/copy-codemode-sidecar.mjs",
+        "scripts/copy-pty-native.mjs",
+        "scripts/create-bin-stubs.mjs",
+        "scripts/diff-model-catalog.mjs",
+        "scripts/generate-claude-agent-sdk-platform-lock.mjs",
+        "scripts/generate-coding-agent-install-lock.mjs",
+        "scripts/hydrate-lock-registry-metadata.mjs",
+        "scripts/lint-ratchet.mjs",
+        "scripts/local-release.mjs",
+        "scripts/local-release.test.mjs",
+        "scripts/model-catalog-refresh.mjs",
+        "scripts/prepare-bun-compile-assets.mjs",
+        "scripts/probe-native-grep.mjs",
+        "scripts/probe-native-pty-lifecycle.mjs",
+        "scripts/profile-coding-agent-node.mjs",
+        "scripts/publish-catalog-refresh.mjs",
+        "scripts/publish-model-catalog.mjs",
+        "scripts/publish.mjs",
+        "scripts/qa/read-summary-build.mjs",
+        "scripts/qa/read-summary-smoke.mjs",
+        "scripts/regenerate-bun-lock-isolated.mjs",
+        "scripts/release-notes.mjs",
+        "scripts/release.mjs",
+        "scripts/run-tests.mjs",
+        "scripts/run-workspaces.mjs",
+        "scripts/sync-versions.js",
+        "scripts/test-temp-guard.mjs",
+        "scripts/verify-package-managers.mjs",
       ],
+      "includeEntryExports": true,
     },
     ".agents/skills/senpi-qa": {
       // A private dependency island outside the npm workspaces (its own package.json).
       "project": ["scripts/**/*.{js,mjs,cjs,ts,mts}"],
       // Every QA driver is run by path (node .agents/skills/senpi-qa/scripts/<driver>.mjs), including
       // scenarios/*.mjs and drivers added later under any subdirectory.
-      "entry": ["scripts/**/*.{mjs,ts}"],
+      // Run by path from a CI workflow `run:` line (see the root workspace's run-by-path list).
+      "entry": ["scripts/**/*.{mjs,ts}", "scripts/mock-loop.mjs"],
+      "includeEntryExports": true,
       "ignoreIssues": {
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @anthropic-ai/claude-agent-sdk; imports that do not resolve ../../../packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/executable.ts
         "scripts/anthropic-subscription-auth-spike.mjs": ["unlisted","unresolved"],
@@ -87,20 +216,52 @@
         "scripts/anthropic-subscription-persistent-query-spike.mjs": ["unlisted","unresolved"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @anthropic-ai/claude-agent-sdk; imports that do not resolve ../../../packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/executable.ts
         "scripts/anthropic-subscription-sysprompt-spike.mjs": ["unlisted","unresolved"],
+          // pre-existing at origin main aceb1cc1d9: unused exports runScenario, DriveError, SYNC_BEGIN, SYNC_END, waitForContent, waitForPostResize (run-by-path entry, newly export-checked)
+          "scripts/grok-neo-drive.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export POLICY_REFUSAL (run-by-path entry, newly export-checked)
+          "scripts/lib/anthropic-policy-refusal-server.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports FLATTEN_MARKER, FLATTEN_TRAILER (run-by-path entry, newly export-checked)
+          "scripts/lib/anthropic-subscription-fullstack-support.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports phasePlainConversation, phaseAbortMidTurn, phaseModelSwitch, phaseThinkingSwitch, phaseRestartIsolation, phaseBranchNavigation, phaseIdleExpiry (run-by-path entry, newly export-checked)
+          "scripts/lib/anthropic-subscription-matrix-phases.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports LIVE_GATE, stripCredentialEnvironment, redactSecrets (run-by-path entry, newly export-checked)
+          "scripts/lib/anthropic-subscription-spike-support.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export toolUseSseBody (run-by-path entry, newly export-checked)
+          "scripts/lib/anthropic-subscription-toolless-compact-server.mjs": ["exports"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages ws
         "scripts/lib/codex-websocket-mock.mjs": ["unlisted"],
+          // pre-existing at origin main aceb1cc1d9: unused exports APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, realAgentDir, scrubSandboxEnv, freePort, inspectProcess, OwnedSignalRefusedError, dateStamp, readJsonl (run-by-path entry, newly export-checked)
+          "scripts/lib/common.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export runTextToolLeakCommand (run-by-path entry, newly export-checked)
+          "scripts/lib/mock-loop-text-leak.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export inspectProcess (run-by-path entry, newly export-checked)
+          "scripts/lib/owned-signal.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports EVIDENCE_PREFIX, EXACT_EVIDENCE_PATH, normalizeEvidencePath (run-by-path entry, newly export-checked)
+          "scripts/lib/tui-resume-args.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export RpcClient (run-by-path entry, newly export-checked)
+          "scripts/rpc-drive.mjs": ["exports"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @xterm/headless
         "scripts/scenarios/btw-during-eval-qa.mjs": ["unlisted"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @bufbuild/protobuf
-        "scripts/scenarios/cursor-exec-lifecycle/wire.mjs": ["unlisted"],
+          // pre-existing at origin main aceb1cc1d9: unused export CONNECT_END_STREAM_FLAG (run-by-path entry, newly export-checked)
+          "scripts/scenarios/cursor-exec-lifecycle/wire.mjs": ["unlisted","exports"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @xterm/headless
         "scripts/scenarios/dollar-invocation-qa.mjs": ["unlisted"],
+          // pre-existing at origin main aceb1cc1d9: unused export default (run-by-path entry, newly export-checked)
+          "scripts/scenarios/goal-policy-rejection-fixture.ts": ["exports"],
       },
     },
     "packages/agent": {
       // Design notes with illustrative code, not part of the package.
       "project": ["**/*.{js,mjs,cjs,ts,mts}", "!docs/**"],
       "vitest": { "config": ["vitest.config.ts", "vitest.harness.config.ts", "vitest.benchmark.config.ts"] },
+      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      "entry": [
+        "benchmark/session/allocation-profile.ts",
+        "benchmark/session/loaded-footprint.ts",
+        "scripts/generate-telemetry-docs.ts",
+      ],
+      "includeEntryExports": true,
       "ignoreFiles": [
         // pre-existing at origin main aceb1cc1d9: a file nothing imports or runs
         "src/harness/runtime/index.ts",
@@ -110,6 +271,8 @@
         "@vscode/tree-sitter-wasm",
       ],
       "ignoreIssues": {
+          // pre-existing at origin main aceb1cc1d9: unused export generateTelemetryDocs (run-by-path entry, newly export-checked)
+          "scripts/generate-telemetry-docs.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports generateSummaryWithRequest
         "src/harness/compaction/compaction.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports WINDOWS_PROCESS_TREE_ROWS
@@ -162,7 +325,12 @@
         "bedrock-provider.d.ts",
         // The pi-ai bin (package.json bin points at dist/cli.js).
         "src/cli.ts",
+        // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
+        "scripts/check-model-data.ts",
+        "scripts/generate-models.ts",
+        "scripts/opengateway-catalog-diff.ts",
       ],
+      "includeEntryExports": true,
       // dist/cli.js is a committed bin stub the build overwrites.
       "ignore": ["dist/**"],
       // The package-root shim re-exports the built file.
@@ -174,6 +342,10 @@
       "ignoreIssues": {
         // Generated protobuf-es output is retained as a complete set (regenerate, never hand-edit).
         "src/api/*/gen/*_pb.ts": ["exports", "duplicates"],
+          // pre-existing at origin main aceb1cc1d9: unused export modelDataStructureHash (run-by-path entry, newly export-checked)
+          "scripts/model-data.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export providerIdOfShard (run-by-path entry, newly export-checked)
+          "scripts/model-shards.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports anthropicRequestSkeleton
         "src/api/anthropic-request-shape-log.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports CHATGPT_USAGE_LIMIT_PREFIX, describeChatGptUsageLimit
@@ -1220,10 +1392,21 @@
     "packages/evals": {
       "vitest": { "config": ["vitest.evals.config.ts", "vitest.test.config.ts"] },
       // The container runner's entrypoint and install step (docker/Dockerfile).
-      "entry": ["docker/*.{ts,mjs}"],
+      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      "entry": ["docker/*.{ts,mjs}", "scripts/run-evals.mjs", "src/cli.ts"],
+      "includeEntryExports": true,
     },
     "packages/pty": {
+      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      "entry": ["native/check-prebuild-fresh.mjs"],
+      "includeEntryExports": true,
       "ignoreIssues": {
+          // pre-existing at origin main aceb1cc1d9: unused exports getHost, getVendoredPrebuildPath (run-by-path entry, newly export-checked)
+          "native/check-prebuild-fresh.mjs": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports loadNativePty, nativePty (run-by-path entry, newly export-checked)
+          "native/index.d.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export loadNativePty (run-by-path entry, newly export-checked)
+          "native/index.js": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports trackSettler
         "src/screen-operations.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports DEFAULT_COLS, DEFAULT_ROWS, DEFAULT_RAW_TAIL_BYTES
@@ -1237,12 +1420,25 @@
         // Kernel worker and child-process entries started by path (inline-worker.ts, process-worker.ts).
         "src/kernels/js/inline-worker-entry.js",
         "src/kernels/js/process-entry.js",
+        // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
+        "scripts/bench-eval.ts",
+        "scripts/gate-build.ts",
+        "scripts/gate-eval.ts",
       ],
+      "includeEntryExports": true,
       "ignoreFiles": [
         // pre-existing at origin main aceb1cc1d9: a file nothing imports or runs
         "src/kernels/js/prelude.ts",
       ],
       "ignoreIssues": {
+          // pre-existing at origin main aceb1cc1d9: unused export DATASET_SIZE (run-by-path entry, newly export-checked)
+          "scripts/bench-cells.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export collectGarbage (run-by-path entry, newly export-checked)
+          "scripts/bench-measure.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export HOST_SAMPLE_INTERVAL_MS (run-by-path entry, newly export-checked)
+          "scripts/bench-sampler.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export TRIM_FRACTION (run-by-path entry, newly export-checked)
+          "scripts/bench-stats.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports kernelToolInvokeScopeSchema
         "src/bridge/kernel-tools-protocol.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports AgentIsolationNotAppliedError
@@ -1269,6 +1465,8 @@
         "src/handles/handle-args.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports HandleOutcomeError, WaitAllRejectedError
         "src/handles/wait.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports KERNEL_TOOLS_CAPABILITIES, KERNEL_TOOLS_UNSUPPORTED, enabledLanguagesFrom (run-by-path entry, newly export-checked)
+          "src/index.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports sniffImageMimeType, isBinaryData, imagePayload
         "src/kernels/js/display-image.js": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports GROUP_SIGNAL_NOTICE_TAG, agentProcessGroup
@@ -1277,28 +1475,52 @@
         "src/kernels/js/handles.js": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports INTERRUPT_ACK_MS, WORKER_TERMINATE_DEADLINE_MS, abandonedWorkerNote
         "src/kernels/js/interrupt-bounds.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports kernelToolCallContext, inKernelToolInvoke (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-context.d.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export createToolNamespace (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-define.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports KERNEL_TOOL_ERROR_CODES, KernelToolError
         "src/kernels/js/kernel-tools-errors.js": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports KERNEL_TOOL_ERROR_CODES
         "src/kernels/js/kernel-tools-errors.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports matcherKey, ellipsizeMiddle, normalizeKernelToolName
         "src/kernels/js/kernel-tools-naming.js": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export parseToolFunction (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-parse.d.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports createToolNamespace, createKernelToolRegistry (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-registry.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports defaultInputSchema, isPlainJsonObject, isJsonValue
         "src/kernels/js/kernel-tools-schema.js": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports hostToolRefusal, hostDeniedError (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-scope.d.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export KERNEL_TOOLS_UNSUPPORTED (run-by-path entry, newly export-checked)
+          "src/kernels/js/kernel-tools-types.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export scanDrainText (run-by-path entry, newly export-checked)
+          "src/kernels/js/process-drain-scan.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports isProcessAlive, signalProcess, readProcessTable, collectDescendants, ownedRoots
         "src/kernels/js/process-tree-host.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports isProcessAlive, signalProcess, readProcessTable, collectDescendants, ownedRoots, terminateProcessTrees, terminateProcessGroups (run-by-path entry, newly export-checked)
+          "src/kernels/js/process-tree.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports isProcessAlive, signalProcess, readProcessTable, collectDescendants, ownedRoots
         "src/kernels/js/process-tree.js": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports JavaScriptProcessRuntimeUnavailableError
         "src/kernels/js/process-worker.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @babel/types
         "src/kernels/js/rewrite-imports.ts": ["unlisted"],
+          // pre-existing at origin main aceb1cc1d9: unused exports parseWindowsRows, windowsTreeKillPids, windowsTreeKillArgs, listWindowsRows, killWindowsTree (run-by-path entry, newly export-checked)
+          "src/kernels/js/windows-tree-kill.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports parseWindowsRows, windowsTreeKillPids, windowsTreeKillArgs
         "src/kernels/js/windows-tree-kill.js": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export createWorkerCore (run-by-path entry, newly export-checked)
+          "src/kernels/js/worker-core.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports errorFromBridge
         "src/kernels/js/worker-host.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports resolvePackage
         "src/kernels/js/worker-package-resolve.js": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused exports createCellRequire, createRequire (run-by-path entry, newly export-checked)
+          "src/kernels/js/worker-require.d.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export installShellCapture (run-by-path entry, newly export-checked)
+          "src/kernels/js/worker-shell-capture.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports PROCESS_STARTUP_DEADLINE_MS, ProcessKernelStartupTimeoutError
         "src/kernels/js/worker-startup.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports PythonKernelStartupError
@@ -1354,7 +1576,14 @@
       },
     },
     "packages/session-backends/sqlite-node": {
+      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      "entry": ["scripts/copy-migrations.mjs"],
+      "includeEntryExports": true,
       "ignoreIssues": {
+          // pre-existing at origin main aceb1cc1d9: unused export wrapNodeSqliteDatabase (run-by-path entry, newly export-checked)
+          "src/index.ts": ["exports"],
+          // pre-existing at origin main aceb1cc1d9: unused export SQLITE_SESSION_EXTENSION (run-by-path entry, newly export-checked)
+          "src/sqlite/repo.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports insertEntryRow, entryStructureFromRow
         "src/sqlite/session/entries.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports insertUsageLedgerRow
@@ -1363,7 +1592,9 @@
     },
     "packages/tui": {
       // Benchmarks run by path (run-pr530-benchmarks.mjs, perf-trend-local.sh).
-      "entry": ["bench/*.ts"],
+      // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
+      "entry": ["bench/*.ts", "bench/frame-cost.ts", "native/win32/build.mjs", "test/tui-main-screen-mouse.test.ts"],
+      "includeEntryExports": true,
       "ignoreIssues": {
         // pre-existing at origin main aceb1cc1d9: unused exports parseKeyboardProtocolNegotiationSequence
         "src/terminal.ts": ["exports"],
