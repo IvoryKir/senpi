@@ -1,8 +1,5 @@
 import { createHash } from "node:crypto";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
-import { loadAnthropicOAuth } from "@earendil-works/pi-ai/oauth";
-import { getAgentDir } from "../../../../config.ts";
-import { AuthStorage } from "../../../auth-storage.ts";
 import { CredentialStoreBusyError } from "../../../lockfile-policy.ts";
 import { emitProviderAccountFailover, emitProviderAccountsChanged } from "./account-events.ts";
 import { ANTHROPIC_SUBSCRIPTION_PROVIDER_ID } from "./account-management.ts";
@@ -13,21 +10,23 @@ import {
 	envSlotToken,
 	listAccounts,
 	refreshSlot,
-	type SlotRefresher,
 } from "./accounts.ts";
-import { isBlockedFor, selectAccount } from "./affinity.ts";
+import { isBlockedFor, type PinSource, selectAccount } from "./affinity.ts";
 import { type AuthenticatedAttemptInput, createAttemptMessages, type RetainableAttempt } from "./auth-attempt.ts";
 import { recoverAuthBlockedSlots } from "./auth-block-recovery.ts";
+import { activeBoundary } from "./auth-lane-boundary.ts";
 import { hasRequestOauthToken, mergeRequestAuthEnvironment, stripManagedAuthEnvironment } from "./auth-environment.ts";
 import { writeConfigDirCredential } from "./config-dir-credentials.ts";
-import { classifySdkError, sdkAssistantFailure, sdkResultFailure } from "./errors.ts";
+import { asksLegacyLongContext } from "./context-window.ts";
 import { runFailover } from "./failover.ts";
+import { markLongContextRefused } from "./long-context.ts";
+import { classifyForRequest, retryAtStandardWindowOnce, sdkFailure, visibleSdkMessage } from "./long-context-retry.ts";
 import { isGrantRejected, refreshFailure } from "./refresh-failure.ts";
-import { refusalError } from "./refusal.ts";
 import type { Options, SDKMessage, SdkQuery } from "./sdk-boundary.ts";
 import type { AnthropicSubscriptionProviderSettings, AnthropicSubscriptionTokenInjection } from "./settings.ts";
 
 export { ANTHROPIC_SUBSCRIPTION_PROVIDER_ID } from "./account-management.ts";
+export { authLaneRefresher, overrideAuthLaneBoundary, resetAuthLaneBoundary } from "./auth-lane-boundary.ts";
 
 export const EXPIRING_WITHIN_MS = 5 * 60_000;
 
@@ -35,37 +34,6 @@ export const EXPIRING_WITHIN_MS = 5 * 60_000;
 const NO_MANAGED_ACCOUNTS_ERROR =
 	"authentication_failed: No Anthropic Subscription accounts configured for the managed lane; " +
 	"run /login anthropic-subscription or set CLAUDE_CODE_OAUTH_TOKEN";
-
-type AuthLaneBoundary = {
-	createStore: () => CredentialStore;
-	env: () => NodeJS.ProcessEnv;
-	getAgentDir: () => string;
-	now: () => number;
-	refresher: SlotRefresher;
-};
-
-async function refreshWithAnthropicOAuth(refresh: string, signal: AbortSignal) {
-	const oauth = await loadAnthropicOAuth();
-	const credential = await oauth.refresh({ type: "oauth", access: "", refresh, expires: 0 }, signal);
-	return { access: credential.access, refresh: credential.refresh, expires: credential.expires };
-}
-
-const defaultBoundary: AuthLaneBoundary = {
-	createStore: () => AuthStorage.create(),
-	env: () => process.env,
-	getAgentDir,
-	now: () => Date.now(),
-	refresher: refreshWithAnthropicOAuth,
-};
-let activeBoundary = defaultBoundary;
-
-export function overrideAuthLaneBoundary(override: Partial<AuthLaneBoundary>): void {
-	activeBoundary = { ...activeBoundary, ...override };
-}
-
-export function resetAuthLaneBoundary(): void {
-	activeBoundary = defaultBoundary;
-}
 
 export type { AuthenticatedAttemptInput } from "./auth-attempt.ts";
 
@@ -95,6 +63,8 @@ type ManagedPool = {
 	environment: NodeJS.ProcessEnv;
 	lane: Exclude<AnthropicSubscriptionTokenInjection, "ambient">;
 	pinnedAccount?: string;
+	pinSource?: Exclude<PinSource, "cli">;
+	accountOrder?: readonly string[];
 	store: CredentialStore;
 };
 
@@ -129,7 +99,19 @@ async function managedPool(
 	if (lane === "ambient") return undefined;
 	if (accounts.length === 0) throw new Error(NO_MANAGED_ACCOUNTS_ERROR);
 	const stored = credential?.type === "oauth" ? (credential as AnthropicSubscriptionCredential) : undefined;
-	return { accounts, environment, lane, pinnedAccount: settings.pinnedAccount ?? stored?.pinned, store };
+	return {
+		accounts,
+		environment,
+		lane,
+		pinnedAccount: settings.pinnedAccount ?? stored?.pinned,
+		...(settings.pinnedAccount !== undefined
+			? { pinSource: "settings" as const }
+			: stored?.pinned !== undefined
+				? { pinSource: "stored" as const }
+				: {}),
+		...(stored?.order === undefined ? {} : { accountOrder: stored.order }),
+		store,
+	};
 }
 
 function storedAccounts(credential: Credential | undefined, pool: ManagedPool): AccountSlot[] {
@@ -196,38 +178,25 @@ async function prepareSlot(
 	return { env: { ...childEnvironment, CLAUDE_CONFIG_DIR: directory }, credentialDigest };
 }
 
-function sdkFailure(message: SDKMessage): unknown | undefined {
-	const refusal = refusalError(message);
-	if (refusal) return refusal;
-	if (message.type === "assistant") return sdkAssistantFailure(message);
-	if (message.type === "result") return sdkResultFailure(message);
-	return undefined;
-}
-
-function visibleSdkMessage(message: SDKMessage): boolean {
-	if (message.type !== "stream_event") return false;
-	return /^(?:content_block_start|content_block_delta|content_block_stop)$/.test(message.event.type);
-}
-
 /** Resolves managed OAuth immediately before each subprocess spawn and retries only pre-delta failures. */
 export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncGenerator<SDKMessage> {
 	const signal = input.signal ?? new AbortController().signal;
 	const pool = await managedPool(input.providerSettings, input.env);
 	if (!pool) {
-		const options = input.buildOptions("ambient");
 		const parentEnvironment = mergeRequestAuthEnvironment(activeBoundary.env(), input.env);
 		const ambientEnvironment: Record<string, string | undefined> = { ...parentEnvironment };
 		for (const name of Object.keys(ambientEnvironment)) {
 			if (name.startsWith("SENPI_")) delete ambientEnvironment[name];
 		}
 		// Lane-owned variables from buildOptions (the compaction-owner overlay) win over the host.
-		options.env = { ...ambientEnvironment, ...options.env };
-		yield* await createAttemptMessages(input, {
-			accountName: "ambient",
-			accounts: [],
-			authLane: "ambient",
-			options,
-		});
+		let askedLegacyLongContext = false;
+		const ambientAttempt = async () => {
+			const options = input.buildOptions("ambient");
+			askedLegacyLongContext = asksLegacyLongContext(options.model);
+			options.env = { ...ambientEnvironment, ...options.env };
+			return createAttemptMessages(input, { accountName: "ambient", accounts: [], authLane: "ambient", options });
+		};
+		yield* retryAtStandardWindowOnce(ambientAttempt, () => askedLegacyLongContext);
 		return;
 	}
 	pool.accounts = await recoverAuthBlockedSlots({
@@ -242,18 +211,28 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 		now: activeBoundary.now(),
 		transientError: (error) => (error instanceof CredentialStoreBusyError ? error : refreshFailure(error)),
 	});
+	let askedLegacyLongContext = false;
 	yield* runFailover({
 		accounts: pool.accounts,
+		accountFallback: input.providerSettings.accountFallback,
 		selectFn: (accounts) =>
 			selectAccount(accounts, {
 				sessionId: input.sessionId,
 				pinnedAccount: input.pinnedAccount ?? pool.pinnedAccount,
+				...(input.pinnedAccount !== undefined
+					? { pinSource: "cli" as const }
+					: pool.pinSource === undefined
+						? {}
+						: { pinSource: pool.pinSource }),
+				accountFallback: input.providerSettings.accountFallback,
+				...(pool.accountOrder === undefined ? {} : { accountOrder: pool.accountOrder }),
 				...(input.preferredAccount === undefined ? {} : { preferredAccount: input.preferredAccount }),
 				now: activeBoundary.now(),
 				...(input.model === undefined ? {} : { model: input.model }),
 			}),
 		runAttempt: async (slot) => {
 			const options = input.buildOptions(pool.lane);
+			askedLegacyLongContext = asksLegacyLongContext(options.model);
 			const accounts = pool.accounts.map((account) => ({ ...account }));
 			const prepared = await prepareSlot(pool, slot, signal);
 			options.env = { ...prepared.env, ...options.env };
@@ -261,11 +240,14 @@ export async function* queryWithAuthLane(input: AuthenticatedQueryInput): AsyncG
 				accountName: slot.name,
 				accounts,
 				authLane: pool.lane,
+				pinSource: input.pinnedAccount !== undefined ? "cli" : pool.pinSource,
 				options,
 				credentialDigest: prepared.credentialDigest,
 			});
 		},
-		classify: classifySdkError,
+		classify: (error) => classifyForRequest(error, askedLegacyLongContext),
+		...(input.sessionId === undefined ? {} : { sessionKey: input.sessionId }),
+		onLongContextRefused: () => markLongContextRefused(),
 		store: pool.store,
 		providerId: ANTHROPIC_SUBSCRIPTION_PROVIDER_ID,
 		...(input.model === undefined ? {} : { model: input.model }),

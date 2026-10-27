@@ -10,6 +10,7 @@ import {
 	pinAccount,
 	removeAccount,
 } from "./accounts.ts";
+import { forgetSessionBlocksFor } from "./failover.ts";
 
 export const ANTHROPIC_SUBSCRIPTION_PROVIDER_ID = "anthropic-subscription";
 
@@ -18,8 +19,23 @@ export type ProviderAccountSummary = {
 	readonly displayName?: string;
 	readonly source: AccountSlot["source"];
 	readonly blocked: boolean;
+	/** Same meaning as the generic account listing's fields (senpi#4327); present only while blocked. */
+	readonly blockedReason?: "auth_error" | "rate_limit" | "disabled";
+	readonly blockedUntil?: number;
 	readonly pinned: boolean;
 };
+
+function timedBlock(
+	account: Pick<AccountSlot, "blockedUntil" | "blockReason">,
+	now: number,
+): Pick<ProviderAccountSummary, "blocked" | "blockedReason" | "blockedUntil"> {
+	const { blockedUntil, blockReason } = account;
+	// Like the generic listing: a disabled account never lifts on its own and has no end time.
+	if (blockReason === "account_disabled") return { blocked: true, blockedReason: "disabled" };
+	if (blockedUntil === undefined || blockedUntil <= now) return { blocked: false };
+	const blockedReason = blockReason === "auth_error" || blockReason === "rate_limit" ? blockReason : undefined;
+	return { blocked: true, ...(blockedReason === undefined ? {} : { blockedReason }), blockedUntil };
+}
 
 export function getProviderAccounts(
 	storage: AuthStorage,
@@ -35,7 +51,7 @@ export function getProviderAccounts(
 			name: account.name,
 			...(displayName === undefined ? {} : { displayName }),
 			source: account.source,
-			blocked: account.blockedUntil !== undefined && account.blockedUntil > now,
+			...timedBlock(account, now),
 			pinned: credential.pinned === account.name,
 		};
 	});
@@ -80,6 +96,52 @@ export async function removeProviderAccount(storage: AuthStorage, provider: stri
 		return removeAccount(credential, name);
 	});
 	emitProviderAccountsChanged(provider);
+}
+
+/**
+ * Lifts a usage or rate-limit block the user knows is wrong (extra usage bought, a misread reset).
+ * Auth blocks stay: only a login or the re-probe can lift those. Returns whether a block was lifted.
+ */
+export async function unblockProviderAccount(
+	storage: AuthStorage,
+	provider: string,
+	name: string,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+	assertManagedProvider(provider);
+	let lifted = false;
+	await storage.modify(provider, async (current) => {
+		const credential = credentialFrom(current);
+		const account = listAccounts(credential, (key) => env[key]).find((candidate) => candidate.name === name);
+		if (!account) throw new Error(`Provider account not found: ${name}`);
+		if (account.blockedUntil === undefined || account.blockReason === "auth_error") return current;
+		lifted = true;
+		const state = credential.slotState?.[name];
+		return {
+			...credential,
+			...(state === undefined
+				? {}
+				: {
+						slotState: {
+							...credential.slotState,
+							[name]: state.modelBlocks ? { modelBlocks: state.modelBlocks } : {},
+						},
+					}),
+			accounts: (credential.accounts ?? []).map((candidate) => {
+				if (candidate.name !== name) return candidate;
+				const {
+					blockedUntil: _blockedUntil,
+					blockReason: _blockReason,
+					blockedAt: _blockedAt,
+					...rest
+				} = candidate;
+				return rest;
+			}),
+		};
+	});
+	const sessionScoped = forgetSessionBlocksFor(name);
+	if (lifted || sessionScoped) emitProviderAccountsChanged(provider);
+	return lifted || sessionScoped;
 }
 
 function assertManagedProvider(provider: string): void {

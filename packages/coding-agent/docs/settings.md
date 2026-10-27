@@ -41,6 +41,14 @@ Use `/trust` in interactive mode to save a project trust decision for future ses
 
 Senpi includes a built-in permission system for tool calls. It evaluates a preset first, then applies explicit rules from global settings, project settings, and CLI flags. The last matching rule wins.
 
+For `external_directory`, this order applies separately to each path spelling: the absolute lexical path, the physical prefix plus unresolved components at each symlink followed, the final physical path, and their on-disk case spellings for existing components. The most restrictive result wins across spellings (`deny` > `ask` > `allow`). Thus a blanket deny followed by an allow for a shared directory still allows that directory, but an allow on a symlink's destination cannot override a deny on an intermediate path. Resolution uses metadata and link targets without opening path components; case recovery may list directories, but unavailable listings do not invalidate component identities proven by metadata. Missing path components retain their supplied case. More than 16 distinct spellings, 40 symlink hops, or a loop yields `ask`, even with a remembered approval.
+
+"Allow always" scopes remain tied to the resolved directory and cannot override a deny. An explicit allow for only the resolved directory can still leave an unmatched alias at `ask`; a remembered "Always" approval covers that same resolved target across its aliases.
+
+Resolution follows a kernel-style component queue. A name is inspected at the current physical directory; a symlink prepends its target components, and an absolute target resets the position to its filesystem root. `.` is skipped and `..` moves to the physical parent, after preceding symlinks have been followed. Neither the request nor a link target has dot segments collapsed before this walk. Relative targets are never joined to an unresolved lexical parent, so the walk cannot invent a route such as `a/d` when `a/L1` actually points to `b/c` and `L2` points to `../d`.
+
+A genuine intermediate spelling can still match only a blanket deny even when specific rules allow both the original path and the final destination. For example, if `entry` links to `proj` and `proj/x/secret` links to `outside`, allowing `entry/*` and `outside/*` does not override a blanket deny on the intermediate `proj/x/secret/file.txt`. Allow that intermediate route explicitly if it should be accessible.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `permissionPreset` | string | `"full-access"` | Permission preset: `"full-access"`, `"workspace"`, `"accept-edits"`, `"auto"`, `"read-only"`, or `"ask"` |
@@ -101,9 +109,9 @@ Permission rules are a confirmation policy, not a sandbox. Senpi, extensions, pa
 |---------|------|---------|-------------|
 | `defaultProvider` | string | - | Startup provider (e.g., `"anthropic"`, `"openai"`; saved with Ctrl+S in `/model`, or edited manually) |
 | `defaultModel` | string | - | Startup model ID (saved with Ctrl+S in `/model`, or edited manually) |
-| `recommendedModels` | string[] | `kimi-k3`, `gpt-6-astra`, `gpt-5.6-sol`, `claude-fable-5-1`, `claude-opus-5-5`, `glm-5.2` | Preferred default model ids in priority order. Built-in thinking levels are kimi-k3/`max`, GPT-6 Astra/`high`, GPT-5.6 Sol/`medium`, claude-fable-5-1/`high`, claude-opus-5-5/`max`, glm-5.2/`max`. Override the list or disable auto-switch with `--no-recommended-models` / `warnings.offRecommendedModel`. |
+| `recommendedModels` | string[] | `claude-opus-5-5`, `claude-fable-5-1`, `kimi-k3.1-pro`, `gpt-6-astra`, `gpt-6.1-sol`, `glm-5.3` | Preferred default model ids in priority order. Built-in thinking levels are claude-opus-5-5/`medium`, claude-fable-5-1/`xhigh`, kimi-k3.1-pro/`max`, gpt-6-astra/`xhigh`, gpt-6.1-sol/`medium`, glm-5.3/`max`. Override the list or disable auto-switch with `--no-recommended-models` / `warnings.offRecommendedModel`. |
 | `defaultThinkingLevel` | string | - | Startup thinking level (saved with Ctrl+S in `/thinking`, or edited manually): `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` |
-| `promptPreset` | string | `"auto"` | Force a system prompt preset: `"auto"`, `"kimi-k2-6"`, `"kimi-k2-7"`, `"kimi-k2-8"`, `"kimi-k3"`, `"glm-5.2"`, `"glm-5.3"`, `"grok-4.5"`, `"grok-4.6"`, `"grok-4.7"`, `"claude-fable-5"`, `"claude-fable-5-1"`, `"claude-opus-5-5"`, `"claude-opus-5"`, `"claude-sonnet-5-5"`, `"claude-haiku-5-5"`, `"claude-opus-4-5"`, `"claude-opus-4-6"`, `"claude-opus-4-7"`, `"claude-opus-4-8"`, `"deepseek-v4-flash"`, `"deepseek-v4-flash-0731"`, `"deepseek-v4-1-flash"`, `"deepseek-v4-pro"`, `"gpt-5"`, `"gpt-5.2"`, `"gpt-5.3-codex"`, `"gpt-5.4"`, `"gpt-5.5"`, `"gpt-5.6"`, or `"gpt-6-astra"` |
+| `promptPreset` | string | `"auto"` | Force a system prompt preset: `"auto"`, `"kimi-k2-6"`, `"kimi-k2-7"`, `"kimi-k2-8"`, `"kimi-k3"`, `"kimi-k3-1"`, `"glm-5.2"`, `"glm-5.3"`, `"grok-4.5"`, `"grok-4.6"`, `"grok-4.7"`, `"claude-fable-5"`, `"claude-fable-5-1"`, `"claude-opus-5-5"`, `"claude-opus-5"`, `"claude-sonnet-5-5"`, `"claude-haiku-5-5"`, `"claude-opus-4-5"`, `"claude-opus-4-6"`, `"claude-opus-4-7"`, `"claude-opus-4-8"`, `"deepseek-v4-flash"`, `"deepseek-v4-flash-0731"`, `"deepseek-v4-1-flash"`, `"deepseek-v4-pro"`, `"gemini-4-argon"`, `"gpt-5"`, `"gpt-5.2"`, `"gpt-5.3-codex"`, `"gpt-5.4"`, `"gpt-5.5"`, `"gpt-5.6"`, or `"gpt-6-astra"` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `showCacheMissNotices` | boolean | `false` | Show transcript notices for significant prompt-cache misses, compaction or branch-summary usage, and provider recovery diagnostics such as dropped Anthropic thinking blocks |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level. Anthropic, Google, and Bedrock use these natively. OpenAI-compatible models use them when `compat.thinkingTokenBudgetField` (or `supportsThinkingTokenBudget`) is set. |
@@ -198,6 +206,19 @@ Set `PI_SKIP_VERSION_CHECK=1` to disable the senpi version update check. Use `--
   }
 }
 ```
+
+### Context Files and Skills
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `contextFiles.maxBytesPerFile` | number | `65536` | Maximum UTF-8 bytes loaded from each AGENTS.md / CLAUDE.md, including the truncation note and any closing code fence |
+| `contextFiles.maxTotalBytes` | number | `131072` | Maximum combined UTF-8 bytes of loaded context files, including truncation notes and closing code fences |
+
+Files receive budget nearest-first: the current directory, its ancestors, then the global file. A cut prefers a newline in the last quarter of the available content budget; otherwise it uses a UTF-8 character boundary. An open backtick or tilde fence is closed with the same marker before the truncation note; the closing marker's bytes count against the budget. Files with less than 1024 bytes of budget left are skipped when they would need truncation, with a warning distinguishing an undersized per-file limit from budget used by nearer files. Both limits accept positive numbers (rounded down); invalid values use the defaults.
+
+The skills section has a fixed 48 KiB rendered UTF-8 byte cap, including its roots table and markup. Above 100 visible skills or 64 KiB of descriptions, descriptions become one line of at most 160 characters. If needed to meet the section cap, smaller catalogs also use compact descriptions, then all descriptions are dropped. If names and locations still exceed the cap, only the first skills that fit are listed, with the omitted count inside the section. Skills remain available for explicit invocation.
+
+Context cuts, skipped files, and compacted or omitted skills share the "Context size limits" resource notice in interactive mode and appear once on stderr at startup in print, JSON, and RPC modes, with the affected path when present. Ordinary skill validation warnings keep their existing diagnostic behavior and are not printed to stderr by this size check.
 
 ### Compaction
 
@@ -307,7 +328,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 
 #### Model fallback chains
 
-`retry.fallbackChains` maps a primary-model selector to an ordered list of fallback selectors. A selector is `provider/model` with an optional `:thinking-level` suffix, or a bare `model` id that applies to every provider serving that model family. Bare selectors expand against the models you actually have: providers holding an OAuth credential are preferred, then a fixed precedence order, and OpenRouter is never chosen by expansion. Senpi ships bare default chains for `claude-fable-5-1` and `claude-fable-5` - `claude-opus-5-5:max`, then `claude-opus-5:max`, `claude-opus-4-8:max`, and `claude-opus-4-6:max` - and for `claude-opus-5-5` - `claude-opus-5:max`, then `claude-opus-4-8:max`, then `claude-opus-4-6:max` - so Fable 5.1, Fable 5 and Opus 5.5 keep a fallback chain whichever provider serves them, and a fallback never leaves the Anthropic family; set a key to `[]` to opt out entirely, or set one `provider/claude-fable-5-1` key to override just that provider. For example, this switches Fable 5.1 to Kimi K3 at `max` thinking when an eligible failure occurs:
+`retry.fallbackChains` maps a primary-model selector to an ordered list of fallback selectors. A selector is `provider/model` with an optional `:thinking-level` suffix, or a bare `model` id that applies to every provider serving that model family. Bare selectors expand against the models you actually have: providers holding an OAuth credential are preferred, then a fixed precedence order, and OpenRouter is never chosen by expansion. Senpi ships bare default chains for `claude-fable-5-1` and `claude-fable-5` - `claude-opus-5-5:max`, then `claude-opus-5:max` - and for `claude-opus-5-5` - `claude-opus-5:max` - so Fable 5.1, Fable 5 and Opus 5.5 keep a fallback chain whichever provider serves them, and a fallback never leaves the Anthropic family; set a key to `[]` to opt out entirely, or set one `provider/claude-fable-5-1` key to override just that provider. For example, this switches Fable 5.1 to Kimi K3 at `max` thinking when an eligible failure occurs:
 
 ```json
 {
@@ -402,6 +423,7 @@ When unset, senpi leaves provider payloads unchanged. This setting currently app
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `anthropicSubscriptionProvider.enabled` | boolean | `false` | Enable the ambient (host-CLI-derived) lane of `anthropic-subscription`. Env override: `SENPI_CLAUDE_SDK_OAUTH_ENABLED`. Explicit senpi-side logins (stored OAuth accounts in `auth.json`, `CLAUDE_CODE_OAUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN_<n>` env accounts) keep the provider available with this unset |
+| `anthropicSubscriptionProvider.accountFallback` | boolean | `true` | Allow automatic switching between managed Claude accounts. `false` surfaces failure instead of using another account, including when the selected account is already blocked. Same-account retries and refresh remain enabled. Independent of `retry.modelFallback`. Env override: `SENPI_CLAUDE_SDK_OAUTH_ACCOUNT_FALLBACK` |
 | `cursorCliOauthProvider.enabled` | boolean | `false` | Enable the `cursor-cli-oauth` fallback lane and automatic native credential bootstrap. Env override: `SENPI_CURSOR_CLI_OAUTH_ENABLED` |
 | `providers.<id>.maxConcurrency` | number | unlimited | Cap the streaming requests senpi keeps in flight against one provider, keyed by registry provider id (`anthropic`, `openai`, ...). `0`, a negative value, a fraction, or an absent key all mean unlimited |
 
@@ -462,13 +484,80 @@ A foreground `bash` command still running at the budget is handed to a live back
 instead of being killed; its explicit `timeout` remains the kill deadline. See
 `terminal.timeoutAction` to switch that hand-off back to a kill.
 
+### Handoff Hint
+
+When a large session sits idle past its model's prompt-cache lifetime, the next reply has to resend the whole
+context at the cache-write price. The handoff hint shows one line above the editor with that price and the price of
+a fresh session's first reply, plus two choices: **Start fresh with a handoff** (`/handoff`) opens a new session,
+linked to this one, whose first entry is a short brief built from the session's state (goal, open todos, last request
+and answer, touched files, the old session's path); **Keep going** (`/handoff keep`) hides it for the rest of the
+session. A reopened session (a resume or `--continue`) counts its cache age from its last reply, so reopening a large
+session after its cache expired shows the hint before the first reply. The hint never interrupts a turn and never
+switches on its own; if another extension cancels the switch, the hint stays. `/handoff` with any other argument
+only explains the two choices. Prices come from the model's cost card; on a
+subscription they are API-price equivalents. No hint is shown for models without a cache lifetime or a price, for task
+children, in print/JSON mode, for turns an extension started, while a goal is active, or once compaction is about to
+run.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `handoffHint.enabled` | boolean | `true` | Offer the hint at all |
+| `handoffHint.minContextTokens` | number | `200000` | No hint below this context size |
+| `handoffHint.minSavingUsd` | number | `1` | No hint unless a fresh session saves at least this much on the next reply |
+
 ### Shell
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows); supports a leading `~` for the home directory |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
+| `tools.bash.redactSecretsInOutput` | boolean | `false` | Redact credential-shaped bash stdout and stderr before streaming, retaining output, or writing output spill files |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
+
+To opt in, set:
+
+```json
+{
+  "tools": {
+    "bash": {
+      "redactSecretsInOutput": true
+    }
+  }
+}
+```
+
+The default is off. When enabled, bash replaces GitHub, Slack, OpenAI/Anthropic,
+AWS access-key, Google API-key and JWT-shaped tokens, PEM private-key blocks,
+Bearer credentials, and secret-named `KEY=VALUE` values with `<redacted>`.
+Assignment names are retained; `AUTH` and `AUTHORIZATION` match complete name
+segments, not `AUTHOR`. Quoted assignment values end at their closing quote or
+the next newline. Bearer values must be token-shaped (at least eight characters,
+including a digit or token punctuation), so ordinary prose is retained when
+its word delimiter arrives.
+This applies to core bash, user `!cmd`/`!!cmd`, and persistent terminal
+bash, including streamed updates, background completion notices, terminal screen
+reads, structured results, output spill files and resulting transcript entries.
+The tool-child runtime uses the same setting.
+Credential prefixes are recognized after non-alphanumeric boundaries inside
+URLs, paths and compound tokens. ANSI styling and charset designations do not
+split credential detection; hidden OSC payloads (such as
+terminal titles and hyperlink targets) are omitted while redaction is enabled.
+
+An incomplete token is held until its delimiter or process exit. Persistent
+terminals also flush after 50 ms without output so idle prompts and complete
+cursor-control sequences reach screen reads. Once a token contains a full known
+public credential prefix (including `AKIA`, `AIza`, or `eyJ`), or a Bearer value
+has begun, idle flushes withhold it until a delimiter or process exit. Secret-named
+assignment values remain masked from their first character. Mere prefix fragments
+such as `I`, `e.g.`, `git`, `sk`, and `AI` are published verbatim at idle.
+At a delimiter, withheld tokens are redacted if they match a complete credential
+shape, otherwise released verbatim. At process exit, incomplete started shapes
+are replaced by their public prefix plus `<redacted>`; already published prefix
+characters are not repeated. Tokens longer than 8,192 characters are
+conservatively redacted to bound memory. Enabling the setting affects newly
+started commands; it does not rewrite existing terminal sessions, transcripts,
+command arguments, or files created by commands. This is shape detection, not a
+guarantee that arbitrary encoded or unrecognized credentials will be removed.
 
 Windows paths in JSON must use forward slashes or escaped backslashes:
 
@@ -543,8 +632,10 @@ This is the default and has no setting. Tools may declare `exposure: "eval"` to 
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `engineTurns.maxPerUserInput` | number | `150` | Turns the agent may start on its own (stream-rule nudges, goal continuations, other extension follow-ups) after one user message before it pauses; `0` turns the limit off |
+| `engineTurns.maxPerUserInput` | number | `0` | Turns the agent may start on its own (stream-rule nudges, goal continuations, other extension follow-ups) after one user message before it pauses; `0` (the default) turns the limit off |
 | `engineTurns.maxToolFreePerMinute` | number | `12` | Turns started on its own within 60 s that called no tool before it pauses; `0` turns the limit off |
+| `turn_inactivity_ms` | number | `3600000` | Milliseconds a turn may run with no tool progress before it is stopped as a deadline; renewed only by tool execution events and admitted user input, never by streamed text. Minimum `60000`; `0` disables |
+| `turn_max_runtime_ms` | number | `21600000` | Hard cap on one turn's runtime from prompt accept; `0` disables |
 
 When a limit is reached the session pauses with a notice instead of starting another turn; any message you send continues it, because only turns since your last message count.
 
@@ -588,6 +679,7 @@ A goal whose continuation already stopped does not count as waiting: it keeps it
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths, plus `~`. |
 | `sessionShutdownHandlerWarnMs` | number | `2000` | Warn when a single extension's `session_shutdown` handler has run this long. Set to `0` to disable the warning. |
 | `sessionShutdownHandlerTimeoutMs` | number | `10000` | Hard cap for a single extension's `session_shutdown` handler. Set to `0` to disable the cap. |
+| `sessionShutdownQuitBudgetMs` | number | `2000` | Total time a quit that exits senpi waits on all `session_shutdown` handlers together. Set to `0` to disable it. |
 
 ```json
 { "sessionDir": ".senpi/sessions" }
@@ -600,8 +692,10 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 senpi bounds each extension's `session_shutdown` handler so one slow extension cannot hold quit, `/reload`, `/new`, `/resume` or a fork hostage. Past `sessionShutdownHandlerWarnMs` it logs one warning naming the extension; at `sessionShutdownHandlerTimeoutMs` it aborts the `signal` that handler received on the event, reports an extension error, and continues teardown with the next handler. The handler itself is not killed - it keeps running until the process exits - so extensions that persist durable state should observe `event.signal`.
 
 ```json
-{ "sessionShutdownHandlerWarnMs": 2000, "sessionShutdownHandlerTimeoutMs": 10000 }
+{ "sessionShutdownHandlerWarnMs": 2000, "sessionShutdownHandlerTimeoutMs": 10000, "sessionShutdownQuitBudgetMs": 2000 }
 ```
+
+A quit that exits senpi (interactive quit, print mode, a single-connection RPC process) also has a total budget, counted from when senpi starts running the shutdown handlers (the steps before them, such as stopping the TUI, are not counted): every handler still starts, in order, but once `sessionShutdownQuitBudgetMs` has passed senpi stops waiting, logs one warning naming the extension that overran it and the elapsed time, and exits. Handlers that start after that point get 1 ms, so their synchronous cleanup still runs. `/reload`, `/new`, `/resume`, forks, and an RPC host closing one session while it keeps running keep only the per-handler limits.
 
 Only `session_shutdown` is bounded; other extension events (including ask-user and approval dialogs, which may legitimately wait for minutes) are unaffected.
 

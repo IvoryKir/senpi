@@ -1,6 +1,23 @@
-import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import {
+	closeSync,
+	type Dirent,
+	existsSync,
+	fstatSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
+import {
+	authorizeSkillPath,
+	BlockedSkillLinkError,
+	type SkillAllowedSet,
+	type SkillProvenance,
+} from "./skill-access.ts";
 
 /** Bytes read before falling back to the rest of SKILL.md when the closing --- is absent. */
 export const SKILL_FRONTMATTER_PREFIX_BYTES = 8192;
@@ -13,6 +30,14 @@ const FRONTMATTER_CLOSE_CR = Buffer.from("\r---");
 type IgnoreMatcher = ReturnType<typeof ignore>;
 
 export type SkillDiscoveryMode = "pi" | "agents";
+export interface SkillWalkOptions {
+	readonly provenance?: SkillProvenance;
+	readonly allowedSet?: SkillAllowedSet;
+	readonly ancestry?: ReadonlySet<string>;
+	readonly onDirectory?: (path: string) => void;
+	/** Optional cache owned by a single discovery pass, never retained on a Skill. */
+	readonly realpath?: (path: string) => string;
+}
 
 function toPosixPath(p: string): string {
 	return p.split(sep).join("/");
@@ -45,13 +70,19 @@ function prefixIgnorePattern(line: string, prefix: string): string | null {
 	return negated ? `!${prefixed}` : prefixed;
 }
 
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+/**
+ * Applies the ignore files present in `entries`, the listing of `dir` the walk already read, so no
+ * directory pays a probe per ignore-file name (omo#11437). Names compare case-insensitively, as the
+ * former existence probe did on case-insensitive volumes; a name that does not open is skipped.
+ */
+export function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string, entries: readonly Dirent[]): void {
 	const relativeDir = relative(rootDir, dir);
 	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+	const names = new Set(entries.map((entry) => entry.name.toLowerCase()));
 
 	for (const filename of IGNORE_FILE_NAMES) {
+		if (!names.has(filename)) continue;
 		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
 		try {
 			const content = readFileSync(ignorePath, "utf-8");
 			const patterns = content
@@ -125,16 +156,31 @@ export function collectSkillEntries(
 	mode: SkillDiscoveryMode,
 	ignoreMatcher?: IgnoreMatcher,
 	rootDir?: string,
+	options: SkillWalkOptions = {},
 ): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
+	let canonical: string;
+	try {
+		authorizeSkillPath(dir, options.provenance, options.allowedSet, true);
+		canonical = (options.realpath ?? realpathSync.native)(dir);
+	} catch (error) {
+		// Leave a blocked root as a candidate so the resource loader retains its
+		// provenance and produces the visible diagnostic without descending here.
+		if (error instanceof BlockedSkillLinkError) return [dir];
+		canonical = resolve(dir); // Embedded/user assets retain descriptorless discovery.
+	}
+	if (options.ancestry?.has(canonical)) return entries;
+	const ancestry = new Set(options.ancestry);
+	ancestry.add(canonical);
+	options.onDirectory?.(dir);
 
 	const root = rootDir ?? dir;
 	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
 
 	try {
 		const dirEntries = readdirSync(dir, { withFileTypes: true });
+		addIgnoreRules(ig, dir, root, dirEntries);
 
 		for (const entry of dirEntries) {
 			if (entry.name !== "SKILL.md") {
@@ -189,7 +235,7 @@ export function collectSkillEntries(
 			if (!isDir) continue;
 			if (ig.ignores(`${relPath}/`)) continue;
 
-			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
+			entries.push(...collectSkillEntries(fullPath, mode, ig, root, { ...options, ancestry }));
 		}
 	} catch {
 		// Ignore errors
@@ -198,6 +244,6 @@ export function collectSkillEntries(
 	return entries;
 }
 
-export function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode): string[] {
-	return collectSkillEntries(dir, mode);
+export function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode, options?: SkillWalkOptions): string[] {
+	return collectSkillEntries(dir, mode, undefined, undefined, options);
 }

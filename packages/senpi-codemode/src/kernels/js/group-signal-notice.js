@@ -49,6 +49,9 @@ function substitutionEnd(text, index) {
 		const char = text[at];
 		if (char === "\\") {
 			at++;
+		} else if (char === "#" && BEFORE_COMMENT.test(text[at - 1])) {
+			at = text.indexOf("\n", at);
+			if (at === -1) return -1;
 		} else if (char === "'" || char === '"') {
 			at = closingQuote(text, at);
 		} else if (char === "(") {

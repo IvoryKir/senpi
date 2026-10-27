@@ -8,8 +8,11 @@ import { legacyProviderIdRejection } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
+import type { SpawnedBy } from "../core/session-lifecycle-types.ts";
+import { isSpawnedBy } from "../core/session-spawned-by.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
 import { isGrokNeoEnabled } from "./grok-neo-gate.ts";
+import { isToolRuntimeKind, type ToolRuntimeKind } from "./tool-runtime.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -29,6 +32,7 @@ export interface Args {
 	noSession?: boolean;
 	session?: string;
 	sessionId?: string;
+	spawnedBy?: SpawnedBy;
 	fork?: string;
 	rebind?: string;
 	sessionDir?: string;
@@ -50,6 +54,7 @@ export interface Args {
 	noThemes?: boolean;
 	noContextFiles?: boolean;
 	listModels?: string | true;
+	printPromptSizes?: boolean;
 	listTips?: boolean;
 	offline?: boolean;
 	tuiMode?: TuiMode;
@@ -59,6 +64,8 @@ export interface Args {
 	grokNeo?: boolean;
 	/** Serve independently routed plain-RPC sessions over one host. */
 	multiSession?: boolean;
+	presenterBootstrapFd?: number;
+	mcpPresenterEnforcement?: boolean;
 	/**
 	 * Opt non-interactive app modes (notably RPC) into engine-side session auto-titling.
 	 * Deprecated for shared hosts: prefer per-session `open_session.auto_title`.
@@ -68,8 +75,12 @@ export interface Args {
 	listen?: string;
 	/** Explicit session runtime for a multi-session host; `resolveSessionRuntime` owns the default. */
 	sessionRuntime?: SessionRuntimeKind;
+	/** Explicit tool runtime; `resolveToolRuntime` owns the default and the env fallback. */
+	toolRuntime?: ToolRuntimeKind;
 	messages: string[];
 	fileArgs: string[];
+	/** A bare `-` argument: read stdin to EOF even when a prompt argument is given. */
+	readStdin?: boolean;
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
 	unknownFlags: Map<string, boolean | string>;
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
@@ -189,6 +200,25 @@ export function parseArgs(args: string[], options: { grokNeoEnabled?: boolean } 
 			result.session = args[++i];
 		} else if (arg === "--session-id" && i + 1 < args.length) {
 			result.sessionId = args[++i];
+		} else if (arg === "--spawned-by") {
+			const value = args[i + 1];
+			if (value === undefined || value.startsWith("-")) {
+				result.diagnostics.push({ type: "error", message: "--spawned-by requires a JSON object" });
+			} else {
+				i++;
+				try {
+					const ancestry: unknown = JSON.parse(value);
+					if (isSpawnedBy(ancestry)) result.spawnedBy = ancestry;
+					else
+						result.diagnostics.push({
+							type: "error",
+							message: "--spawned-by requires non-empty parentSessionId, rootSessionId, and taskId strings",
+						});
+				} catch (error: unknown) {
+					if (!(error instanceof SyntaxError)) throw error;
+					result.diagnostics.push({ type: "error", message: "--spawned-by must be valid JSON" });
+				}
+			}
 		} else if (arg === "--fork" && i + 1 < args.length) {
 			result.fork = args[++i];
 		} else if (arg === "--rebind" && i + 1 < args.length) {
@@ -260,6 +290,8 @@ export function parseArgs(args: string[], options: { grokNeoEnabled?: boolean } 
 			result.noThemes = true;
 		} else if (arg === "--no-context-files" || arg === "-nc") {
 			result.noContextFiles = true;
+		} else if (arg === "--print-prompt-sizes") {
+			result.printPromptSizes = true;
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
@@ -295,6 +327,11 @@ export function parseArgs(args: string[], options: { grokNeoEnabled?: boolean } 
 			result.grokNeo = true;
 		} else if (arg === "--multi-session") {
 			result.multiSession = true;
+		} else if (arg === "--mcp-presenter-fd") {
+			if (args[++i] === "4") result.presenterBootstrapFd = 4;
+			else result.diagnostics.push({ type: "error", message: "Invalid presenter bootstrap descriptor" });
+		} else if (arg === "--mcp-presenter-enforcement") {
+			result.mcpPresenterEnforcement = true;
 		} else if (arg === "--auto-title-sessions") {
 			result.autoTitleSessions = true;
 		} else if (arg === "--session-runtime") {
@@ -302,6 +339,11 @@ export function parseArgs(args: string[], options: { grokNeoEnabled?: boolean } 
 			if (value !== undefined && !value.startsWith("--")) i++;
 			if (value !== undefined && isSessionRuntimeKind(value)) result.sessionRuntime = value;
 			else result.diagnostics.push({ type: "error", message: "--session-runtime must be in-process or worker" });
+		} else if (arg === "--tool-runtime") {
+			const value = args[i + 1];
+			if (value !== undefined && !value.startsWith("--")) i++;
+			if (value !== undefined && isToolRuntimeKind(value)) result.toolRuntime = value;
+			else result.diagnostics.push({ type: "error", message: "--tool-runtime must be in-process or child" });
 		} else if (arg === "--listen" && result.mode === "rpc") {
 			const value = args[i + 1];
 			if (value === undefined || value.startsWith("--")) {
@@ -327,6 +369,8 @@ export function parseArgs(args: string[], options: { grokNeoEnabled?: boolean } 
 					result.unknownFlags.set(flagName, true);
 				}
 			}
+		} else if (arg === "-") {
+			result.readStdin = true;
 		} else if (arg.startsWith("-") && !arg.startsWith("--")) {
 			result.diagnostics.push({ type: "error", message: `Unknown option: ${arg}` });
 		} else if (!arg.startsWith("-")) {
@@ -391,10 +435,13 @@ ${chalk.bold("Options:")}
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
   --print, -p                    Non-interactive mode: process prompt and exit
+  -                              Wait for stdin to close and prepend it to the prompt (a silent stdin pipe is otherwise skipped after 2 s when a prompt argument is given)
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
   --session <path|id>            Use specific session file or partial UUID
   --session-id <id>              Use exact project session ID, creating it if missing
+  --spawned-by <json>            Fresh session ancestry: parentSessionId, rootSessionId, taskId
+                                 Ignored with a warning when resuming or forking
   --fork <path|id>               Fork specific session file or partial UUID into a new session
   --rebind <path|id>             Move a session from a moved or re-cloned repository into this directory and continue it
   --session-dir <dir>            Directory for session storage and lookup
@@ -421,6 +468,8 @@ ${chalk.bold("Options:")}
   --no-context-files, -nc        Disable AGENTS.md and CLAUDE.md discovery and loading
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
+  --print-prompt-sizes           Print first-turn sizes as JSON with zero model calls; MCP attach is skipped
+                                 (servers listed); third-party session_start hooks still run (named)
   --list-tips                    List all tips as JSON
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --tui-mode <mode>              TUI mode: regular (default) or fullscreen
@@ -430,6 +479,7 @@ ${chalk.bold("Options:")}
 ${grokNeoOptionsText}  --multi-session               Serve multiple routed RPC sessions
   --listen <address>            RPC listener: stdio://, unix://, unix:///path, or a socket path
   --session-runtime <kind>      Multi-session host runtime: in-process (socket default) or worker
+  --tool-runtime <kind>         Where heavy tool work runs: in-process (default) or child
   --auto-title-sessions         Auto-generate session titles outside interactive mode (deprecated for hosts; prefer open_session.auto_title)
   --help, -h                     Show this help
   --version, -v                  Show version number
@@ -554,7 +604,8 @@ ${chalk.bold("Environment Variables:")}
   PI_RULES_MAX_RULE_CHARS          - Per-rule formatted payload character cap (default: 12000)
   PI_RULES_MAX_RESULT_CHARS        - Complete static/dynamic block character cap (default: 40000)
   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  PI_SHARE_VIEWER_URL              - Opt-in viewer base URL for /share (default: none, gist link only)
+  PI_DISABLE_SHARE                 - Set to 1 to turn /share off
 
 ${chalk.bold("Built-in Tool Names:")}
   read       - Read file contents

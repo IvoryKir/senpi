@@ -11,6 +11,13 @@ export const EFFECT_OUTCOMES = {
 		detail: "the session was reopened while this input's turn was running, so that turn never finished",
 		action: "read the transcript for what the turn produced, then send the input again with a new clientMessageId",
 	},
+	inputCleared: {
+		kind: "cleared",
+		reason: "cleared",
+		detail:
+			"the queue was cleared (clear_queue, or abort or unload_session with clearQueue) before this queued input was delivered",
+		action: "send the input again with a new clientMessageId if it is still needed",
+	},
 	queuedInputAlreadyDelivered: {
 		kind: "already_delivered",
 		reason: "already_delivered",
@@ -22,6 +29,13 @@ export const EFFECT_OUTCOMES = {
 		reason: "not_found",
 		detail: "no queued message has this queuedId in this session",
 		action: "read queuedId values from get_state or queue_update and retry with one that is still queued",
+	},
+	queuedInputConflict: {
+		kind: "conflict",
+		reason: "conflict",
+		detail: "the queued message was changed after the revision this request was based on, so nothing was changed",
+		action:
+			"read the input's current text and revision from get_state or queue_update, then retry with that expectedRevision if the change still applies",
 	},
 	inputDroppedByReplace: {
 		kind: "dropped_by_replace",

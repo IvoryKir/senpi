@@ -10,6 +10,7 @@ import { ProjectTrustStore } from "../src/core/trust-manager.ts";
 import { SessionCommandRouter } from "../src/modes/rpc/session-command-router.ts";
 import { SessionEventWriter } from "../src/modes/rpc/session-event-writer.ts";
 import { RpcSessionRegistry } from "../src/modes/rpc/session-registry.ts";
+import { fakeSessionBase } from "./helpers/fake-session-base.ts";
 
 // senpi#3376 review: the successor's reopen replays the park record faithfully. A field the record
 // left empty stays empty; the successor's own defaults must not fill it.
@@ -24,8 +25,7 @@ function runtime(options: Parameters<CreateAgentSessionRuntimeFactory>[0]): Crea
 	new ProjectTrustStore(options.agentDir).set(options.cwd, true);
 	return {
 		session: {
-			sessionManager: options.sessionManager,
-			agentDir: options.agentDir,
+			...fakeSessionBase(options),
 			isFastModeActive: () => false,
 			agent: { state: {} },
 			isStreaming: false,
@@ -84,5 +84,24 @@ describe("a parked session's reopen does not take the successor's defaults", () 
 		const profile = registry.peek(row!.sessionId)?.profile;
 		expect(profile?.permissionPreset).toBe("ask");
 		expect(profile?.initialThinkingLevel).toBe("low");
+	});
+
+	// senpi#3853: the mutable context patch survives without replacing the frozen extension context.
+	test("restores a nonterminal context overlay before publishing the reopened session", async () => {
+		const { dir, registry, router } = await routerWithDefaults();
+		try {
+			await router.reopenParked({
+				sessionPath: join(dir, "parked-context.jsonl"),
+				retainOnDisconnect: true,
+				sessionContext: { task_status: "queued", stale: "remove" },
+				contextOverlay: { task_status: "running", progress: 3, stale: null },
+			});
+			const [row] = registry.list();
+			if (!row) throw new Error("session was not reopened");
+			expect(registry.peek(row.sessionId)?.context).toMatchObject({ task_status: "queued", stale: "remove" });
+			expect(row.context).toEqual({ task_status: "running", progress: 3 });
+		} finally {
+			await router.dispose();
+		}
 	});
 });

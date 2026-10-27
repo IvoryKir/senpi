@@ -1,5 +1,61 @@
 # Permission System Builtin Extension
 
+## 2026-10-26 - bash permission: evaluate every command segment (senpi#4317)
+
+### What changed
+
+- `bash-command-segments.ts` (new): `analyzeBashCommand(command)` lexes a command the way bash splits it. It returns each simple command the command would run as normalized words, or `unparsed`. It covers `;`, `&&`, `||`, `|`, `|&`, `&` and line breaks; subshells and brace groups; the bodies of `$( … )`, backticks, `<( … )` / `>( … )`, `${ … }` and `$(( … ))`; unquoted here-document bodies; `if`/`while`/`for` bodies; and `[[ … ]]`. Redirections and their targets are dropped. A command name is normalized: leading assignments and reserved words are skipped, and a path becomes its basename. A wrapper (`env`, `command`, `exec`, `builtin`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `caffeinate`, `xargs`, `sudo`, `doas`, `eval`, `trap`, `su -c`, `bash`/`sh`/`zsh`/`dash`/`ksh -c`, `find -exec`) yields its own name and the command it runs, recursively. The command becomes `unparsed` on an unterminated quote, `case`, a function definition, a command name built by an expansion, a glob or brace expansion, or an option a wrapper table does not list.
+- `parsers.ts`: the `bash` request carries one pattern per command, its `BashArity` prefix. The same request serves `bash_input`, command `monitor` calls and nested `tool.bash`. The service already requires every pattern to be allowed and refuses on any deny, so the call is as strict as its strictest command. "Allow always" stores exactly those prefixes (`<prefix>` and `<prefix> *` for each). An unparsed command becomes one target, `(unparsed) <command>`, that only a `*` rule (a preset or a blanket setting) can decide, so no single-command grant allows it. Before that target, a deny-only request (`autoApproveAsk`) checks the command's plain words against deny rules.
+- A simple command keeps the single pattern it had before.
+- Limits fail closed: a command longer than 64 KiB, nesting deeper than 12 levels, a lexer step budget overrun, or any error inside the lexer makes the command `unparsed`. Best-effort deny candidates use at most three words each, so their work grows linearly with the command.
+- "Allow always" never stores a target that holds its own `*` or `?` (stored rules are matched as globs, so such a target would widen into a wildcard). That call is allowed once. Request patterns stay raw, so existing allow and deny rules match exactly as before.
+
+### Why
+
+- The decision used only the first command's prefix. The rest of a compound or wrapped command was never judged against the user's rules or grants.
+
+### Why an extension could not handle it
+
+- This builtin's parser registry produces the patterns a call is decided on. Another extension cannot change the requests the permission service evaluates.
+
+### Expected merge conflict zones
+
+- `parsers.ts` (`parseBashLikePermission`, `bashCommandRequests`).
+
+## 2026-10-16 - A wider "Allow always" for tools without a parser (senpi#3403)
+
+### What changed
+
+- `always-scope.ts` (new): `widerAlwaysScope(toolName, argKey, arg)` returns the extra option a prompt may offer when the request came from the fallback parser (a tool with no parser of its own):
+  - a URL argument gets its DOMAIN, "Allow <tool> on <host> always in this project". The grant is ONE literal, `origin=<canonical origin>`, matched by equality. `canonicalUrlOrigin` gives the scheme, the parser's lowercased punycode host, and the port only when it is not the default; no userinfo. A domain origin is given only for raw text every parser reads as the same host: a strict `http(s)://<ASCII DNS host>[:port]` prefix followed by `/`, `?`, `#` or the end; no backslash, `@`, `%`, whitespace or control character anywhere; no IPv6 literal, trailing dot or non-ASCII host; and the same host and port as `new URL()`. Anything else gets no alias and no domain option, so it asks. #3416 review: `https://*/a` became `https://*` and allowed any site; `https://example.invalid\@evil.test/` is example.invalid to WHATWG and evil.test to curl and Python. A parser-less tool parses the URL itself, so the permission layer cannot make it reuse one parse.
+  - a free `input`/`pattern` argument gets the tool, "Allow <tool> always in this project", with pattern `*`;
+  - a command or a path gets nothing wider, and built-in tools never do.
+- `parsers.ts`: the fallback records which argument it used and attaches `widerAlways`. A URL request is decided against `[raw URL, origin=<canonical origin>]` (`ruleAliases`), so the grant applies to every spelling of the origin, and a rule on the raw URL (a deny included) still matches it.
+- `prompt.ts`: the option appears after "Allow always" and replies `always` with the wider patterns.
+- `service.ts` and `index.ts`: the reply's patterns become the session's approvals and are persisted to the agent-dir store, so other open sessions of the project stop asking too.
+
+### Why
+
+"Allow always" stored only the exact argument, so a browser or MCP tool asked again for the next URL or input (sisyphuslabs/omo-desktop-app#2465). A tool-wide allow for a browser would mean "go anywhere", so URLs are scoped to their domain.
+
+### Why an extension could not handle it
+
+The prompt, its options and the stored approvals belong to this builtin's decision path; another extension cannot add an option to a permission prompt or write this store.
+
+### Expected merge conflict zones
+
+`prompt.ts` (the option list and reply mapping), `parsers.ts` (`fallbackPermissionRequestFor`), `types.ts` (`Request`, `ReplyInput`).
+
+### Must not break
+
+`test/permission/tool-scope-allow-always.test.ts`:
+- the same domain stops asking; a look-alike, `@` or port variant asks again;
+- a second open session stops asking;
+- a free-input tool is allowed tool-wide;
+- a command-shaped tool gets no wider option;
+- `*`, `?` and `[` hosts get no domain option;
+- uppercase, `:443`, userinfo and IDN spellings match the grant, while another port or a host named only in the path does not.
+
 ## 2026-10-16 - The legacy approvals import keeps pre-store answers (#3301 review round 2)
 
 ### What changed

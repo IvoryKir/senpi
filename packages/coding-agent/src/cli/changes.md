@@ -1,3 +1,116 @@
+## 2026-10-25 - Public host commands accept presenter enforcement (senpi#4247)
+
+### What changed
+
+- `packages/coding-agent/src/cli/host-command-args.ts` and `packages/coding-agent/src/cli/host-command.ts`: accept and forward `--mcp-presenter-enforcement` only for ensure and handoff, separately from the launch specification.
+
+### Why
+
+- The public deployment path could pass fd 4 but not the enforcement option required to enroll.
+
+### Why an extension could not handle it
+
+- Host launch arguments are parsed before any session or extension exists.
+
+### Expected merge conflict zones
+
+- The host argument parser, help text and request options.
+
+## 2026-10-25 - Private presenter bootstrap launch options (#4197)
+
+### What changed
+
+- `args.ts`, `host-command-args.ts`, and `host-command.ts`: accept the reserved presenter descriptor and carry its live stream through the host launch API.
+
+### Why
+
+- An inherited private channel, not an advertised UI capability or a serialized launch argument containing credentials, establishes the launch principal.
+
+### Key decisions
+
+- Descriptor 4 is reserved for presenter bootstrap. Descriptor 3 remains the owner-lifetime channel. No key, challenge, or grant is put in an environment variable or command-line argument.
+- An `ensure` call that reuses an existing host does not enroll its caller.
+
+### Why an extension could not handle it
+
+- Extensions run after launch and cannot establish an inherited launch-owner trust boundary.
+
+### Expected merge conflict zones
+
+- LOW: CLI option parsing and the host-command runner call.
+
+## 2026-10-24 - Parse standalone child ancestry before startup (oh-my-openagent#10782)
+
+### What changed
+
+- `packages/coding-agent/src/cli/args.ts`: parses `--spawned-by` as one JSON object using the shared ancestry validator, reports malformed inputs before runtime creation, and documents it in help.
+
+### Why
+
+- `packages/coding-agent/src/cli/args.ts`: process-mode children need the same structured ancestry accepted by hosted `open_session`.
+
+### Why an extension could not handle it
+
+- `packages/coding-agent/src/cli/args.ts`: core flags are parsed before extension loading.
+
+### Expected merge conflict zones
+
+- `packages/coding-agent/src/cli/args.ts`: session flag parsing and help options.
+
+## 2026-10-19 - A bare - forces the piped-stdin read (senpi#3715)
+
+### What changed
+
+- `packages/coding-agent/src/cli/args.ts`: a bare `-` argument sets `Args.readStdin` instead of failing as `Unknown option: -`, and the help text documents it.
+
+### Why
+
+- Print mode now stops waiting for a silent stdin pipe after 2 s when a prompt argument is given (senpi#3715); `-` is the explicit way to wait for a slow producer anyway. Regression: `test/suite/regressions/issue-3715-print-stdin-open-pipe.test.ts`.
+
+### Why an extension could not handle it
+
+- Argument parsing runs before any extension loads, and a bare `-` was rejected there as an unknown short option.
+
+### Expected merge conflict zones
+
+- LOW: the `Args` field list, the short-option branch of `parseArgs`, and the `--print` help line.
+
+## 2026-10-17 - /share redacts the session, previews it and asks before uploading (senpi#3524)
+
+### What changed
+
+- `packages/coding-agent/src/cli/args.ts`: the help text says `PI_SHARE_VIEWER_URL` has no default and documents `PI_DISABLE_SHARE`.
+
+### Why
+
+- `/share` uploaded the whole session unredacted, with no confirmation, to a secret (unlisted) gist, after writing it to a fixed `os.tmpdir()/session.html`, and pointed users at the third-party `pi.dev` viewer by default. Any key, token, home path or email in a prompt or tool result left the machine in clear text. Regressions: `test/suite/regressions/3524-share-redaction.test.ts`, `test/suite/regressions/3524-share-consent.test.ts`.
+
+### Why an extension could not handle it
+
+- `/share` is a built-in interactive command and the HTML export is core; an extension cannot intercept either before the upload.
+
+### Expected merge conflict zones
+
+- LOW: the environment-variable list in `args.ts` help.
+
+## 2026-10-18 - --tool-runtime selects where heavy tool work runs (senpi#3566)
+
+### What changed
+
+- `packages/coding-agent/src/cli/args.ts`: `Args.toolRuntime`, one parse branch for `--tool-runtime <in-process|child>` (an unknown value pushes the parse error "--tool-runtime must be in-process or child" and sets nothing) and one help line. The default and the `SENPI_TOOL_RUNTIME` fallback live in the fork-only `cli/tool-runtime.ts` (`resolveToolRuntime`), not here.
+
+### Why
+
+The per-session tool child (senpi#3566) needs one switch every mode reads. The flag is plumbing only in this step: it changes no execution.
+
+### Why an extension could not handle it
+
+CLI flags that the host process itself reads before any extension loads are parsed in core.
+
+### Expected merge conflict zones
+
+- `packages/coding-agent/src/cli/args.ts`: the `Args` interface beside `sessionRuntime`, the parse switch beside `--session-runtime`, and the help block.
+
 ## 2026-10-15 - senpi host session unload (senpi#3225)
 
 ### What changed
@@ -852,3 +965,40 @@ CLI argument semantics live in the executable entry, below any extension hook.
 ### Expected merge conflict zones
 
 Upstream edits to cli/args.ts at the next sync.
+## 2026-10-16 - First-turn prompt size inspection (senpi#3483)
+
+### What changed
+
+- `packages/coding-agent/src/cli/args.ts`: parse and document `--print-prompt-sizes`.
+- Contract: zero model calls. Only two built-in `session_start` effects are skipped: MCP attach (configured servers are listed by name/count as "not attached; tool sizes exclude them", never sized) and the cache-keepalive prewarm. Every other handler runs, so hooks, loop and image-generation state match a normal first turn. Third-party `session_start` hooks still run; the report names them with a warning that they ran and may have used the network. The help line states this boundary.
+- `packages/coding-agent/src/cli/print-prompt-sizes.ts`: bind a normal session, request a sizes-only prefix preview, emit JSON and exit. Missing models and skipped previews exit nonzero with a reason. Prompt and tool content never enter the output.
+- `packages/coding-agent/src/cli/print-prompt-sizes.ts`: bind with the explicit sizes-only startup signal; other session starts keep their existing behavior.
+
+### Why
+
+Users need to see which first-turn components consume their input budget without publishing their instructions.
+
+### Why an extension could not handle it
+
+The diagnostic must select an offline, non-streaming CLI route before normal mode dispatch and stdin consumption.
+
+### Expected merge conflict zones
+
+- `packages/coding-agent/src/cli/args.ts`: Args, the flag parser and help template.
+## 2026-10-20 - Bind an operator stop to its confirmed generation (omo-desktop-app#3561)
+
+### What changed
+
+- `packages/coding-agent/src/cli/host-command.ts`: parses `--expected-generation` JSON and forwards its complete identity to the shared host runner; malformed or drain-combined input is a usage error. Existing conditional-handover parsing moves unchanged to `packages/coding-agent/src/cli/host-handover-args.ts` to keep the command module bounded.
+
+### Why
+
+- A confirmation must not authorize stopping a different generation that took over before the CLI ran.
+
+### Why an extension could not handle it
+
+- Host command parsing happens before extensions run.
+
+### Expected merge conflict zones
+
+- LOW: stop argument parsing and request construction.

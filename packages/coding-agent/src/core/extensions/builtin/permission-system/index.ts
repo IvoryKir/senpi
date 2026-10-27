@@ -68,7 +68,7 @@ function denyReason(
 	const source = provenance.layer === "cli" ? "--permission" : `${provenance.layer} settings.json`;
 	// Only promise an unblock when no other layer still denies the call: naming the winning rule and
 	// telling the user to edit it is wrong when a second deny would keep blocking.
-	const unblock = provenance.otherLayerDenies ? "" : " Edit that entry to allow this call.";
+	const unblock = provenance.otherLayerDenies ? "" : " The user can edit that entry to allow this call.";
 	return `${error.message} Denied by ${provenance.layer} permission rule ${provenance.permission}:${provenance.pattern} = deny (${source}).${unblock}`;
 }
 
@@ -348,6 +348,8 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 				permission: permissionRequest.permission,
 				patterns: permissionRequest.patterns,
 				always: permissionRequest.always,
+				...(permissionRequest.originalPaths ? { originalPaths: permissionRequest.originalPaths } : {}),
+				...(permissionRequest.widerAlways ? { widerAlways: permissionRequest.widerAlways } : {}),
 				metadata: createRequestMetadata(event.toolName, event.input),
 				tool: {
 					callID: event.toolCallId,
@@ -390,7 +392,8 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 				const reply = await showPermissionPrompt(ctx, request, signal);
 				activeService.reply(reply);
 				if (reply.reply === "always") {
-					persistAlways(ctx.agentDir, ctx.cwd, request, persistedAtAnswer);
+					const answered = reply.always ? { ...request, always: reply.always } : request;
+					persistAlways(ctx.agentDir, ctx.cwd, answered, persistedAtAnswer);
 				}
 			} else {
 				activeService.reply(

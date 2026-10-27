@@ -75,6 +75,7 @@ describe("process-group signal detection (senpi#2995)", () => {
 		["cat <<EOF\ntext\nEOF\nkill -- -5"],
 		// senpi#3019: these still run: substitutions in double quotes or an unquoted heredoc, and commands after a comment or a heredoc.
 		['echo "$(kill -- -$PG)"'],
+		[`echo "$(\n# don't run yet\nkill -- -5\n)"`],
 		['echo "`kill -- -5`"'],
 		["cat <<EOF\n$(kill -- -$PG)\nEOF"],
 		["# don't run yet\nkill -- -$PG"],

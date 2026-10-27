@@ -9,7 +9,9 @@ import {
 	PROJECT_RULES_REGION_START_MARKER,
 	PROJECT_RULES_START_MARKER,
 } from "../rules/rules/constants.ts";
+import { plannedContextWindow, sdkModelId } from "./context-window.ts";
 import { presetAppendDeprecationGuidance } from "./guidance.ts";
+import { requireAnthropicSubscriptionCwd } from "./session-cwd.ts";
 import type { EffortLevel, Options, SettingSource, ThinkingConfig } from "./sdk-boundary.ts";
 import {
 	type AnthropicSubscriptionProviderSettings,
@@ -218,7 +220,7 @@ function resolveSettingSources(
 }
 
 export function buildAnthropicSubscriptionQueryOptions(input: AnthropicSubscriptionQueryOptionsInput): Options {
-	const cwd = input.cwd ?? process.cwd();
+	const cwd = requireAnthropicSubscriptionCwd(input.cwd);
 	const providerSettings = input.providerSettings ?? loadAnthropicSubscriptionProviderSettingsFromDisk(cwd);
 	const appendSystemPrompt = providerSettings.appendSystemPrompt !== false;
 	const resolvedMode = resolveSystemPromptMode(providerSettings);
@@ -252,7 +254,7 @@ export function buildAnthropicSubscriptionQueryOptions(input: AnthropicSubscript
 	const senpiOwnsCompaction = resolveCompactionOwner(providerSettings) === "senpi";
 	const queryOptions: Options = {
 		cwd,
-		model: input.model.id,
+		model: sdkModelId(input.model),
 		tools: toolLessRequest || emptyToolContext ? [] : input.tools ? [...input.tools] : [...BUILTIN_SDK_TOOLS],
 		permissionMode: "dontAsk",
 		includePartialMessages: true,
@@ -268,7 +270,14 @@ export function buildAnthropicSubscriptionQueryOptions(input: AnthropicSubscript
 	// Claude Code's per-turn token-budget reminder changes the prompt every turn and defeats
 	// prompt-cache reuse; senpi's compaction carries its own budget reminder. The auth lane
 	// layers this over the subprocess environment it builds.
-	if (senpiOwnsCompaction) queryOptions.env = { CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off" };
+	// With DISABLE_COMPACT set, Claude Code takes CLAUDE_CODE_MAX_CONTEXT_TOKENS over every model rule of
+	// its own, so it plans the window senpi plans (senpi#3801), and its native compaction stays off.
+	if (senpiOwnsCompaction)
+		queryOptions.env = {
+			CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
+			CLAUDE_CODE_MAX_CONTEXT_TOKENS: String(plannedContextWindow(input.model)),
+			DISABLE_COMPACT: "1",
+		};
 	if (input.pathToClaudeCodeExecutable) queryOptions.pathToClaudeCodeExecutable = input.pathToClaudeCodeExecutable;
 	if (toolLessRequest) queryOptions.maxTurns = 1;
 	if (strictMcpConfig) queryOptions.extraArgs = { "strict-mcp-config": null };

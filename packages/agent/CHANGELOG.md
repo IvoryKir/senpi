@@ -12,6 +12,329 @@
 
 ### Removed
 
+## [2026.10.27-1] - 2026-10-26
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.26-2] - 2026-10-26
+
+### Breaking Changes
+
+### Added
+
+- Empty-assistant recovery forwards captured records for the kept attempt only, so recovered streams (including Claude models) reach the internal agent channel ([#4307](https://github.com/code-yeongyu/senpi/pull/4307))
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.26-1] - 2026-10-26
+
+### Breaking Changes
+
+### Added
+
+- An internal-only, ordered agent channel carries captured stream records; public listeners and extensions do not see it and their events are unchanged ([#4277](https://github.com/code-yeongyu/senpi/pull/4277))
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.25-4] - 2026-10-25
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.25-3] - 2026-10-25
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.25-2] - 2026-10-25
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.25-1] - 2026-10-25
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.24-4] - 2026-10-24
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- Settle response stop reasons before `message_end` so `turn_end` handlers resolve the persisted assistant entry when a provider ends with `stop` and pending tool calls or `toolUse` without tool calls ([#3029](https://github.com/code-yeongyu/senpi/issues/3029)).
+
+### Removed
+
+## [2026.10.24-3] - 2026-10-24
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.24-2] - 2026-10-24
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.24-1] - 2026-10-24
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.23-1] - 2026-10-23
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.21-3] - 2026-10-22
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- Harness compaction uses request-level context when a provider reports cumulative billing for multiple internal requests ([omo#10792](https://github.com/code-yeongyu/oh-my-openagent/issues/10792)).
+
+### Removed
+
+## [2026.10.21-2] - 2026-10-22
+
+### Breaking Changes
+
+### Added
+
+- Every assistant response the agent loop streams carries `timing`: when the request was issued, its first and last streamed token, when it ended, and its streamed generation time. It is saved with the session, so time to first token and a reply's generation rate can be shown after a reload and by RPC clients ([#3879](https://github.com/code-yeongyu/senpi/issues/3879)).
+
+- A run that fails on an error from the `queuedInputPort` (`claim`, `release`, `commitConsumption`) ends with a failure message marked `failureSource: "local"`, so callers can tell a local failure from a provider one ([#3866](https://github.com/code-yeongyu/senpi/issues/3866)).
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.21-1] - 2026-10-21
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.20-1] - 2026-10-20
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.19-2] - 2026-10-20
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.19-1] - 2026-10-19
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- The `pico3` harness bash tool no longer SIGKILLs its own process group when a run is aborted after `bash` failed to start (Node < 24.22 / 26.10 signals the caller's group for a child without a pid) ([#3706](https://github.com/code-yeongyu/senpi/issues/3706)).
+
+### Removed
+
+## [2026.10.19] - 2026-10-19
+
+### Breaking Changes
+
+### Added
+
+- `AgentOptions.queuedInputPort`: the owner of queued input claims every drain, releases every restore, and commits consumption before any queued message reaches a provider request; a rejected commit keeps it queued ([#3549](https://github.com/code-yeongyu/senpi/issues/3549)).
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.18-1] - 2026-10-18
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.18] - 2026-10-18
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- A turn you stop with a reason (`abort("user stop")`, or an object with a `message`) shows that reason, capped at 500 characters, not "Request was aborted" ([#3510](https://github.com/code-yeongyu/senpi/issues/3510)).
+- A turn you stop while its context transform or API key lookup is still running ends with your stop, not with "Provider stream start timed out" and advice to raise a timeout setting ([#3481](https://github.com/code-yeongyu/senpi/issues/3481)).
+
+### Removed
+
+## [2026.10.16-4] - 2026-10-16
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+- Aborting a turn while its context transform or API key lookup is still running behaves as it did before the start bound covered that work: the request still goes out with the aborted signal and the turn ends aborted; the bound only ends a step that nothing else ended.
+
+- A turn no longer waits forever when the context transform, the API key lookup or the provider's stream function never finishes: the start bound (or the idle bound when none is set) now covers that work and ends the turn with a provider timeout ([#3471](https://github.com/code-yeongyu/senpi/issues/3471)).
+
+### Removed
+
+## [2026.10.16-3] - 2026-10-16
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.16-2] - 2026-10-16
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [2026.10.16] - 2026-10-16
+
+### Breaking Changes
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
 ## [2026.10.15] - 2026-10-15
 
 ### Breaking Changes

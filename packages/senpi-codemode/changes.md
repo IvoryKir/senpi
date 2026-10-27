@@ -1,4 +1,85 @@
+## 2026-10-23 - Product copy punctuation (senpi#4040)
+
+### What changed
+
+- `packages/senpi-codemode/test/gate/baseline.json`: refresh the 240 prompt-copy cells and their byte/token estimates from the real prompt builder; preserve every non-prompt baseline section.
+- `packages/senpi-codemode/test/gate/allowlist.json`: list each intended prompt-cell edit under `senpi#4040` with a punctuation-only reason, as required by the baseline review guard.
+- `packages/senpi-codemode/src/tool/image.ts`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/tool/eval-request.ts`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/prompt/eval-prompt-template.ts`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/bridges/schema-hint.ts`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/kernels/js/display-image.js`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/kernels/js/worker-indirect-eval.js`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/kernels/js/worker-shell-capture.js`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+- `packages/senpi-codemode/src/kernels/js/worker-webview.js`: replace em dashes in copy with ordinary punctuation, or document an intentional non-copy lint exception.
+
+### Why
+
+- The product-copy oxlint rule rejects em dashes in strings, templates and JSX text. Existing copy must pass it without changing control flow or punctuation matching.
+
+### Why an extension could not handle it
+
+- These source strings and lint directives are read before runtime extensions can rewrite them.
+
+### Expected merge conflict zones
+
+- The listed copy strings and adjacent lint comments only.
+
+
 # senpi-codemode fork changes
+
+## 2026-10-20 - Remove the built-in llama.cpp image exception (senpi#3202)
+
+### What changed
+
+- `packages/senpi-codemode/src/tool/image-resize.ts`: remove the deleted built-in llama.cpp provider from WebP exclusions.
+
+### Why
+
+- `packages/senpi-codemode/src/tool/image-resize.ts`: the `/llama` integration no longer registers that provider; generic local-server exclusions remain supported.
+
+### Why an extension could not handle it
+
+- `packages/senpi-codemode/src/tool/image-resize.ts`: the exclusion is implemented in the eval tool's image conversion path.
+
+### Expected merge conflict zones
+
+- `packages/senpi-codemode/src/tool/image-resize.ts`: the provider predicate in `webpExclusionForModel`.
+
+## 2026-10-23 - The gate records its baseline on Linux only
+
+### What changed
+
+- `packages/senpi-codemode/scripts/gate-baseline-review.ts`: `baselineHostRefusal(platform)` returns a refusal for every host except Linux.
+- `packages/senpi-codemode/scripts/gate-eval.ts`: `--write-baseline` on another host adds that refusal as a gate failure, so `test/gate/baseline.json` is never written there; the re-record hint now says "on Linux".
+- `packages/senpi-codemode/test/gate/baseline-review.test.ts`: Linux is allowed; macOS and Windows are refused with the reason.
+
+### Why
+
+- The gate runs on the Linux CI image. A baseline recorded on macOS or Windows carries that host's import sizes and OS-specific contract outcomes, so every later Linux run would report drift that never happened.
+
+### Expected merge conflict zones
+
+- The end of `gate-eval.ts` `main()` (report and baseline writes). Measurement and comparison are unchanged.
+
+## 2026-10-15 - Write Julia startup frames pre-encoded (Fixes senpi#3048)
+
+### What changed
+
+- `packages/senpi-codemode/src/kernels/jl/runner.jl`: the host-init status and ready frames are constant strings written through `senpi_emit_line`, the same locked println and flush path `senpi_emit` now uses for encoded frames. Frame bytes, order and flush points are unchanged.
+- `packages/senpi-codemode/test/kernels/jl/startup-frames.test.ts` and `test/gate/allowlist.json`: a real-Julia interrupt contract reads the encoder's recorded specializations in the first and in the replacement interpreter and requires none before the first cell, while all three startup stages still reach the host for both interpreters.
+
+### Why
+
+- Every fresh or replacement interpreter ran the generic frame encoder at host-init on a nested heterogeneous dictionary, which interpreted 8 `senpi_json` and 10 `senpi_escape` calls and built 7 specializations before any cell existed. Constant frames remove that work from startup reporting; the first encode now happens with the first result, as before startup reporting existed.
+
+### Why an extension could not handle it
+
+- Startup protocol emission belongs to the embedded Julia runner before user cells execute.
+
+### Expected merge conflict zones
+
+- Julia frame emission and the init branch. The watchdog, replacement, queued-cell ownership and state-loss reporting are unchanged.
 
 ## 2026-10-14 - Bound stored display jsonOutputs and render them safely (Fixes senpi#3261)
 
@@ -27,27 +108,6 @@
 - `packages/senpi-codemode/src/tool/image.ts`: the `display()` JSON branch around the `jsonOutputs` push.
 - `packages/senpi-codemode/src/tool/render-detail.ts`: the per-entry loop of `renderJsonOutputs`.
 - `packages/senpi-codemode/src/kernels/js/display-image.js`: the tail of `resolveDisplayOps`.
-# senpi-codemode fork changes
-
-## 2026-10-12 - Quoted text no longer counts as a command for the group-signal notice (senpi#3019)
-
-### What changed
-
-- `packages/senpi-codemode/src/kernels/js/group-signal-notice.js`: `signalsProcessGroup` scans a copy of the command whose inert text is blanked: single-quoted strings, comments, and the literal parts of double-quoted strings and heredoc bodies (all of a body whose delimiter is quoted). A command substitution (`$(...)` or backticks) keeps its text even inside double quotes or an unquoted heredoc body, as a `-c` script does, with its own inert text blanked in turn. A heredoc delimiter is read as a whole shell word, and a `<<` whose delimiter line never comes blanks nothing. The detection patterns are unchanged.
-- `packages/senpi-codemode/test/group-signal-notice.test.ts`: double-quoted, single-quoted and heredoc text is not flagged, nor is a substitution in a heredoc whose delimiter is quoted; double-quoted and nested `-c` scripts, substitutions inside double quotes or an unquoted heredoc, and a command after a heredoc, a comment or an arithmetic `<<` still are.
-- `packages/senpi-codemode/test/gate/allowlist.json`: the fifteen new legacy contracts are approved under `senpi#3019`, as `senpi#2995` approved the first ones.
-
-### Why
-
-- Command position was decided by regex alone, so a shell keyword inside quoted text started a "command": `git commit -m "do kill -9 -5"` and a heredoc line `kill -- -5` printed the notice although nothing is signalled.
-
-### Why an extension could not handle it
-
-- The notice is emitted inside the eval kernel's spawner wrappers before the command runs; no extension sees the command text.
-
-### Expected merge conflict zones
-
-- `packages/senpi-codemode/src/kernels/js/group-signal-notice.js`: `signalsProcessGroup` and the quote-blanking helpers above it.
 
 ## 2026-10-12 - Prepare an eval cell without a Babel parse unless it has import syntax (Fixes senpi#3205)
 

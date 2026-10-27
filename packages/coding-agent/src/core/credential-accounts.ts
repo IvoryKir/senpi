@@ -1,5 +1,7 @@
 import { dirname, join } from "node:path";
 import { type Credential, normalizeProviderId } from "@earendil-works/pi-ai";
+import { slotsOfOwnKind } from "@earendil-works/pi-ai/auth/pool/kinds";
+import { applyAccountOrder, withoutOrderedAccount } from "@earendil-works/pi-ai/auth/pool/select";
 import {
 	accountDisplayName,
 	listSlots,
@@ -17,15 +19,27 @@ import { SENTINEL_OAUTH_FIELDS } from "./extensions/builtin/anthropic-subscripti
 
 export type CredentialAccountSource = "login" | "import" | "env";
 
+/**
+ * Why a blocked account sits out (senpi#4327): `auth_error` means the key was rejected and is skipped
+ * until its re-probe time, `rate_limit` is a cooldown, `disabled` lasts until the credential is replaced.
+ */
+export type CredentialAccountBlockedReason = "auth_error" | "rate_limit" | "disabled";
+
 /** Account metadata safe to surface: names and health only, never key material. */
 export type CredentialAccountSummary = {
 	readonly name: string;
 	readonly displayName?: string;
 	readonly source: CredentialAccountSource;
 	readonly blocked: boolean;
+	/** Present only while `blocked`; absent when the stored block names no reason. */
+	readonly blockedReason?: CredentialAccountBlockedReason;
+	/** Epoch ms when the block lifts (the re-probe time for `auth_error`); absent for `disabled`. */
+	readonly blockedUntil?: number;
 	readonly pinned: boolean;
 	/** Usage limits binding one model (family) while the account serves the rest (senpi#2555). */
 	readonly blockedModels?: readonly { readonly model: string; readonly until: number }[];
+	/** A slot of the other kind than the stored credential: kept, never used, cannot be pinned (senpi#3486). */
+	readonly unused?: true;
 };
 
 const ACCOUNT_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
@@ -67,12 +81,47 @@ function stringField(value: object, key: string): string | undefined {
  * auth.json, while generic pool failover records health in the sidecar. Reading
  * only one would silently downgrade a real block to "available".
  */
-function slotBlocked(slot: object, sidecar: CredentialSlotState | undefined, now: number): boolean {
-	if (slotHealth(sidecar, now) === "blocked") return true;
-	const reason = stringField(slot, "blockReason");
-	if (reason === "account_disabled") return true;
-	const blockedUntil = numberField(slot, "blockedUntil");
-	return blockedUntil !== undefined && blockedUntil > now;
+type SlotBlock = Pick<CredentialAccountSummary, "blocked" | "blockedReason" | "blockedUntil">;
+
+const UNBLOCKED: SlotBlock = { blocked: false };
+
+function accountBlockedReason(reason: string | undefined): CredentialAccountBlockedReason | undefined {
+	switch (reason) {
+		case "auth_error":
+		case "rate_limit":
+			return reason;
+		case "account_disabled":
+			return "disabled";
+		default:
+			return undefined;
+	}
+}
+
+/** A live block with its reason and, unless disabled, the time it lifts. */
+function liveBlock(reason: string | undefined, blockedUntil: number | undefined, now: number): SlotBlock {
+	const blockedReason = accountBlockedReason(reason);
+	if (blockedReason === "disabled") return { blocked: true, blockedReason };
+	if (blockedUntil === undefined || blockedUntil <= now) return UNBLOCKED;
+	return { blocked: true, ...(blockedReason === undefined ? {} : { blockedReason }), blockedUntil };
+}
+
+function sidecarBlock(sidecar: CredentialSlotState | undefined, now: number): SlotBlock {
+	if (slotHealth(sidecar, now) !== "blocked") return UNBLOCKED;
+	return liveBlock(sidecar?.blockReason, sidecar?.blockedUntil, now);
+}
+
+function slotBlocked(slot: object, sidecar: CredentialSlotState | undefined, now: number): SlotBlock {
+	const fromSidecar = sidecarBlock(sidecar, now);
+	const fromSlot = liveBlock(stringField(slot, "blockReason"), numberField(slot, "blockedUntil"), now);
+	// A disabled account outranks a timed block from the other source: it never lifts on its own.
+	if (fromSlot.blockedReason === "disabled") return fromSlot;
+	if (fromSidecar.blockedReason === "disabled" || !fromSlot.blocked) return fromSidecar;
+	if (!fromSidecar.blocked) return fromSlot;
+	// Both sources hold a timed block: the account is usable only once the later one lifts, and a
+	// rejected key stays the reason so a client still skips it.
+	const later = (fromSlot.blockedUntil ?? 0) > (fromSidecar.blockedUntil ?? 0) ? fromSlot : fromSidecar;
+	const rejected = [fromSidecar, fromSlot].some((block) => block.blockedReason === "auth_error");
+	return rejected ? { ...later, blockedReason: "auth_error" } : later;
 }
 
 function storedModelBlocks(slot: object): ModelBlocks | undefined {
@@ -128,6 +177,15 @@ export async function summarizeCredentialAccounts(
 	repository: CredentialSlotRepository = new CredentialSlotRepository(),
 ): Promise<CredentialAccountSummary[]> {
 	const credential = pooledFrom(stored);
+	return applyAccountOrder(credential?.order, await summarizeInStoredOrder(provider, credential, env, repository));
+}
+
+async function summarizeInStoredOrder(
+	provider: string,
+	credential: PooledCredential | undefined,
+	env: NodeJS.ProcessEnv,
+	repository: CredentialSlotRepository,
+): Promise<CredentialAccountSummary[]> {
 	const now = Date.now();
 	const pinned = pinnedName(credential);
 	const summaries: CredentialAccountSummary[] = [];
@@ -142,6 +200,7 @@ export async function summarizeCredentialAccounts(
 					? listSlots(credential)
 					: []
 				: listSlots(credential);
+		const usable = new Set(slotsOfOwnKind(credential).map((slot) => slot.name));
 		for (const slot of storedAccounts) {
 			const displayName = accountDisplayName(slot.displayName);
 			const persisted = state[slot.name];
@@ -156,9 +215,10 @@ export async function summarizeCredentialAccounts(
 				name: slot.name,
 				...(displayName === undefined ? {} : { displayName }),
 				source: slot.source ?? "login",
-				blocked: slotBlocked(slot, applicable, now),
+				...slotBlocked(slot, applicable, now),
 				pinned: pinned === slot.name,
 				...blockedModels(now, applicable?.modelBlocks, storedModelBlocks(slot)),
+				...(usable.has(slot.name) ? {} : { unused: true as const }),
 			});
 		}
 		if (normalizeProviderId(provider) !== "anthropic-subscription") return summaries;
@@ -173,7 +233,7 @@ export async function summarizeCredentialAccounts(
 		summaries.push({
 			name: slot.name,
 			source: "env",
-			blocked: slotHealth(applicable, now) === "blocked",
+			...sidecarBlock(applicable, now),
 			pinned: pinned === slot.name,
 			...blockedModels(now, applicable?.modelBlocks),
 		});
@@ -217,8 +277,14 @@ export async function pinCredentialAccount(
 	if (name !== null) {
 		assertValidAccountName(name);
 		const accounts = await getCredentialAccounts(storage, provider, env, repo);
-		if (!accounts.some((account) => account.name === name)) {
+		const account = accounts.find((candidate) => candidate.name === name);
+		if (!account) {
 			throw new Error(`Provider account not found: ${name}`);
+		}
+		if (account.unused) {
+			throw new Error(
+				`Account ${name} holds a login of the other kind and is never used, so it cannot be pinned. To switch ${provider} to it, save it again with /login.`,
+			);
 		}
 	}
 	await storage.modify(provider, async (current) => {
@@ -261,7 +327,8 @@ export async function removeCredentialAccount(
 	}
 	const next = await storage.read(provider);
 	if (next === undefined) throw new Error(`No stored credential for provider: ${provider}`);
-	const remaining = removeSlot(next, name);
+	const removed = removeSlot(next, name);
+	const remaining = removed === undefined ? undefined : withoutOrderedAccount(removed, name);
 	if (remaining === undefined) await storage.delete(provider);
 	else await storage.modify(provider, async () => remaining);
 	await repo.mutateSlotState(provider, "stored", name, () => undefined);

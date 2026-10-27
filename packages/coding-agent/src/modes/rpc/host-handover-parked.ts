@@ -30,6 +30,7 @@ import {
 	sessionPromptSurfaceError,
 	sessionRetryFallbackError,
 } from "./rpc-input-validation.ts";
+import { applyContextPatch, type SessionContextOverlay } from "./session-context-patch.ts";
 
 export interface HandoverParkedEntry {
 	readonly sessionPath: string;
@@ -54,8 +55,15 @@ export interface HandoverParkedEntry {
 	 */
 	readonly sessionKind?: SessionKind;
 	readonly sessionContext?: SessionContext;
+	readonly contextOverlay?: SessionContextOverlay;
 	readonly autoTitle?: boolean;
 	readonly retryFallback?: SessionRetryFallbackProfile;
+	/**
+	 * The host instance that wrote the park. Its own reopen watch skips it: the park is for the NEXT
+	 * generation, and a host reopening what it just idle-parked races the client's reopen (senpi#3485).
+	 * Absent on entries an older generation wrote, which every reader treats as a predecessor's park.
+	 */
+	readonly parkedBy?: string;
 }
 
 const recordDir = (daemonDir: string): string => join(daemonDir, "handover-parked");
@@ -79,6 +87,7 @@ function isEntry(value: unknown): value is HandoverParkedEntry {
 		typeof record.retainOnDisconnect === "boolean" &&
 		(record.durableSessionId === undefined || typeof record.durableSessionId === "string") &&
 		(record.cwd === undefined || typeof record.cwd === "string") &&
+		(record.parkedBy === undefined || typeof record.parkedBy === "string") &&
 		(record.thinkingLevel === undefined || typeof record.thinkingLevel === "string") &&
 		(record.permissionPreset === undefined ||
 			(typeof record.permissionPreset === "string" &&
@@ -87,6 +96,7 @@ function isEntry(value: unknown): value is HandoverParkedEntry {
 		sessionBrowserEngineError(record.browserEngine) === undefined &&
 		sessionKindError(record.sessionKind) === undefined &&
 		sessionContextError(record.sessionContext) === undefined &&
+		(record.contextOverlay === undefined || !("refusal" in applyContextPatch(undefined, record.contextOverlay))) &&
 		sessionAutoTitleError(record.autoTitle) === undefined &&
 		sessionRetryFallbackError(record.retryFallback) === undefined &&
 		(record.model === undefined ||
