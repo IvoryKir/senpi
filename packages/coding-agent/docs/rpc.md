@@ -145,8 +145,23 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
 - `seq`, `epoch`, `epochOrigin` (`human` or `automatic`), `humanInputRevision`,
   `selfSettleEligible`, `restoring`, `persisted`, `runPaused`, and `since` (ISO time).
 - `role` (`root` or `child`), `rootSessionId`, and optional `parentSessionId` and `taskId`.
-- Optional `waitingOn`: `{ children, background, human }`. Background entries carry
-  `source`, `activeCount`, and optional `retryAtMs`. Human entries carry `kind`,
+- Optional `waitingOn`: `{ children, background, human, childSources?, childReports?, childReportsOmitted? }`.
+  `children` and each source's `activeCount` are the authoritative counts; every named list below is
+  supplemental and may be incomplete, so never derive a count from a list's length. `children` is the
+  larger of the nonterminal child reports and the summed `childSources` counts.
+  Background entries carry `source`, `activeCount`, optional `items`, optional `omittedItems`, and
+  optional `retryAtMs`. `childSources` entries carry `source`, `activeCount`, optional `items`, and
+  optional `omittedItems`. Each item is `{ id, label?, startedAt? }` (`startedAt` is ISO time), taken
+  from the producer's `wake_source_state` snapshot: its `items`, or the legacy `monitors` list when
+  `items` is missing or null. Terminal monitors are named by their stable `mon_` id. Each list is a
+  snapshot: entries whose `id` is not a non-blank string are dropped, duplicates collapse to one entry
+  per `id`, the list is sorted by `id`, and at most 32 entries are kept. `omittedItems` is the
+  producer's own omitted count plus any valid items cut at 32; it is not `activeCount` minus the list
+  length. Invalid detail drops only the detail, never the count.
+  `childReports` lists nonterminal reports from `reportChild` as
+  `{ taskId, childSessionId, runEpoch, state, label?, since? }`, excluding reports about the session
+  itself, sorted by `taskId` and capped at 32; `childReportsOmitted` counts the reports cut by that cap.
+  Human entries carry `kind`,
   `originSessionId`, `requestId`, `revision`, `since`, and optional child identity/label.
   Human kinds are `question`, `approval`, `goal_blocked`, `goal_paused`, `stalled`,
   and `interrupted_run`; attention remains visible even when a hold wins precedence.
@@ -170,6 +185,47 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
   between runs, a refresh while the last end is still bound may set or update that run's stop.
   Goal guards are captured during their bound end's own processing, never inherited from
   another run. Provider errors and policy rejections carry no `lastStop`, even if a deadline fired.
+- Optional `activity` is present only while `state` is `running` and a live activity is known:
+  `{ kind: "tool", toolName, toolCallId, since, outstanding }` represents the oldest outstanding
+  top-level tool operation, including preparation, approval and dependency waits. Nested calls
+  do not count. `{ kind: "model", since }` covers only an assistant stream from its start to its
+  message end, not the first-token wait or prepared messages. `since` is the time the session
+  observed the start boundary, not a timestamp carried by the core event, so it approximates the
+  real start; it stays stable while selected. Compaction, retry waits, queued work and other
+  unknown intervals omit activity.
+- Optional `activityRevision: { instanceId, revision }` orders activity separately from durable
+  lifecycle state. New writers include it even when activity is absent. The engine owner allocates
+  a fresh opaque `instanceId` on reconstruction or rebinding; delivery and reconnect do not change it.
+  An activity-only change keeps lifecycle `seq`, increments `revision`, and appends no durable record,
+  also while a failed custody write leaves `persisted` false.
+  An independently required lifecycle write retains append-before-publish and resets revision to zero
+  at its new `seq`, carrying the current activity once. Token deltas and tool progress change neither
+  ordering number. Both activity fields are wire-only and ignored on restoration; restored activity
+  is absent under a fresh instance with revision zero. `persisted` still describes durable lifecycle
+  state, not activity persistence.
+
+The activity ordering key is `(session, instanceId, lifecycle seq, revision)`. Separate durable
+lifecycle equivalence (including `lastStop`) from complete activity-projection equivalence: absence,
+kind, tool identity, `since`, and `outstanding`. Thus `start(A), start(B), end(B)` delivers counts
+`1, 2, 1` under three distinct activity ordering keys without advancing lifecycle `seq`.
+
+Clients keep ordinary state and completion effects ordered by session and lifecycle `seq`.
+An equal lifecycle `seq` may refresh receipt information and, under the activity ordering rule, the
+activity projection. It never re-runs ordinary state or completion effects. Activity revisions and
+`observedAt` never authorize replacing ordinary lifecycle content at an equal or older lifecycle `seq`.
+Establish the activity owner only from an authoritative initial/open/get_state snapshot or directly
+bound TUI snapshot, fenced by the current binding/resync generation. An arbitrary event or cached
+replay cannot switch owners; an unfamiliar event instance requires authoritative synchronization,
+without dropping an independently newer ordinary lifecycle update while synchronizing.
+
+Within the authorized instance, compare `(seq, revision)` lexicographically. Higher revision at equal
+`seq` replaces only activity and its ordering metadata, including explicit absence as a clear.
+An equal activity key is a replay; lower revisions and older lifecycle sequences cannot replace activity.
+On reconnect to the same instance retain the high-water mark. A different authoritative instance
+invalidates old activity and establishes a baseline only if its lifecycle `seq` is not older than
+retained state. Retired instances and late responses cannot switch it back. Never reset lifecycle or
+completion high-water marks or sort instance identifiers. Legacy snapshots without `activityRevision`
+follow lifecycle-sequence ordering; at equal `seq` they cannot overwrite versioned activity or clear it.
 
 Clients must not notify or settle while `restoring` is true or `persisted` is false.
 Use `completionId` to deduplicate root completion/failure, not `agent_settled` or
@@ -307,6 +363,8 @@ model context or history.
 ## Account display names
 
 `get_provider_accounts` returns secret-free descriptors containing `name`, `source`, `blocked`, `pinned`, and optional `displayName`. Render a named account as `displayName (name)`; keep using the immutable `name` for `account_pin`, `account_remove`, and comparisons. Legacy accounts omit `displayName`.
+
+A blocked account also says why: `blockedReason` is `auth_error` (the provider rejected the key; it is skipped until one request re-probes it at `blockedUntil`), `rate_limit` (a cooldown that ends at `blockedUntil`) or `disabled` (no end time; replace the credential). Both fields appear only while `blocked` is true, and `blockedReason` is absent when the stored block names no reason. A client choosing an account for a new request should skip `auth_error` accounts rather than send a request that will fail with 401.
 
 Use `/account <provider> rename <id> <display name...>` or the corresponding `/gpt-account` and `/claude-account` commands to name saved accounts; `clear-name <id>` removes only the label. `/gpt-account add` offers optional naming after login is saved, and only when Senpi generated the account ID itself; the Claude lane names accounts through its own login prompt and never asks twice. Blank input or cancellation keeps that login usable. Environment accounts cannot be renamed.
 
@@ -4824,6 +4882,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `transcript_write_failed` | The session file refused a message of the running turn (`role`, `errorMessage`) |
 | `extension_event` | Capability-gated extension-owned event (`extension_events` clients only) |
 | `commands_changed` | Ordered command/skill candidate snapshot changed |
+| `session_recovered` | An interrupted write (a full disk) left the session file's last record incomplete; it was set aside (`cause`, `backupPath`, `droppedBytes`, `notice`) |
 | `command_invocation` | Accepted extension-command or prompt-template invocation metadata |
 | `skill_invocation` | Ordered explicit skill metadata after prompt expansion |
 | `loaded_surfaces_changed` | Loaded skills, extensions, or MCP inventory changed; re-read `get_commands` and `get_loaded_surfaces` |
@@ -5012,6 +5071,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
   "failure": {
     "category": "rate_limit",
     "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
     "httpStatus": 429,
     "code": "rate_limit_error",
     "reason": "the provider is rate limiting requests",
@@ -5020,11 +5080,12 @@ When the run ended with a provider error (the last assistant message has `stopRe
 }
 ```
 
-`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. Every category carries a `reason` and an `action`:
+`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. `provider` and `model` are the ids of the request that failed. When that request ran on a model other than the one the user selected (a fallback rung, or the model a virtual model routed to), `selectedProvider` and `selectedModel` name the selected one; both are absent otherwise. Every category carries a `reason` and an `action`:
 
 | `category` | `action` |
 | --- | --- |
 | `auth` | re-authenticate the provider |
+| `request_refused` | send the message again or choose another model; if it keeps failing, re-authenticate `<provider>` |
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
@@ -5034,6 +5095,10 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | `unknown` | retry once; if it repeats, switch the model or report the code |
 
 `unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` names the provider and the code or status, for example `the provider returned an error that could not be classified (openai, status 429)`. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+
+`request_refused` is an `auth` failure whose credential (same provider, endpoint and key) served a response within the last 10 minutes: the provider refused this one request, and the key may still be valid. If failures persist, re-authenticate the named provider: a recently working key may have been revoked. The failed assistant message carries `credentialServedRecently: true` and keeps the provider's own `errorMessage`. The in-memory record drops expired entries on each record/check and retains at most 1,024 credentials, evicting the least recently served first. Header-based, ADC and SigV4 authentication do not supply an `apiKey`, so their fingerprint reduces to provider + baseUrl; different credentials on that endpoint share the record.
+
+The fallback chain conservatively skips every other model on that provider for the rest of the turn, including models with a different endpoint or key; models on other providers are still tried. This skip is provider-wide, not fingerprint-matched: the synchronous candidate scan cannot resolve the request's asynchronously prepared credentials. An `auth` failure with no recent success on the credential stays `auth`. A `request_refused` failure follows normal goal provider recovery rather than blocking the goal with login guidance.
 
 ### agent_settled
 
@@ -5475,6 +5540,20 @@ A provider holds logins of one kind. If it had an OAuth login, the key replaces 
 
 `get_auth_providers` API-key rows carry `keyHint`, the last four characters of a literal key the app stored when it is at least 12 characters long. OAuth rows, `!command` and `$ENV` references, and short keys have none.
 
+Every `get_auth_providers` row whose provider is defined carries `origin`, which says where the definition lives so a client can name what to edit when the app cannot remove the entry itself:
+
+| `origin.kind` | Meaning |
+| --- | --- |
+| `builtin` | Shipped with senpi, including providers registered by builtin extensions. |
+| `models_json` | Defined only in models.json. |
+| `extension` | Registered by an extension (a native provider, a provider config with no builtin underneath, or virtual models). |
+
+`modelsJsonPath` is the models.json that defines or overrides the provider, and `extensionPath` is the filesystem path of the extension that registered or overrides it, when known. Synthetic builtin identifiers and inline or unknown extension placeholders are omitted. Both paths are optional, on any kind:
+
+```json
+{"id": "proxy-box", "name": "proxy-box", "authType": "api_key", "status": {"configured": false}, "origin": {"kind": "extension", "extensionPath": "/home/user/.senpi/agent/extensions/proxy.ts"}}
+```
+
 ## Extension UI Protocol
 
 Without presenter enforcement, MCP 2026-07-28 multi-round-trip form answering is terminal-only in v1.
@@ -5482,6 +5561,27 @@ RPC-originated modern requests advertise no elicitation and terminate locally
 if input is required; they never fabricate a decline or retry incomplete input.
 Client roles and capability declarations do not enable this form channel.
 Existing legacy MCP dialogs and their RPC request/response shapes remain unchanged.
+
+### session_recovered
+
+Emitted when an interrupted write (usually a full disk) left the session file's last record incomplete. The incomplete
+bytes were copied to `backupPath` (`<session file>.torn-<time>-<id>`, never deleted) and cut, and every complete record is
+kept. `cause` is `disk_full` when this process saw the write fail with `ENOSPC`/`EDQUOT`, `write_failed` for another
+failed write, and `unknown` when the damage was found while opening the session without a known failed write.
+`notice` is the text to show the person: paths under the home directory use `~/...`; backups outside it use a neutral
+label instead of an absolute path. The machine-readable `backupPath` remains absolute.
+A repair found while opening is replayed to each client that attaches before the next prompt; one made during a run is
+emitted live. It is sent once per repair.
+
+```json
+{
+  "type": "session_recovered",
+  "cause": "unknown",
+  "backupPath": "/home/example/.senpi/sessions/session.jsonl.torn-1761436800000-1a2b3c4d",
+  "droppedBytes": 74,
+  "notice": "The last message of this session wasn't saved completely (an earlier save was interrupted, for example by a full disk). Everything before it was loaded; the incomplete record was kept in ~/.senpi/sessions/session.jsonl.torn-1761436800000-1a2b3c4d."
+}
+```
 
 ### Opt-in private MCP forms
 

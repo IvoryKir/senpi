@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, parse } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionToolContext } from "../../src/core/extensions/types.ts";
@@ -12,6 +12,8 @@ import { createGrepToolDefinition } from "../../src/core/tools/grep.ts";
 describe("permission presets for external paths", () => {
 	const cwd = "/Users/me/project";
 	const registry = createBuiltinParserRegistry();
+	// Targets are canonical after the spelling walk (senpi#4351), so outside paths start from a real directory.
+	const outsideRoot = realpathSync.native(tmpdir());
 
 	it("asks for external paths from direct path-taking tools under workspace preset", () => {
 		// given
@@ -36,7 +38,7 @@ describe("permission presets for external paths", () => {
 
 	it("classifies the path the tool opens, not the raw argument (senpi#4311)", () => {
 		// given: spellings the file tools resolve to the same outside file
-		const outside = resolve("/tmp/outside.txt");
+		const outside = join(outsideRoot, "outside.txt");
 		const spellings = [outside, `@${outside}`, pathToFileURL(outside).href];
 		const tools = [
 			{ toolName: "write", input: (path: string) => ({ path, content: "hello" }) },
@@ -66,7 +68,7 @@ describe("permission presets for external paths", () => {
 
 	it("classifies every element of a grep path array (senpi#4311)", () => {
 		// given
-		const outside = resolve("/tmp/outside");
+		const outside = join(outsideRoot, "outside");
 
 		// when
 		const only = registry.parse("grep", { pattern: "TOKEN", path: [outside] }, cwd);
@@ -81,7 +83,7 @@ describe("permission presets for external paths", () => {
 
 	it("classifies apply_patch body paths the way apply_patch writes them (senpi#4311)", () => {
 		// given
-		const outside = resolve("/tmp/outside.txt");
+		const outside = join(outsideRoot, "outside.txt");
 		const patch = (path: string) => `*** Begin Patch\n*** Add File: ${path}\n+x\n*** End Patch`;
 
 		// when
@@ -105,7 +107,7 @@ describe("permission presets for external paths", () => {
 
 	it("asks for glob paths outside the workspace in every spelling (senpi#4311)", () => {
 		// given
-		const outside = resolve("/tmp/outside");
+		const outside = join(outsideRoot, "outside");
 
 		for (const spelling of [outside, `@${outside}`, pathToFileURL(outside).href]) {
 			// when
@@ -222,11 +224,13 @@ describe("permission presets for external paths (continued)", () => {
 
 	it("does not broaden root-level external path approvals to the filesystem root", () => {
 		// given
+		const temp = realpathSync.native(tmpdir());
+		const root = parse(temp).root;
 		const cases = [
-			{ toolName: "ls", input: { path: "/tmp" }, always: ["/tmp/*"] },
-			{ toolName: "read", input: { path: "/tmp/file.txt" }, always: ["/tmp/*"] },
-			{ toolName: "read", input: { path: "/secret.txt" }, always: ["/secret.txt"] },
-			{ toolName: "read", input: { path: "/secret" }, always: ["/secret"] },
+			{ toolName: "ls", input: { path: temp }, always: [`${temp}/*`] },
+			{ toolName: "read", input: { path: join(temp, "file.txt") }, always: [`${temp}/*`] },
+			{ toolName: "read", input: { path: join(root, "secret.txt") }, always: [join(root, "secret.txt")] },
+			{ toolName: "read", input: { path: join(root, "secret") }, always: [join(root, "secret")] },
 		];
 
 		for (const testCase of cases) {

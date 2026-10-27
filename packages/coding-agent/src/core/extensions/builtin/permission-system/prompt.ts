@@ -79,8 +79,12 @@ function formatRequestForDisplay(request: Request): string {
 		case "external_directory": {
 			// These are resolved targets, not approval globs. Caller metadata cannot name the
 			// approved directory, and a literal '*' in a filename must survive (senpi#4316).
-			const dir = request.patterns?.[0] ?? "Unknown";
-			parts.push(`Directory: ${dir}`);
+			for (const target of request.patterns.length ? request.patterns : ["Unknown"]) {
+				parts.push(`Directory: ${target}`);
+			}
+			if (request.originalPaths?.length) {
+				parts.push(`Requested paths:\n${request.originalPaths.map((p) => `  - ${p}`).join("\n")}`);
+			}
 			break;
 		}
 		default:

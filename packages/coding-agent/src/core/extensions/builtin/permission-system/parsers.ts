@@ -9,8 +9,9 @@ import { BashArity } from "../permission-system/arity.ts";
 import { analyzeBashCommand, bestEffortCommandLines } from "../permission-system/bash-command-segments.ts";
 import {
 	type AlwaysScope,
+	expandHome,
 	extractExternalPaths,
-	isExternalPath,
+	resolveExternalPath,
 	toParentDirectoryPattern,
 } from "../permission-system/external-dir.ts";
 import type { Request } from "../permission-system/types.ts";
@@ -19,8 +20,12 @@ import { urlOriginAlias, widerAlwaysScope } from "./always-scope.ts";
 import { parseReadPermission } from "./read-permission.ts";
 
 /** Simplified permission request without ID/session metadata */
-export type PermissionRequest = Pick<Request, "permission" | "patterns" | "always" | "widerAlways"> & {
+export type PermissionRequest = Pick<
+	Request,
+	"permission" | "patterns" | "always" | "widerAlways" | "originalPaths"
+> & {
 	readonly autoApproveAsk?: true;
+	/** Absolute external lexical spellings restrict the resolved decision; other aliases share rule order. */
 	readonly ruleAliases?: readonly string[];
 };
 
@@ -138,21 +143,34 @@ function withExternalDirectoryRequests(
 	scope: AlwaysScope,
 	resolveTarget: TargetResolver,
 ): PermissionRequest[] {
-	const externalPaths = [
-		...new Set(
-			paths.flatMap((rawPath) => resolveTarget(rawPath, cwd)).filter((target) => isExternalPath(target, cwd)),
-		),
-	];
+	// Classify the paths the tool opens (senpi#4316), each through the canonical spelling walk (senpi#4351).
+	const seen = new Set<string>();
+	const externalPaths = paths.flatMap((inputPath) =>
+		resolveTarget(inputPath, cwd).flatMap((openedPath) => {
+			const target = resolveExternalPath(openedPath, cwd);
+			if (target === undefined || seen.has(target)) return [];
+			seen.add(target);
+			return [{ inputPath, openedPath, target }];
+		}),
+	);
 	if (externalPaths.length === 0) {
 		return requests;
 	}
+	const ruleAliases = externalPaths.flatMap(({ openedPath, target }) => {
+		const lexical = resolve(cwd, expandHome(openedPath));
+		return lexical === target ? [] : [lexical];
+	});
 
 	return [
 		...requests,
 		{
 			permission: "external_directory",
-			patterns: externalPaths,
-			always: externalPaths.map((externalPath) => toParentDirectoryPattern(externalPath, scope)),
+			patterns: externalPaths.map(({ target }) => target),
+			always: externalPaths.map(({ inputPath, target }) => toParentDirectoryPattern(target, scope, inputPath)),
+			...(ruleAliases.length ? { ruleAliases } : {}),
+			...(externalPaths.some(({ inputPath, target }) => inputPath !== target)
+				? { originalPaths: externalPaths.map(({ inputPath }) => inputPath) }
+				: {}),
 		},
 	];
 }
@@ -288,15 +306,7 @@ export function createBuiltinParserRegistry(): ParserRegistry {
 
 			const requests = bashCommandRequests(command);
 			const externalPaths = extractExternalPaths(command, cwd);
-			if (externalPaths.length > 0) {
-				requests.push({
-					permission: "external_directory",
-					patterns: externalPaths,
-					always: externalPaths.map((externalPath) => toParentDirectoryPattern(externalPath, "file")),
-				});
-			}
-
-			return requests;
+			return withExternalDirectoryRequests(requests, externalPaths, cwd, "file", rawTarget);
 		};
 
 	registry.register("bash", parseBashLikePermission("command"));
