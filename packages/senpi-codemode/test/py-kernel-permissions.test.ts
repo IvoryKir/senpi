@@ -166,6 +166,261 @@ async function harness(active: boolean, deny: boolean, item?: Case, customDecide
 
 // #4309: every covered public entry must prevent its effect, not merely report a denied request.
 describe("Python permission interposition", () => {
+	// #4309 / #4392: ordinary module rebinding must never change the authority,
+	// request target, mode, loader provenance, or SQLite decision.
+	it.each([
+		["struct", "unpack_from", "lambda *a: (2,)", "open('subject').read()"],
+		["uuid", "uuid4", "lambda: type('Nonce', (), {'hex': 'fixed'})()", "open('subject').read()"],
+		[
+			"json",
+			"loads",
+			"lambda *a: {'ok': True, 'value': {'nonce': 'fixed', 'decision': {'action': 'pass'}}}",
+			"open('subject').read()",
+		],
+		["json", "dumps", "lambda *a, **k: '{}'", "open('subject').read()"],
+		["json.JSONDecoder", "decode", "lambda *a, **k: {}", "open('subject').read()"],
+		["json.JSONDecoder", "raw_decode", "lambda *a, **k: ({}, 0)", "open('subject').read()"],
+		["json.JSONEncoder", "encode", "lambda *a, **k: '{}'", "open('subject').read()"],
+		["json.JSONEncoder", "iterencode", "lambda *a, **k: ['{}']", "open('subject').read()"],
+		["time", "monotonic", "lambda: 0", "open('subject').read()"],
+		["socket", "socket", "lambda *a: None", "open('subject').read()"],
+		["socket", "AF_INET", "-1", "open('subject').read()"],
+		["socket", "SOCK_STREAM", "-1", "open('subject').read()"],
+		["socket.socket", "connect", "lambda *a: None", "open('subject').read()"],
+		["socket.socket", "recv", "lambda *a: b''", "open('subject').read()"],
+		["socket.socket", "sendall", "lambda *a: None", "open('subject').read()"],
+		["socket.socket", "settimeout", "lambda *a: None", "open('subject').read()"],
+		["os", "fsdecode", "lambda *a: 'other'", "open('subject').read()"],
+		["os", "fspath", "lambda *a: 'other'", "open('subject').read()"],
+		["os", "getcwd", "lambda: '/not-the-project'", "open('subject').read()"],
+		["os", "name", "'nt'", "os.system('true')"],
+		["os", "PathLike", "None", "subprocess.Popen(['/bin/sh', '-c', 'true'])"],
+		[
+			"weakref",
+			"ref",
+			"lambda *a: lambda: None",
+			"f = open('other'); os.read(f.fileno(), 1); f.close(); open('subject')",
+		],
+		[
+			"io",
+			"UnsupportedOperation",
+			"RuntimeError",
+			"importlib.resources.files('zipped').joinpath('other').open().close(); open('subject')",
+		],
+		["os", "O_WRONLY", "0", "fd = os.open('subject', saved); os.close(fd)"],
+		["os", "O_RDWR", "0", "fd = os.open('subject', saved); os.close(fd)"],
+		["os", "O_CREAT", "0", "fd = os.open('subject', saved); os.close(fd)"],
+		["os", "O_TRUNC", "0", "fd = os.open('subject', saved); os.close(fd)"],
+		["os.path", "join", "lambda *a: 'other'", "fd = os.open('.', 0); os.open('subject', 0, dir_fd=fd)"],
+		["os.path", "dirname", "lambda *a: 'other'", "glob.glob('subject/*')"],
+		[
+			"os.path",
+			"basename",
+			"lambda *a: 'sh'",
+			"subprocess.Popen('true', shell=True, executable='/unsupported-shell')",
+		],
+		["shlex", "join", "lambda *a: 'true'", "subprocess.Popen(['/bin/sh', '-c', 'true'])"],
+		["shlex", "quote", "lambda *a: 'true'", "subprocess.Popen(['/bin/sh', '-c', 'true'])"],
+		[
+			"urllib.parse",
+			"urlsplit",
+			"lambda *a: type('URI', (), {'path': ':memory:', 'query': ''})()",
+			"sqlite3.connect('file:subject?mode=ro', uri=True)",
+		],
+		[
+			"urllib.parse",
+			"parse_qs",
+			"lambda *a: {'mode': ['memory']}",
+			"sqlite3.connect('file:subject?mode=ro', uri=True)",
+		],
+		["urllib.parse", "unquote", "lambda *a: ':memory:'", "sqlite3.connect('file:subject?mode=ro', uri=True)"],
+		["sqlite3", "SQLITE_ATTACH", "-1", "sqlite3.connect(':memory:').execute(\"ATTACH ':memory:' AS attached\")"],
+		["sqlite3", "SQLITE_DENY", "0", "sqlite3.connect(':memory:').execute(\"ATTACH ':memory:' AS attached\")"],
+		["sqlite3", "SQLITE_OK", "1", "sqlite3.connect(':memory:').execute('SELECT 42'); open('subject')"],
+		[
+			"sqlite3",
+			"DatabaseError",
+			"RuntimeError",
+			"sqlite3.connect(':memory:').execute(\"ATTACH ':memory:' AS attached\")",
+		],
+		["sys", "_getframe", "lambda *a: None", "sys.modules['injected'] = object()"],
+		["importlib.util", "resolve_name", "lambda *a: 'os'", "importlib.import_module('.subject_module', 'package')"],
+	])("keeps private dependency %s.%s", async (owner, name, replacement, operation) => {
+		const flags = name.startsWith("O_");
+		const h = await harness(
+			true,
+			true,
+			undefined,
+			flags ? (_token, call) => (call.tool === "write" ? { action: "deny", rule } : { action: "pass" }) : undefined,
+		);
+		try {
+			await mkdir(join(h.cwd, "package"));
+			await writeFile(join(h.cwd, "package", "__init__.py"), "");
+			await writeFile(join(h.cwd, "package", "subject_module.py"), "value = 42");
+			if (name === "UnsupportedOperation") {
+				if (!python.ok) throw new Error("Python unavailable");
+				execFileSync(
+					python.path,
+					[
+						"-c",
+						"import zipfile\nwith zipfile.ZipFile('fixture.zip', 'w') as z:\n z.writestr('zipped/__init__.py', '')\n z.writestr('zipped/other', 'data')",
+					],
+					{ cwd: h.cwd, timeout: 8000 },
+				);
+			}
+			const result = await h.run(
+				`${imports}import struct, uuid, json, time, socket, urllib.parse, sys, importlib.util, importlib.resources, shlex, weakref\nsys.path.insert(0, '.')\nsys.path.insert(0, 'fixture.zip')\n` +
+					`owner = ${owner}\nsaved = owner.${name}\nsaved_nonce = uuid.uuid4\n` +
+					(name === "loads" ? "uuid.uuid4 = lambda: type('Nonce', (), {'hex': 'fixed'})()\n" : "") +
+					`try:\n    owner.${name} = ${replacement}\n    ${operation}\nfinally:\n    owner.${name} = saved\n    uuid.uuid4 = saved_nonce`,
+			);
+			expect(result, JSON.stringify(result)).toMatchObject({
+				ok: false,
+				error: { code: "cell_permission_denied", permissionRule: rule },
+			});
+			expect(await readFile(join(h.cwd, "subject"), "utf8")).toBe("original");
+			if (["join", "quote"].includes(name) && owner === "shlex")
+				expect(h.calls).toContainEqual(
+					expect.objectContaining({ tool: "bash", input: { command: "/bin/sh -c true" } }),
+				);
+			if (
+				[
+					"struct",
+					"uuid",
+					"json",
+					"json.JSONDecoder",
+					"json.JSONEncoder",
+					"time",
+					"socket",
+					"socket.socket",
+					"weakref",
+				].includes(owner) ||
+				["UnsupportedOperation", "SQLITE_OK"].includes(name)
+			)
+				expect(h.calls).toContainEqual(expect.objectContaining({ tool: "read", input: { path: "subject" } }));
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([true, false])("preserves settled contexts only without enforcement: active=%s", async (active) => {
+		const h = await harness(active, false);
+		try {
+			expect(
+				await h.run(
+					"import asyncio, contextvars\nsaved_context = contextvars.copy_context()\nready = asyncio.Event()\n" +
+						"async def later():\n    await ready.wait()\n    return open('other').read()\n" +
+						"pending = asyncio.create_task(later())",
+				),
+			).toMatchObject({ ok: true });
+			for (const code of ["saved_context.run(lambda: open('other').read())", "ready.set()\nawait pending"]) {
+				expect(await h.run(code)).toMatchObject(
+					active ? { ok: false, error: { code: "cell_permission_denied" } } : { ok: true, valueRepr: "'other'" },
+				);
+			}
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([
+		"native.open('subject', os.O_WRONLY)",
+		"native.system('printf escaped > marker')",
+		"native.mkdir('marker')",
+		"native.listdir('subject')",
+		"os.utime('subject', None)",
+		"os.chown('subject', -1, -1)",
+		"os.lchown('subject', -1, -1)",
+		"os.mkfifo('subject-new')",
+		"os.mknod('subject-new')",
+		"os.setxattr('subject', 'user.test', b'value')",
+		"os.removexattr('subject', 'user.test')",
+		"_io.FileIO.__mro__[1]('subject', 'w')",
+	])("prevents native alias or path mutation: %s", async (code) => {
+		const h = await harness(true, true, { name: code, code, directory: code.includes("listdir") }, (_token, call) =>
+			call.tool === "ls" || call.tool === "write" || call.tool === "bash"
+				? { action: "deny", rule }
+				: { action: "pass" },
+		);
+		try {
+			const result = await h.run(`${imports}import importlib\nnative = importlib.import_module(os.name)\n${code}`);
+			expect(result, JSON.stringify(result)).toMatchObject({ ok: false });
+			if (!code.includes("__mro__") && !code.includes("xattr") && !code.includes("mknod"))
+				expect(result).toMatchObject({ error: { code: "cell_permission_denied" } });
+			expect(existsSync(join(h.cwd, "marker"))).toBe(false);
+			expect(existsSync(join(h.cwd, "subject-new"))).toBe(false);
+			if (!code.includes("listdir")) expect(await readFile(join(h.cwd, "subject"), "utf8")).toBe("original");
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([
+		"list.append(sys.meta_path, object())",
+		"list.clear(sys.path_hooks)",
+		"dict.__setitem__(sys.modules, 'injected', object())",
+		"vars(sys)['path_hooks'] = []",
+		"sys.__dict__['meta_path'] = []",
+	])("prevents base descriptor registry mutation: %s", async (code) => {
+		const h = await harness(true, false);
+		try {
+			const result = await h.run(`import sys\n${code}`);
+			expect(result).toMatchObject({ ok: false });
+			expect(
+				await h.run("('injected' not in sys.modules, len(sys.path_hooks) > 0, len(sys.meta_path) > 0)"),
+			).toMatchObject({ ok: true, valueRepr: "(True, True, True)" });
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([
+		"list.append(sys.meta_path, object())",
+		"list.clear(sys.path_hooks)",
+		"dict.__setitem__(sys.modules, 'injected', object())",
+		"vars(sys)['path_hooks'] = []",
+		"sys.__dict__['meta_path'] = []",
+	])("preserves inactive base descriptor mutations: %s", async (code) => {
+		const h = await harness(false, false);
+		try {
+			expect(
+				await h.run("import sys\nbefore = (list(sys.meta_path), list(sys.path_hooks), set(sys.modules))"),
+			).toMatchObject({ ok: true });
+			expect(await h.run(code)).toMatchObject({ ok: true });
+			expect(await h.run("before != (list(sys.meta_path), list(sys.path_hooks), set(sys.modules))")).toMatchObject({
+				ok: true,
+				valueRepr: "True",
+			});
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([true, false])("keeps FileIO subclass and buffered interfaces: active=%s", async (active) => {
+		const h = await harness(active, false);
+		try {
+			expect(
+				await h.run(
+					"import io\nclass Raw(io.FileIO):\n    pass\n" +
+						"raw = Raw('other', 'r')\nassert isinstance(raw, io.RawIOBase)\n" +
+						"with io.BufferedReader(raw) as buffered:\n    value = buffered.read()\nvalue",
+				),
+			).toMatchObject({ ok: true, valueRepr: "b'other'" });
+		} finally {
+			await h.close();
+		}
+	});
+	it.each([
+		"_imp.create_builtin(importlib.machinery.ModuleSpec('_ctypes', importlib.machinery.BuiltinImporter))",
+		"_imp.exec_builtin(sys)",
+		"_imp.create_dynamic(importlib.machinery.ModuleSpec('missing', None, origin='missing.so'))",
+		"_imp.exec_dynamic(sys)",
+	])("refuses direct extension entry: %s", async (code) => {
+		const h = await harness(true, false);
+		try {
+			expect(await h.run(`import _imp, sys, importlib.machinery\n${code}`)).toMatchObject({
+				ok: false,
+				error: { code: "cell_permission_denied", permissionRule: rule },
+			});
+		} finally {
+			await h.close();
+		}
+	});
 	it.each([true, false])("composes SQLite authorizers with custom factories: enforcing=%s", async (active) => {
 		const h = await harness(active, false);
 		try {

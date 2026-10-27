@@ -45,17 +45,15 @@ from typing import Any, Callable, Union
 from urllib.parse import unquote
 # Resolve the loopback bridge's lazy codec before user authority exists.
 codecs.lookup("idna")
-_engine_bytecode = sys.dont_write_bytecode
-sys.dont_write_bytecode = True
+_permission_path = Path(__file__).with_name("permission_bridge.py")
 _permission_spec = importlib.util.spec_from_file_location(
-    "_senpi_permission_bridge", Path(__file__).with_name("permission_bridge.py")
+    "_senpi_permission_bridge", _permission_path
 )
 if _permission_spec is None or _permission_spec.loader is None:
     raise RuntimeError("Python permission bridge asset is unavailable")
 _permission_module = importlib.util.module_from_spec(_permission_spec)
-_permission_spec.loader.exec_module(_permission_module)
+exec(compile(_permission_path.read_bytes(), str(_permission_path), "exec"), _permission_module.__dict__)
 initialize_permissions = _permission_module.initialize
-sys.dont_write_bytecode = _engine_bytecode
 
 sys.__stdout__.write('{"type":"status","event":{"op":"kernel-startup","stage":"runtime-init"}}\n')
 sys.__stdout__.flush()

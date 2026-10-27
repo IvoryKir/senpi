@@ -4,6 +4,8 @@ Originals and grants live in this initializer's closure, never in an importable
 registry. This enforces ordinary APIs, not adversarial Python introspection.
 """
 import builtins
+import _imp
+from collections.abc import MutableMapping, MutableSequence
 import contextvars
 import contextlib
 import glob
@@ -27,11 +29,49 @@ import weakref
 import zipfile
 from typing import Callable
 
+__builtins__ = vars(builtins).copy()
+
 pty = importlib.import_module("pty") if os.name == "posix" else None
 
 
 def install(check, enforcing, refuse):
+    # Private dependency references are captured before cell code can rebind modules.
+    fsdecode, fspath, PathLike = os.fsdecode, os.fspath, os.PathLike
+    join_path, dirname, basename = os.path.join, os.path.dirname, os.path.basename
+    O_WRONLY, O_RDWR, O_CREAT, O_TRUNC = os.O_WRONLY, os.O_RDWR, os.O_CREAT, os.O_TRUNC
+    platform_name, environment_get = os.name, os.environ.get
+    quote = shlex.quote
+    def join_command(args):
+        return " ".join(quote(arg) for arg in args)
+    getframe = sys._getframe
+    resolve_name = importlib.util.resolve_name
+    reference, UnsupportedOperation = weakref.ref, io.UnsupportedOperation
+    urlsplit, parse_qs, unquote = urllib.parse.urlsplit, urllib.parse.parse_qs, urllib.parse.unquote
+    DatabaseError = sqlite3.DatabaseError
+    SQLITE_ATTACH, SQLITE_DENY, SQLITE_OK = sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DENY, sqlite3.SQLITE_OK
+    native = importlib.import_module(os.name)
+    os_originals = dict(vars(os))
+    module_getattribute = types.ModuleType.__getattribute__
+    mapping_proxy = types.MappingProxyType
+    # Python helpers also resolve globals in their defining module. Freeze those
+    # dictionaries, including os.path's fspath dependency, not just their names.
+    function_type = types.FunctionType
+    path_os = types.SimpleNamespace(fspath=fspath)
+    def capture(function, **dependencies):
+        function = getattr(function, "__wrapped__", function)
+        captured = function_type(function.__code__, {**function.__globals__, "__builtins__": __builtins__, **dependencies},
+                                 function.__name__, function.__defaults__, function.__closure__)
+        captured.__kwdefaults__ = function.__kwdefaults__
+        return captured
+    fsdecode = capture(fsdecode, fspath=fspath)
+    join_path = capture(join_path, os=path_os)
+    dirname = capture(dirname, os=path_os)
+    basename = capture(basename, os=path_os)
+    quote = capture(quote)
+    resolve_name = capture(resolve_name)
+    urlsplit, parse_qs, unquote = capture(urlsplit), capture(parse_qs), capture(unquote)
     grants = {}
+    modules = sys.modules
     internal = contextvars.ContextVar("senpi_operation_internal", default=False)
     engine_modules = frozenset(id(module) for module in sys.modules.values())
     import_codes = frozenset(
@@ -55,11 +95,11 @@ def install(check, enforcing, refuse):
             else:
                 resource(path, tool)
             return
-        requested = os.fsdecode(os.fspath(path))
+        requested = fsdecode(fspath(path))
         if dir_fd is not None:
             # Relative dir-fd resolution cannot be attributed without a recorded directory.
             resource(dir_fd, "read")
-            requested = os.path.join(grants[dir_fd][0], requested)
+            requested = join_path(grants[dir_fd][0], requested)
         check(tool, {"path": requested})
 
     def resource(fd, mode):
@@ -73,15 +113,15 @@ def install(check, enforcing, refuse):
 
     def modes(mode):
         if isinstance(mode, int):
-            access = mode & (os.O_WRONLY | os.O_RDWR)
-            return ("read", "write") if access == os.O_RDWR else (("write",) if access == os.O_WRONLY else ("read",))
+            access = mode & (O_WRONLY | O_RDWR)
+            return ("read", "write") if access == O_RDWR else (("write",) if access == O_WRONLY else ("read",))
         return ("read", "write") if "+" in mode else (("read",) if mode.startswith("r") else ("write",))
 
     def opening(path, mode, kwargs):
         allowed = modes(mode)
         if active():
             required = allowed
-            if isinstance(mode, int) and mode & (os.O_CREAT | os.O_TRUNC) and "write" not in required:
+            if isinstance(mode, int) and mode & (O_CREAT | O_TRUNC) and "write" not in required:
                 required = (*required, "write")
             for operation in required:
                 path_call(operation, path, dir_fd=kwargs.get("dir_fd"))
@@ -94,7 +134,7 @@ def install(check, enforcing, refuse):
             self._allowed = allowed
             try:
                 self._fd = value.fileno()
-            except io.UnsupportedOperation:
+            except UnsupportedOperation:
                 self._fd = None
         def _grant(self, mode):
             if active():
@@ -104,7 +144,7 @@ def install(check, enforcing, refuse):
                     resource(self._fd, mode)
         def __getattr__(self, name):
             value = getattr(self._value, name)
-            if name in ("read", "read1", "readinto", "readinto1", "readline", "readlines", "peek",
+            if name in ("read", "read1", "readall", "readinto", "readinto1", "readline", "readlines", "peek",
                         "write", "writelines", "truncate"):
                 def operation(*args, **kwargs):
                     mode = "read" if name.startswith("read") or name == "peek" else "write"
@@ -139,8 +179,8 @@ def install(check, enforcing, refuse):
             allowed = opening(file, mode, kwargs)
             value = original(file, mode, *args, **kwargs)
             fd = value.fileno()
-            grants[fd] = (os.fsdecode(os.fspath(file)) if not isinstance(file, int) else grants.get(file, ("", ()))[0],
-                          allowed, weakref.ref(value))
+            grants[fd] = (fsdecode(fspath(file)) if not isinstance(file, int) else grants.get(file, ("", ()))[0],
+                          allowed, reference(value))
             # Zero-deny sessions receive the exact original object.
             if not active():
                 return value
@@ -150,27 +190,23 @@ def install(check, enforcing, refuse):
 
     builtins.open = wrap_open(original_open)
     io.open = wrap_open(io.open)
-    # Preserve FileIO's class identity for libraries which subclass it.
+    # Remain subclassable without putting the unguarded constructor in our MRO.
     original_fileio = io.FileIO
-    class FileIO(original_fileio):
+    class FileIO(File, io.RawIOBase):
         def __init__(self, file, mode="r", closefd=True, opener=None):
-            if not active() and not internal.get():
-                super().__init__(file, mode, closefd, opener)
-                return
             allowed = opening(file, mode, {"opener": opener})
-            super().__init__(file, mode, closefd, opener)
-            grants[self.fileno()] = (os.fsdecode(os.fspath(file)) if not isinstance(file, int) else "", allowed,
-                                     weakref.ref(self))
-        def close(self):
-            if not self.closed:
-                grants.pop(self.fileno(), None)
-            return super().close()
-    for name in ("read", "readall", "readinto", "write", "truncate"):
+            value = original_fileio(file, mode, closefd, opener)
+            File.__init__(self, value, allowed)
+            grants[value.fileno()] = (fsdecode(fspath(file)) if not isinstance(file, int) else "", allowed,
+                                      reference(value))
+        @property
+        def closed(self):
+            return self._value.closed
+    for name in ("read", "readall", "readinto", "readline", "readlines", "write", "writelines", "truncate",
+                 "seek", "tell", "fileno", "flush", "isatty", "readable", "writable", "seekable"):
         def fileio_method(name):
-            original = getattr(original_fileio, name)
             def wrapped(self, *args, **kwargs):
-                resource(self.fileno(), "read" if name.startswith("read") else "write")
-                return original(self, *args, **kwargs)
+                return File.__getattr__(self, name)(*args, **kwargs)
             return wrapped
         setattr(FileIO, name, fileio_method(name))
     io.FileIO = _io.FileIO = FileIO
@@ -182,7 +218,7 @@ def install(check, enforcing, refuse):
             return original_os_open(path, flags, mode, dir_fd=dir_fd)
         allowed = opening(path, flags, {"dir_fd": dir_fd})
         fd = original_os_open(path, flags, mode, dir_fd=dir_fd)
-        grants[fd] = (os.fsdecode(os.fspath(path)), allowed)
+        grants[fd] = (fsdecode(fspath(path)), allowed)
         return fd
     os.open = os_open
     def close(fd):
@@ -218,8 +254,11 @@ def install(check, enforcing, refuse):
             return original(*args, **kwargs)
         setattr(owner, name, wrapped)
 
-    for name in ("remove", "unlink", "rmdir", "mkdir", "makedirs", "chmod", "truncate"):
-        wrap_paths(os, name, [(0, "path", "write")])
+    for name in ("remove", "unlink", "rmdir", "mkdir", "makedirs", "chmod", "truncate",
+                 "mkfifo", "mknod", "utime", "chown", "lchown", "lchmod", "chflags", "lchflags",
+                 "setxattr", "removexattr"):
+        if hasattr(os, name):
+            wrap_paths(os, name, [(0, "path", "write")])
     for name in ("rename", "replace", "link"):
         wrap_paths(os, name, [(0, "src", "write"), (1, "dst", "write")])
     wrap_paths(os, "symlink", [(1, "dst", "write")])
@@ -244,9 +283,9 @@ def install(check, enforcing, refuse):
                     prefix = pathname
                     for wildcard in ("*", "?", "["):
                         prefix = prefix.split(wildcard, 1)[0]
-                    root = os.path.dirname(prefix) or "."
+                    root = dirname(prefix) or "."
                     if kwargs.get("root_dir"):
-                        root = os.path.join(os.fspath(kwargs["root_dir"]), root)
+                        root = join_path(fspath(kwargs["root_dir"]), root)
                     path_call("ls", root, dir_fd=kwargs.get("dir_fd"))
                 return original(pathname, *args, **kwargs)
             return wrapped
@@ -258,15 +297,15 @@ def install(check, enforcing, refuse):
 
     def shell_command(args, shell=False, executable=None):
         if shell:
-            selected_shell = executable or (os.environ.get("COMSPEC", "cmd.exe") if os.name == "nt" else "/bin/sh")
-            if os.path.basename(os.fsdecode(selected_shell)) not in ("sh", "bash", "zsh", "dash"):
+            selected_shell = executable or (environment_get("COMSPEC", "cmd.exe") if platform_name == "nt" else "/bin/sh")
+            if basename(fsdecode(selected_shell)) not in ("sh", "bash", "zsh", "dash"):
                 refuse("unsupported shell")
             # POSIX Popen passes sequence[0] as the -c program, the rest as shell arguments.
-            return os.fsdecode(args if isinstance(args, (str, bytes)) else args[0])
-        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+            return fsdecode(args if isinstance(args, (str, bytes)) else args[0])
+        argv = [args] if isinstance(args, (str, bytes, PathLike)) else list(args)
         if executable is not None:
             argv[0] = executable
-        return shlex.join([os.fsdecode(os.fspath(arg)) for arg in argv])
+        return join_command([fsdecode(fspath(arg)) for arg in argv])
 
     def perform(original, args, kwargs):
         # Trusted implementation internals (fork/exec in os.spawn, pty, Popen) have already
@@ -305,7 +344,7 @@ def install(check, enforcing, refuse):
         if bound.get("preexec_fn") is not None:
             bound["preexec_fn"] = user_callback(bound["preexec_fn"])
         check("bash", {"command": shell_command(bound["args"], bound.get("shell", False), bound.get("executable"))},
-              os.fsdecode(bound["cwd"]) if bound.get("cwd") is not None else None)
+              fsdecode(bound["cwd"]) if bound.get("cwd") is not None else None)
         return perform(original_popen_init, binding.args, binding.kwargs)
     subprocess.Popen.__init__ = popen_init
     for name in ("system", "popen"):
@@ -314,9 +353,9 @@ def install(check, enforcing, refuse):
             def wrapped(command, *args, **kwargs):
                 if not active():
                     return original(command, *args, **kwargs)
-                if os.name == "nt":
+                if platform_name == "nt":
                     refuse("unsupported shell")
-                check("bash", {"command": os.fsdecode(command)})
+                check("bash", {"command": fsdecode(command)})
                 return perform(original, (command, *args), kwargs)
             return wrapped
         setattr(os, name, shell(original))
@@ -367,6 +406,16 @@ def install(check, enforcing, refuse):
         importlib.machinery.ExtensionFileLoader.create_module, "extension-module loading")
     importlib.machinery.ExtensionFileLoader.exec_module = forbidden(
         importlib.machinery.ExtensionFileLoader.exec_module, "extension-module loading")
+    for name in ("create_dynamic", "exec_dynamic", "create_builtin", "exec_builtin"):
+        setattr(_imp, name, forbidden(getattr(_imp, name), "extension-module loading"))
+    for name in ("create_module", "exec_module"):
+        setattr(importlib.machinery.BuiltinImporter, name, staticmethod(forbidden(
+            getattr(importlib.machinery.BuiltinImporter, name), "extension-module loading")))
+    # os re-exports native builtins; rebinding only os leaves public posix/nt aliases.
+    for name, original in os_originals.items():
+        wrapped = getattr(os, name)
+        if wrapped is not original and getattr(native, name, None) is original:
+            setattr(native, name, wrapped)
 
     for owner in (io, _io):
         original = owner.open_code
@@ -375,7 +424,7 @@ def install(check, enforcing, refuse):
                 if active():
                     path_call("read", path)
                 value = original(path)
-                grants[value.fileno()] = (os.fsdecode(os.fspath(path)), ("read",), weakref.ref(value))
+                grants[value.fileno()] = (fsdecode(fspath(path)), ("read",), reference(value))
                 return File(value, ("read",)) if active() else value
             return wrapped
         setattr(owner, "open_code", open_code(original))
@@ -394,7 +443,7 @@ def install(check, enforcing, refuse):
     cache_code = getattr(source_loader, "_cache_bytecode").__code__
     get_code = source_loader.get_code.__code__
     def set_data(self, path, data, *args, **kwargs):
-        if sys._getframe(1).f_code is cache_code and sys._getframe(2).f_code is get_code:
+        if getframe(1).f_code is cache_code and getframe(2).f_code is get_code:
             # The engine's optional bytecode cache is not a cell-requested write.
             # A direct call to set_data still crosses the ordinary write gate.
             return perform(original_set_data, (self, path, data, *args), kwargs)
@@ -405,7 +454,7 @@ def install(check, enforcing, refuse):
 
     forbidden_modules = frozenset(("ctypes", "_ctypes", "cffi", "_cffi_backend", "_posixsubprocess", "multiprocessing"))
     def inspect_import(name):
-        module = sys.modules.get(name)
+        module = modules.get(name)
         forbidden_module = name.split(".", 1)[0] in forbidden_modules
         if not forbidden_module and module is not None and id(module) in engine_modules:
             return
@@ -418,18 +467,18 @@ def install(check, enforcing, refuse):
             if path:
                 path_call("read", path)
     def importing(name, globals=None, locals=None, fromlist=(), level=0):
-        absolute = importlib.util.resolve_name("." * level + name, (globals or {}).get("__package__")) if level else name
+        absolute = resolve_name("." * level + name, (globals or {}).get("__package__")) if level else name
         inspect_import(absolute)
         result = original_import(name, globals, locals, fromlist, level)
         # Loader checks protect uncached modules; cache hits need this import-time check.
         inspect_import(absolute)
         for child in fromlist or ():
-            if child != "*" and absolute + "." + child in sys.modules:
+            if child != "*" and absolute + "." + child in modules:
                 inspect_import(absolute + "." + child)
         return result
     builtins.__import__ = importing
     def import_module(name, package=None):
-        absolute = importlib.util.resolve_name(name, package) if name.startswith(".") else name
+        absolute = resolve_name(name, package) if name.startswith(".") else name
         inspect_import(absolute)
         return original_import_module(name, package)
     importlib.import_module = import_module
@@ -438,7 +487,7 @@ def install(check, enforcing, refuse):
         if active():
             module = original_import_module(package)
             if module.__file__ is not None:
-                path_call("read", os.path.join(os.path.dirname(module.__file__), resource))
+                path_call("read", join_path(dirname(module.__file__), resource))
         return original_pkg_data(package, resource)
     pkgutil.get_data = pkg_data
     original_files = importlib.resources.files
@@ -450,7 +499,7 @@ def install(check, enforcing, refuse):
         def __getattr__(self, name):
             return getattr(self._value, name)
         def __fspath__(self):
-            return os.fspath(self._value)
+            return fspath(self._value)
         def __truediv__(self, child):
             return self.joinpath(child)
         def joinpath(self, *children):
@@ -475,11 +524,11 @@ def install(check, enforcing, refuse):
             result = self._value.open(mode, *args, **kwargs)
             wrapped = File(result, allowed)
             if wrapped._fd is not None:
-                grants[wrapped._fd] = (str(self._value), allowed, weakref.ref(result))
+                grants[wrapped._fd] = (str(self._value), allowed, reference(result))
             return wrapped
     def files(*args, **kwargs):
         if "anchor" in files_parameters and (args[0] if args else kwargs.get("anchor", kwargs.get("package"))) is None:
-            caller = sys._getframe(1).f_globals.get("__name__")
+            caller = getframe(1).f_globals.get("__name__")
             if args:
                 args = (caller, *args[1:])
             else:
@@ -506,16 +555,16 @@ def install(check, enforcing, refuse):
     databases = weakref.WeakKeyDictionary()
     sqlite_denied = contextvars.ContextVar("senpi_sqlite_denied", default=False)
     def database_path(database, uri):
-        path = os.fsdecode(os.fspath(database))
+        path = fsdecode(fspath(database))
         if path in ("", ":memory:"):
             return None, ()
         mode = None
         if uri and path.startswith("file:"):
-            parsed = urllib.parse.urlsplit(path)
-            mode = urllib.parse.parse_qs(parsed.query).get("mode", [None])[0]
+            parsed = urlsplit(path)
+            mode = parse_qs(parsed.query).get("mode", [None])[0]
             if mode == "memory":
                 return None, ()
-            path = urllib.parse.unquote(parsed.path)
+            path = unquote(parsed.path)
             if path == ":memory:":
                 return None, ()
         return path, ("read",) if mode == "ro" else ("read", "write")
@@ -528,7 +577,7 @@ def install(check, enforcing, refuse):
                 sqlite_denied.set(False)
                 try:
                     return original(self, *args, **kwargs)
-                except sqlite3.DatabaseError:
+                except DatabaseError:
                     if sqlite_denied.get():
                         refuse("SQLite ATTACH")
                     raise
@@ -546,10 +595,10 @@ def install(check, enforcing, refuse):
             self.set_authorizer(None)
         def set_authorizer(self, callback):
             def authorizer(action, *args):
-                if active() and action == sqlite3.SQLITE_ATTACH:
+                if active() and action == SQLITE_ATTACH:
                     sqlite_denied.set(True)
-                    return sqlite3.SQLITE_DENY
-                return sqlite3.SQLITE_OK if callback is None else callback(action, *args)
+                    return SQLITE_DENY
+                return SQLITE_OK if callback is None else callback(action, *args)
             return super().set_authorizer(authorizer)
         def cursor(self, factory=None):
             active()
@@ -612,7 +661,7 @@ def install(check, enforcing, refuse):
     def import_mutation():
         # CPython/importlib writes its module cache while importing. Only those
         # sealed engine code objects, never arbitrary user import hooks, may do so.
-        frame = sys._getframe(2)
+        frame = getframe(2)
         if frame.f_code in import_codes:
             return
         if active():
@@ -642,11 +691,50 @@ def install(check, enforcing, refuse):
             return wrapped
         setattr(Hooks, name, mutation(getattr(list, name)))
     class Sys(types.ModuleType):
+        def __getattribute__(self, name):
+            value = module_getattribute(self, name)
+            if self is not sys or name not in ("modules", "meta_path", "path_hooks", "__dict__") or not active():
+                return value
+            # Import machinery owns the real registries. Cells get live views
+            # which have no dict/list base descriptor capable of mutating them.
+            if getframe(1).f_code in import_codes:
+                return value
+            if name == "__dict__":
+                return mapping_proxy({**value, "modules": module_view,
+                                      "meta_path": meta_view, "path_hooks": path_view})
+            return {"modules": module_view, "meta_path": meta_view, "path_hooks": path_view}[name]
         def __setattr__(self, name, value):
-            if name in ("modules", "meta_path", "path_hooks") and active():
+            if self is sys and name in ("modules", "meta_path", "path_hooks") and active():
                 refuse(f"sys.{name} replacement")
             return super().__setattr__(name, value)
-    sys.modules = Modules(sys.modules)
-    sys.meta_path = Hooks(sys.meta_path)
-    sys.path_hooks = Hooks(sys.path_hooks)
+    class ModuleView(MutableMapping[str, object]):
+        def __getitem__(self, key):
+            return modules[key]
+        def __iter__(self):
+            return iter(modules)
+        def __len__(self):
+            return len(modules)
+        def __setitem__(self, key, value):
+            modules[key] = value
+        def __delitem__(self, key):
+            del modules[key]
+        def copy(self):
+            return dict(modules)
+    def hook_view(hooks):
+        class HookView(MutableSequence[object]):
+            def __getitem__(self, key):
+                return hooks[key]
+            def __len__(self):
+                return len(hooks)
+            def __setitem__(self, key, value):
+                hooks[key] = value
+            def __delitem__(self, key):
+                del hooks[key]
+            def insert(self, index, value):
+                hooks.insert(index, value)
+        return HookView()
+    modules = Modules(sys.modules)
+    meta_hooks, path_hooks = Hooks(sys.meta_path), Hooks(sys.path_hooks)
+    module_view, meta_view, path_view = ModuleView(), hook_view(meta_hooks), hook_view(path_hooks)
+    sys.modules, sys.meta_path, sys.path_hooks = modules, meta_hooks, path_hooks
     setattr(sys, "__class__", Sys)

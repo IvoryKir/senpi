@@ -27,6 +27,10 @@ token offset while its interpreter may retain a context. Wrapped operations
 inspect the word before taking the inactive fast path and again after an allow.
 No-token contexts consult the kernel word and cannot borrow an enforcing
 invocation's authority.
+An expired inactive token may continue ordinary background work only while the
+kernel word remains alive and inactive. An expired enforcing token, or any dead
+kernel word, still refuses. This keeps copied contexts and asyncio tasks working
+across cells in sessions without deny rules.
 
 `revokeSessionKernels` marks the words DEAD synchronously and cancels pending
 checks before requesting retirement. Admission waits for the existing process
@@ -40,6 +44,11 @@ The prelude loads both permission modules by their own file locations before
 user code, including when the prelude is loaded through `runpy`. Captured
 originals, the descriptor grants, and the mapping stay in closures. Wrappers
 do not publish `__wrapped__` references to originals.
+Permission decisions use private copies of classification helpers, constants,
+builtins, socket methods, and JSON codecs. Python helpers whose globals contain
+dependencies get private globals dictionaries too. Rebinding public stdlib names
+cannot change an authority word, forge a reply, or redirect a permission target.
+The `posix`/`nt` aliases share the same wrappers as `os`.
 
 File modes map to read, write, or both. Descriptor grants record paths and
 modes; unknown descriptors and opposite-mode operations refuse. Retained file
@@ -53,6 +62,14 @@ its call chain, not by a runtime-directory prefix. Direct calls to `set_data`
 still request write permission. Memory probes resolve before interposition and
 keep their fixed engine I/O private. Under enforcement, exception formatting
 reports the real traceback frames without issuing linecache source-file reads.
+Engine permission assets are compiled directly from source without a bytecode
+cache. Dynamic and builtin extension entry points, including `_imp`, are guarded.
+Cells see live mapping/sequence views of import registries while enforcing:
+ordinary reads continue, ordinary mutations carry the permission refusal, and
+direct `dict`/`list` descriptors reject the views with `TypeError` before any
+mutation. The `sys` dictionary view is read-only in that mode.
+FileIO remains a subclassable raw-I/O adapter, but its MRO no longer exposes the
+unguarded native file constructor.
 
 Ruby and Julia refuse each enforcing cell before posting it to the interpreter,
 including queued cells whose policy changed before execution. Inactive cells
