@@ -2,9 +2,9 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 import type { Skill } from "./skills.ts";
 
 export const COMPACT_SKILL_CATALOG_COUNT = 100;
-export const COMPACT_SKILL_CATALOG_DESCRIPTION_BYTES = 64 * 1024;
+export const COMPACT_SKILL_CATALOG_DESCRIPTION_BYTES = 16 * 1024;
 export const MAX_SKILL_CATALOG_BYTES = 48 * 1024;
-const ONE_LINE_DESCRIPTION_MAX_CHARS = 160;
+const ONE_LINE_DESCRIPTION_MAX_CHARS = 100;
 
 /** A catalog this large is listed by name plus a one-line description, since it rides on every request. */
 export function isLargeSkillCatalog(skills: readonly Skill[]): boolean {
@@ -61,9 +61,10 @@ function buildSkillCatalog(skills: readonly Skill[], fileReadTool: "read" | "bas
 
 function oneLineDescription(description: string): string {
 	const firstLine = description.trim().split("\n", 1)[0]?.trim() ?? "";
-	return firstLine.length <= ONE_LINE_DESCRIPTION_MAX_CHARS
-		? firstLine
-		: `${firstLine.slice(0, ONE_LINE_DESCRIPTION_MAX_CHARS - 1).trimEnd()}…`;
+	if (firstLine.length <= ONE_LINE_DESCRIPTION_MAX_CHARS) return firstLine;
+	const head = firstLine.slice(0, ONE_LINE_DESCRIPTION_MAX_CHARS - 1);
+	const wordEnd = head.lastIndexOf(" ");
+	return `${(wordEnd > ONE_LINE_DESCRIPTION_MAX_CHARS / 2 ? head.slice(0, wordEnd) : head).replace(/[\s,;:]+$/, "")}…`;
 }
 
 /**
@@ -115,14 +116,21 @@ function renderSkills(
 	for (const [dir, alias] of rootByPath) {
 		lines.push(`  <${alias}>${escapeXml(dir)}</${alias}>`);
 	}
+	const oneLine = options.compact || options.namesOnly;
 	lines.push(
 		"</skill_roots>",
-		"A location's `rN/` prefix expands to the matching root above.",
+		oneLine
+			? "Each line is `- name [location]: when to use it`. A location `rN` means the file `rN/<name>/SKILL.md`; a longer location is the file's path under that root."
+			: "A location's `rN/` prefix expands to the matching root above.",
 		"",
 		"<available_skills>",
 	);
 
 	for (const skill of visibleSkills) {
+		if (oneLine) {
+			lines.push(compactSkillLine(skill, rootByPath, options.namesOnly));
+			continue;
+		}
 		const dir = skill.filePath.split("/").slice(0, -2).join("/");
 		const alias = rootByPath.get(dir);
 		const relative = skill.filePath.startsWith(`${dir}/`) ? skill.filePath.slice(dir.length + 1) : skill.filePath;
@@ -141,6 +149,17 @@ function renderSkills(
 	lines.push("</available_skills>");
 
 	return lines.join("\n");
+}
+
+// A large catalog rides on every request, so each skill is one line: its name, the shortest location that still
+// resolves (the root alias alone when the file is `<root>/<name>/SKILL.md`), and a one-line description.
+function compactSkillLine(skill: Skill, rootByPath: ReadonlyMap<string, string>, namesOnly: boolean): string {
+	const dir = skill.filePath.split("/").slice(0, -2).join("/");
+	const alias = rootByPath.get(dir);
+	const relative = skill.filePath.startsWith(`${dir}/`) ? skill.filePath.slice(dir.length + 1) : skill.filePath;
+	const location = relative === `${skill.name}/SKILL.md` ? alias : `${alias}/${relative}`;
+	const head = `- ${escapeXml(skill.name)} [${escapeXml(location ?? relative)}]`;
+	return namesOnly ? head : `${head}: ${escapeXml(oneLineDescription(skill.description))}`;
 }
 
 function escapeXml(str: string): string {
