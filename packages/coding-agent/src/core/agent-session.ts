@@ -243,6 +243,7 @@ import {
 	ExtensionRunner,
 	type ExtensionToolHookLifecycleEvent,
 	type ExtensionUIContext,
+	type InputAttribution,
 	type InputSource,
 	type MessageEndEvent,
 	type MessageStartEvent,
@@ -1167,6 +1168,19 @@ function originOf(
 	return options?.inputOrigin ?? inputOriginOf(options?.source);
 }
 
+/** The attribution an input's `input` event reports (`inputAttributionOf`); RPC input needs the connection's role. */
+function attributionOf(
+	options:
+		| { readonly source?: InputSource; readonly inputOrigin?: InputOrigin; readonly interactiveUser?: boolean }
+		| undefined,
+): InputAttribution {
+	return inputAttributionOf({
+		origin: originOf(options),
+		source: options?.source,
+		interactiveUser: options?.interactiveUser,
+	});
+}
+
 /** A human input about to be queued or admitted (senpi#3811 design 4.4). */
 export interface HumanInputAdmittedEvent {
 	readonly kind: "prompt" | "steer" | "follow_up" | "answer" | "resume";
@@ -1184,6 +1198,8 @@ export interface QueuedInputOptions extends ClientMessageIdentity {
 	source?: InputSource;
 	/** Who the input came from; defaults from `source` (see `originOf`). */
 	inputOrigin?: InputOrigin;
+	/** RPC input: the connection declared `interactive_user`; without it the `input` event attributes it to an agent. */
+	interactiveUser?: boolean;
 	/** Persist the prepared queue record before publishing or enqueuing it. */
 	onQueuedInput?: (input: PreparedClientInput) => void;
 }
@@ -1211,6 +1227,8 @@ export interface PromptOptions extends ClientMessageIdentity {
 	thinkingLevel?: ThinkingLevel;
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
 	source?: InputSource;
+	/** RPC input: the connection declared `interactive_user`; without it the `input` event attributes it to an agent. */
+	interactiveUser?: boolean;
 	/**
 	 * Send command-shaped text that no command handles to the model as plain text. Without it, such
 	 * interactive or RPC input is rejected with `UnknownCommandError`.
@@ -5651,7 +5669,7 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 		source: InputSource,
-		inputOrigin: InputOrigin,
+		attribution: InputAttribution,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<{ text: string; images: ImageContent[] | undefined; inputId?: string } | undefined> {
 		if (!this._extensionRunner.hasHandlers("input")) {
@@ -5665,7 +5683,7 @@ export class AgentSession {
 			source,
 			streamingBehavior,
 			inputId,
-			inputAttributionOf(inputOrigin),
+			attribution,
 		);
 		if (inputResult.action === "handled") {
 			await this._emitInputDisposition(inputId, "handled");
@@ -6074,7 +6092,7 @@ export class AgentSession {
 					options?.source ?? "interactive",
 					this.isStreaming ? options?.streamingBehavior : undefined,
 					inputId,
-					inputAttributionOf(originOf(options)),
+					attributionOf(options),
 				);
 				throwIfCancelled();
 				if (inputResult.action === "handled") {
@@ -6626,7 +6644,7 @@ export class AgentSession {
 			text,
 			images,
 			options?.source ?? "interactive",
-			originOf(options),
+			attributionOf(options),
 			this.isStreaming ? behavior : undefined,
 		);
 		if (!processedInput) return "handled";

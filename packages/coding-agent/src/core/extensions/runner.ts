@@ -2565,8 +2565,8 @@ export class ExtensionRunner {
 	}
 
 	/**
-	 * Emit input event. Transforms chain, "handled" short-circuits. `attribution` defaults to what `source` implies;
-	 * the session passes the one its input origin gives (a person's answer sent through the extension API is the user's).
+	 * Emit input event. Transforms chain, "handled" short-circuits. `attribution` defaults to what `source` alone
+	 * implies (RPC input from a connection whose role is unknown is an agent's); the session passes the one it decides.
 	 */
 	async emitInput(
 		text: string,
@@ -2574,7 +2574,7 @@ export class ExtensionRunner {
 		source: InputSource,
 		streamingBehavior?: "steer" | "followUp",
 		inputId = "input",
-		attribution: InputAttribution = inputAttributionOf(inputOriginOf(source)),
+		attribution: InputAttribution = inputAttributionOf({ origin: inputOriginOf(source), source }),
 	): Promise<InputEventResult> {
 		let currentText = text;
 		let currentImages = images;

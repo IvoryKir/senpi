@@ -1267,7 +1267,7 @@ pi.on("input", async (event, ctx) => {
   // event.text - raw input (before skill/template expansion)
   // event.images - attached images, if any
   // event.source - "interactive" (typed), "rpc" (API), or "extension" (via sendUserMessage)
-  // event.attribution - "user" (a person sent it) or "agent" (an extension, tool, subagent or the session)
+  // event.attribution - "user" (a person sent it) or "agent" (an extension, tool, subagent, another agent's RPC client, or the session)
   // event.streamingBehavior - "steer" | "followUp" | undefined
   //   undefined when idle, "steer" for mid-stream interrupts,
   //   "followUp" for messages queued until the agent finishes
@@ -1294,7 +1294,7 @@ pi.on("input", async (event, ctx) => {
 });
 ```
 
-`source` names the channel the input arrived on; `attribution` names who sent it. Typed input and an RPC client's `prompt`, `steer` and `follow_up` are `"user"`. Input an extension sends with `sendUserMessage` is `"agent"`, except a person's answer to a question that the extension delivers through it, which stays `"user"` with `source: "extension"`. React to `attribution === "user"` when only the person's own messages should count, for example to lift a stop the user set.
+`source` names the channel the input arrived on; `attribution` names who sent it. Typed input is `"user"`. An RPC client's `prompt`, `steer` and `follow_up` are `"user"` only when that connection declared the `interactive_user` role with `set_client_info`; from any other RPC client (for example a parent agent driving a child session) they are `"agent"`. Input an extension sends with `sendUserMessage` is `"agent"`, except a person's answer to a question that the extension delivers through it, which stays `"user"` with `source: "extension"`. React to `attribution === "user"` when only the person's own messages should count, for example to lift a stop the user set.
 
 **Results:**
 - `continue` - pass through unchanged (default if handler returns nothing)

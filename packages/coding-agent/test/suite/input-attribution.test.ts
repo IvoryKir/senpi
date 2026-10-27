@@ -85,6 +85,24 @@ describe("input event attribution (senpi#4471)", () => {
 		]);
 	});
 
+	it("attributes RPC steers to the user only when the connection declared interactive_user", async () => {
+		const { h, entered, release, seen } = await streamingHarness();
+		const running = h.session.prompt("start");
+		await entered.promise;
+		try {
+			await h.session.steer("from a parent agent", undefined, { source: "rpc" });
+			await h.session.steer("from the user's client", undefined, { source: "rpc", interactiveUser: true });
+		} finally {
+			release.resolve();
+			await running;
+			await h.session.waitForIdle();
+		}
+		expect(seen.slice(1)).toEqual([
+			{ text: "from a parent agent", source: "rpc", attribution: "agent", streamingBehavior: "steer" },
+			{ text: "from the user's client", source: "rpc", attribution: "user", streamingBehavior: "steer" },
+		]);
+	});
+
 	it("attributes a steer an extension sends to an agent", async () => {
 		const { h, entered, release, nextInput, extensionApi } = await streamingHarness();
 		const running = h.session.prompt("start");

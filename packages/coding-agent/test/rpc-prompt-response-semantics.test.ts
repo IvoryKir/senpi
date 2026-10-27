@@ -517,8 +517,12 @@ describe("RPC prompt response semantics", () => {
 		}
 	});
 
-	// senpi#4471: a client's prompt and steer are the user's; what an extension sends in response is an agent's.
-	it("attributes client prompts and steers to the user and extension sends to an agent", async () => {
+	// senpi#4471: RPC input is the user's only from a connection that declared interactive_user; a client without
+	// the role (a parent agent driving a child session) and an extension's own send are an agent's.
+	it.each([
+		["without interactive_user", undefined, "agent"],
+		["that declared interactive_user", ["interactive_user"], "user"],
+	] as const)("attributes prompts and steers from a client %s", async (_label, capabilities, attribution) => {
 		const seen: { text: string; source: string; attribution: string }[] = [];
 		const { lineHandler, cleanup, releaseResponse } = await startRpcMode({
 			withAuth: true,
@@ -534,13 +538,21 @@ describe("RPC prompt response semantics", () => {
 		});
 
 		try {
+			if (capabilities !== undefined) {
+				lineHandler(JSON.stringify({ id: "info", type: "set_client_info", width: 80, capabilities }));
+				await vi.waitFor(() =>
+					expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
+						expect.objectContaining({ id: "info", type: "response", command: "set_client_info", success: true }),
+					),
+				);
+			}
 			lineHandler(JSON.stringify({ id: "start", type: "prompt", message: "Start" }));
 			await vi.waitFor(() => expect(getPromptResponses(rpcIo.outputLines, "start")).toHaveLength(1));
 			lineHandler(JSON.stringify({ id: "A", type: "steer", message: "A" }));
 			await vi.waitFor(() => expect(seen).toHaveLength(3));
 			expect(seen).toEqual([
-				{ text: "Start", source: "rpc", attribution: "user" },
-				{ text: "A", source: "rpc", attribution: "user" },
+				{ text: "Start", source: "rpc", attribution },
+				{ text: "A", source: "rpc", attribution },
 				{ text: "B", source: "extension", attribution: "agent" },
 			]);
 		} finally {
