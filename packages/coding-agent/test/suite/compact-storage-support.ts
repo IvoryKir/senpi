@@ -5,7 +5,11 @@ import type { CompactStorageIo } from "../../src/modes/rpc/compact-storage-io.ts
 
 let ordinal = 0;
 /** Producer-side fixture numbering; the consumer never fills missing identity fields. */
-export const startIdentity = () => ({ epoch: "fixture-producer", ordinal: ordinal++ });
+export const startIdentity = (firstOrdinal = ordinal) => ({
+	epoch: "fixture-producer",
+	firstOrdinal,
+	ordinal: ordinal++,
+});
 export const startBlock = (messageId: string, seed: string) => ({
 	type: "block_start" as const,
 	...startIdentity(),
@@ -29,14 +33,14 @@ export interface IoHold {
  */
 export function controlledIo(): {
 	io: CompactStorageIo;
-	hold(kind: "write" | "unlink", match?: (path: string) => boolean): IoHold;
+	hold(kind: "write" | "read" | "unlink", match?: (path: string) => boolean): IoHold;
 } {
-	const holds: Record<"write" | "unlink", IoHold[]> = { write: [], unlink: [] };
+	const holds: Record<"write" | "read" | "unlink", IoHold[]> = { write: [], read: [], unlink: [] };
 	const gates = new Map<
 		IoHold,
 		{ entered: (path: string) => void; gate: Promise<void>; match: (path: string) => boolean }
 	>();
-	const pass = async (kind: "write" | "unlink", path: string) => {
+	const pass = async (kind: "write" | "read" | "unlink", path: string) => {
 		const index = holds[kind].findIndex((hold) => gates.get(hold)?.match(path));
 		const hold = index < 0 ? undefined : holds[kind].splice(index, 1)[0];
 		const gate = hold && gates.get(hold);
@@ -50,7 +54,10 @@ export function controlledIo(): {
 				await pass("write", path);
 				await writeFile(path, data, { flag: "wx", mode: 0o600 });
 			},
-			readFile: (path) => readFile(path),
+			async readFile(path) {
+				await pass("read", path);
+				return readFile(path);
+			},
 			async unlink(path) {
 				await pass("unlink", path);
 				await unlink(path);
