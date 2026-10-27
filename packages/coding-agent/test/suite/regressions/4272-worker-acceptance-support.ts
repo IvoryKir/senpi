@@ -148,6 +148,7 @@ export async function workerAcceptanceHost(fauxModule = fauxPath, isolatePrelude
 	return {
 		dir,
 		registry,
+		router,
 		writer,
 		workers,
 		frames,
