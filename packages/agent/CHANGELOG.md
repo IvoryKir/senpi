@@ -1,10 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.27-2] - 2026-10-27
 
 ### Breaking Changes
 
 ### Added
+
+- Assistant stream-start events carry an optional `streaming` marker so consumers can distinguish live model streams from prepared and synthetic messages ([#4231](https://github.com/code-yeongyu/senpi/pull/4231)).
 
 ### Changed
 

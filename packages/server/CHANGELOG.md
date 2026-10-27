@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2026.10.27-2] - 2026-10-27
 
 ### Breaking Changes
 
