@@ -3,7 +3,7 @@ import { checkPath, requestedPath } from "./interpose-paths.js";
 const { dirname, isAbsolute, resolve } = process.getBuiltinModule("node:path");
 const { fileURLToPath } = process.getBuiltinModule("node:url");
 
-export function installModulePermissions(check) {
+export function installModulePermissions(check, userWorker = false) {
 	const module = process.getBuiltinModule("node:module");
 	const nativeRequire = module.createRequire(import.meta.url);
 	const resolveSync = globalThis.Bun?.resolveSync;
@@ -11,8 +11,19 @@ export function installModulePermissions(check) {
 	// Resolving a specifier re-enters this hook, because the engine resolver is itself observed. That
 	// re-entry is one import still being decided, not another import, so it must not ask again.
 	let resolving = false;
-	const forbidden = /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
+	// A user worker's own script reaches its own workerData and parentPort through this module, which
+	// #4387 keeps transparent, so only the cell context treats the module itself as a capability.
+	const forbidden = userWorker
+		? /^(?:bun:ffi|(?:node:)?vm)$/u
+		: /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
 	const workerThreads = /^(?:node:)?worker_threads$/u;
+	// The constructor the module hands out is whatever the runtime installed as the guarded one, in
+	// every context and through both require and import, so no script reaches the raw Worker and
+	// starts one this kernel never interposed.
+	const threads = process.getBuiltinModule("node:worker_threads");
+	if (threads) {
+		Object.defineProperty(threads, "Worker", { get: () => globalThis.Worker, configurable: true });
+	}
 	// A cell already owns these as globals, so handing them back over require grants nothing, while
 	// Worker, parentPort and workerData stay out of reach: the raw Worker would spawn an uninterposed
 	// one. Only require can substitute a namespace, so import and getBuiltinModule stay refused.

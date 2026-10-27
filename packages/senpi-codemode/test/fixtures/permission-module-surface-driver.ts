@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
 import type { CellPermissionState } from "../../src/kernels/js/kernel-contract.ts";
 
@@ -63,7 +64,29 @@ const expect = async (row: string, actual: Promise<string>, want: string) => {
 	}
 };
 
+// A cell's own worker reaches its own workerData and parentPort through this module (#4387), and the
+// constructor it finds there is the guarded one, so it cannot start a worker this kernel never
+// interposed. Enforcement is on for this row, because that is where both used to break.
+async function userWorkerView(): Promise<string> {
+	const dir = mkdtempSync(join(root, "user-worker-"));
+	const child = join(dir, "child.mjs");
+	writeFileSync(
+		child,
+		`const wt = require("node:worker_threads");
+postMessage({ data: wt.workerData, guarded: wt.Worker === globalThis.Worker, port: wt.parentPort !== undefined });`,
+	);
+	return await run(
+		{ epoch: 1, active: true, rules: [{ permission: "write", pattern: "*", layer: "user" }] },
+		`const child=new Worker(${JSON.stringify(pathToFileURL(child).href)},{workerData:"payload"});
+try{
+	const reply=await new Promise((resolve,reject)=>{child.onmessage=(event)=>resolve(event.data);child.onerror=(event)=>reject(new Error(event.message));});
+	return JSON.stringify([reply.data, reply.guarded, reply.port]);
+}finally{child.terminate();}`,
+	);
+}
+
 try {
+	await expect("user worker/own view", userWorkerView(), JSON.stringify(["payload", true, true]));
 	for (const { row, state } of states) {
 		const enforced = state?.active === true;
 		if (enforced) {

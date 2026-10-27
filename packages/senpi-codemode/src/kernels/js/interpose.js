@@ -35,7 +35,7 @@ const permissionIO = {
 const resources = installFilesystemPermissions(authorize);
 installProcessPermissions(authorize, installBunPermissions(authorize, resources));
 installSqlitePermissions(authorize);
-const sealModules = installModulePermissions(authorize);
+const sealModules = installModulePermissions(authorize, Boolean(bootstrap.script));
 
 // The sole bootstrap handoff is consumed before user code. Neither module exports the originals.
 const { initializePermissionRuntime } = await import("./permission-runtime.js");
