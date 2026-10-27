@@ -4880,6 +4880,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do no
 | `transcript_write_failed` | The session file refused a message of the running turn (`role`, `errorMessage`) |
 | `extension_event` | Capability-gated extension-owned event (`extension_events` clients only) |
 | `commands_changed` | Ordered command/skill candidate snapshot changed |
+| `session_recovered` | An interrupted write (a full disk) left the session file's last record incomplete; it was set aside (`cause`, `backupPath`, `droppedBytes`, `notice`) |
 | `command_invocation` | Accepted extension-command or prompt-template invocation metadata |
 | `skill_invocation` | Ordered explicit skill metadata after prompt expansion |
 | `loaded_surfaces_changed` | Loaded skills, extensions, or MCP inventory changed; re-read `get_commands` and `get_loaded_surfaces` |
@@ -5068,6 +5069,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
   "failure": {
     "category": "rate_limit",
     "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
     "httpStatus": 429,
     "code": "rate_limit_error",
     "reason": "the provider is rate limiting requests",
@@ -5076,11 +5078,12 @@ When the run ended with a provider error (the last assistant message has `stopRe
 }
 ```
 
-`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. Every category carries a `reason` and an `action`:
+`failure` is built only from the failed message's structured `providerDiagnostic`, never from `errorMessage` text. `httpStatus` and `code` are copied from it when present. `provider` and `model` are the ids of the request that failed. When that request ran on a model other than the one the user selected (a fallback rung, or the model a virtual model routed to), `selectedProvider` and `selectedModel` name the selected one; both are absent otherwise. Every category carries a `reason` and an `action`:
 
 | `category` | `action` |
 | --- | --- |
 | `auth` | re-authenticate the provider |
+| `request_refused` | send the message again or choose another model; if it keeps failing, re-authenticate `<provider>` |
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
@@ -5090,6 +5093,10 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | `unknown` | retry once; if it repeats, switch the model or report the code |
 
 `unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` names the provider and the code or status, for example `the provider returned an error that could not be classified (openai, status 429)`. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+
+`request_refused` is an `auth` failure whose credential (same provider, endpoint and key) served a response within the last 10 minutes: the provider refused this one request, and the key may still be valid. If failures persist, re-authenticate the named provider: a recently working key may have been revoked. The failed assistant message carries `credentialServedRecently: true` and keeps the provider's own `errorMessage`. The in-memory record drops expired entries on each record/check and retains at most 1,024 credentials, evicting the least recently served first. Header-based, ADC and SigV4 authentication do not supply an `apiKey`, so their fingerprint reduces to provider + baseUrl; different credentials on that endpoint share the record.
+
+The fallback chain conservatively skips every other model on that provider for the rest of the turn, including models with a different endpoint or key; models on other providers are still tried. This skip is provider-wide, not fingerprint-matched: the synchronous candidate scan cannot resolve the request's asynchronously prepared credentials. An `auth` failure with no recent success on the credential stays `auth`. A `request_refused` failure follows normal goal provider recovery rather than blocking the goal with login guidance.
 
 ### agent_settled
 
@@ -5531,6 +5538,20 @@ A provider holds logins of one kind. If it had an OAuth login, the key replaces 
 
 `get_auth_providers` API-key rows carry `keyHint`, the last four characters of a literal key the app stored when it is at least 12 characters long. OAuth rows, `!command` and `$ENV` references, and short keys have none.
 
+Every `get_auth_providers` row whose provider is defined carries `origin`, which says where the definition lives so a client can name what to edit when the app cannot remove the entry itself:
+
+| `origin.kind` | Meaning |
+| --- | --- |
+| `builtin` | Shipped with senpi, including providers registered by builtin extensions. |
+| `models_json` | Defined only in models.json. |
+| `extension` | Registered by an extension (a native provider, a provider config with no builtin underneath, or virtual models). |
+
+`modelsJsonPath` is the models.json that defines or overrides the provider, and `extensionPath` is the filesystem path of the extension that registered or overrides it, when known. Synthetic builtin identifiers and inline or unknown extension placeholders are omitted. Both paths are optional, on any kind:
+
+```json
+{"id": "proxy-box", "name": "proxy-box", "authType": "api_key", "status": {"configured": false}, "origin": {"kind": "extension", "extensionPath": "/home/user/.senpi/agent/extensions/proxy.ts"}}
+```
+
 ## Extension UI Protocol
 
 Without presenter enforcement, MCP 2026-07-28 multi-round-trip form answering is terminal-only in v1.
@@ -5538,6 +5559,27 @@ RPC-originated modern requests advertise no elicitation and terminate locally
 if input is required; they never fabricate a decline or retry incomplete input.
 Client roles and capability declarations do not enable this form channel.
 Existing legacy MCP dialogs and their RPC request/response shapes remain unchanged.
+
+### session_recovered
+
+Emitted when an interrupted write (usually a full disk) left the session file's last record incomplete. The incomplete
+bytes were copied to `backupPath` (`<session file>.torn-<time>-<id>`, never deleted) and cut, and every complete record is
+kept. `cause` is `disk_full` when this process saw the write fail with `ENOSPC`/`EDQUOT`, `write_failed` for another
+failed write, and `unknown` when the damage was found while opening the session without a known failed write.
+`notice` is the text to show the person: paths under the home directory use `~/...`; backups outside it use a neutral
+label instead of an absolute path. The machine-readable `backupPath` remains absolute.
+A repair found while opening is replayed to each client that attaches before the next prompt; one made during a run is
+emitted live. It is sent once per repair.
+
+```json
+{
+  "type": "session_recovered",
+  "cause": "unknown",
+  "backupPath": "/home/example/.senpi/sessions/session.jsonl.torn-1761436800000-1a2b3c4d",
+  "droppedBytes": 74,
+  "notice": "The last message of this session wasn't saved completely (an earlier save was interrupted, for example by a full disk). Everything before it was loaded; the incomplete record was kept in ~/.senpi/sessions/session.jsonl.torn-1761436800000-1a2b3c4d."
+}
+```
 
 ### Opt-in private MCP forms
 
