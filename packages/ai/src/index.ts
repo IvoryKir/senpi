@@ -38,10 +38,12 @@ export * from "./api/lazy.ts";
 export {
 	type AssistantProgress,
 	type AssistantRecord,
+	assistantEvents,
 	assistantRecords,
 	carryAssistantCapture,
 	getAssistantCapture,
 	isAssistantProgress,
+	pushAssistantProgress,
 	subscribeAssistantCapture,
 } from "./utils/assistant-capture.ts";
 export type { MistralOptions } from "./api/mistral-conversations.ts";
@@ -139,6 +141,7 @@ export { estimateContextTokens } from "./utils/estimate.ts";
 export * from "./utils/event-stream.ts";
 export * from "./utils/json-parse.ts";
 export * from "./utils/overflow.ts";
+export * from "./utils/provider-error.ts";
 export {
 	isAnthropicApiBaseUrl,
 	PROMPT_CACHE_TTL_LONG_SECONDS,
