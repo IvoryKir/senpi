@@ -3212,9 +3212,20 @@
 				"legacyContracts/test/subprocess-permissions.test.ts/jl permission admission enforcing=false is checked before any cell statement",
 				"legacyContracts/test/subprocess-permissions.test.ts/jl permission admission enforcing=true is checked before any cell statement",
 				"legacyContracts/test/subprocess-permissions.test.ts/rb permission admission enforcing=false is checked before any cell statement",
-				"legacyContracts/test/subprocess-permissions.test.ts/rb permission admission enforcing=true is checked before any cell statement"
+				"legacyContracts/test/subprocess-permissions.test.ts/rb permission admission enforcing=true is checked before any cell statement",
+				"imports/extension/packages/senpi-codemode/src/bridge/permission-check.ts",
+				"imports/extension/packages/senpi-codemode/src/kernels/py/permission-host.ts",
+				"imports/firstKernel/packages/senpi-codemode/src/bridge/permission-check.ts",
+				"imports/firstKernel/packages/senpi-codemode/src/kernels/py/permission-host.ts",
+				"legacyContracts/test/py-engine-assets.test.ts/Python engine assets loads the permission bridge without writing a bytecode cache into the checkout",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity serves a C-level import with no rules configured: pickle",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity serves a C-level import with no rules configured: datetime.strptime",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity serves a C-level import with no rules configured: xml.etree",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity serves a C-level import under an active authority",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity pickles a class from a module first imported in a cell",
+				"legacyContracts/test/py-kernel-registry.test.ts/Python interpreter registry integrity refuses the next decision while a registry entry is swapped"
 			],
-			"reason": "Refs senpi#4309 and senpi#4392: reviewed Python permission, lifetime, and unsupported-kernel contracts, including stdlib rebinding, native aliases, extension loaders, registry mutations, and inactive continuation controls. Existing baseline outcomes and all inherited stack entries remain unchanged."
+			"reason": "Refs senpi#4309 and senpi#4392: reviewed Python permission, lifetime, and unsupported-kernel contracts, including stdlib rebinding, native aliases, extension loaders, registry mutations, and inactive continuation controls. It also approves the shared bridge permission-check module and the Python permission host joining the extension and first-kernel import scopes, and the import-registry integrity and engine-asset bytecode-cache contracts added by the CRITICAL fold (C-level imports with no rules, registry swap refusal). Existing baseline outcomes and all inherited stack entries remain unchanged."
 		}
 	}
 }
