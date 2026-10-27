@@ -21,6 +21,8 @@ export class CompactPagedTree<T> {
 	private readonly leavesOf: (value: T) => readonly LeafId[];
 	private dirty: LeafId[] = [];
 	private dirtyBytes = 0;
+	private cache: Map<LeafId, { node: Node<T>; name: string }> | undefined;
+	private cacheBytes = 0;
 	allocatedNodes = 0;
 
 	constructor(store: CompactContentStore, leavesOf: (value: T) => readonly LeafId[]) {
@@ -33,27 +35,69 @@ export class CompactPagedTree<T> {
 		if (root) this.store.adjust(root.ref.owner, live, pins);
 	}
 
-	private async read(root: PagedRoot): Promise<Node<T>> {
-		return JSON.parse(await this.store.readLeaf(root.ref.node));
+	/** A serial compaction round shares decoded paths, bounded to 32 KiB plus map entries. */
+	async cached<R>(operation: () => Promise<R>): Promise<R> {
+		this.cache = new Map();
+		this.cacheBytes = 0;
+		try {
+			return await operation();
+		} finally {
+			this.cache = undefined;
+			this.cacheBytes = 0;
+		}
+	}
+
+	private async read(root: PagedRoot) {
+		const cached = this.cache?.get(root.ref.node);
+		if (cached) return cached;
+		const text = await this.store.readLeaf(root.ref.node);
+		const node: Node<T> = JSON.parse(text);
+		const name = await this.values.read(node.key);
+		if (typeof name !== "string") throw new CompactReadError("ownership");
+		const decoded = { node, name };
+		const bytes = (text.length + name.length) * 2 + 128;
+		if (this.cache && bytes <= 32_768) {
+			if (this.cacheBytes + bytes > 32_768) {
+				this.cache.clear();
+				this.cacheBytes = 0;
+			}
+			this.cache.set(root.ref.node, decoded);
+			this.cacheBytes += bytes;
+		}
+		return decoded;
 	}
 
 	async get(root: PagedRoot | undefined, key: string): Promise<T | undefined> {
 		let ref = root;
 		while (ref) {
-			const node = await this.read(ref);
-			const name = await this.values.read(node.key);
-			if (typeof name !== "string") throw new CompactReadError("ownership");
+			const { node, name } = await this.read(ref);
 			if (key === name) return node.value;
 			ref = key < name ? node.left : node.right;
 		}
 		return undefined;
 	}
 
+	/** Sorted requests share each descent instead of performing one root lookup per row. */
+	async getMany(root: PagedRoot | undefined, keys: readonly string[]): Promise<Map<string, T>> {
+		const ordered = [...keys].sort();
+		const found = new Map<string, T>();
+		const visit = async (ref: PagedRoot | undefined, from: number, to: number): Promise<void> => {
+			if (!ref || from === to) return;
+			const { node, name } = await this.read(ref);
+			let split = from;
+			while (split < to && ordered[split] < name) split++;
+			await visit(node.left, from, split);
+			let right = split;
+			while (right < to && ordered[right] === name) found.set(ordered[right++], node.value);
+			await visit(node.right, right, to);
+		};
+		await visit(root, 0, ordered.length);
+		return found;
+	}
+
 	async *entries(root: PagedRoot | undefined, after?: string): AsyncGenerator<readonly [string, T]> {
 		if (!root) return;
-		const node = await this.read(root);
-		const key = await this.values.read(node.key);
-		if (typeof key !== "string") throw new CompactReadError("ownership");
+		const { node, name: key } = await this.read(root);
 		if (after === undefined || key > after) {
 			yield* this.entries(node.left, after);
 			yield [key, node.value];
@@ -71,9 +115,7 @@ export class CompactPagedTree<T> {
 				this.store.adjust(ref.owner, -1, 0);
 			}
 		}
-		const node = await this.read(root);
-		const name = await this.values.read(node.key);
-		if (typeof name !== "string") throw new CompactReadError("ownership");
+		const { node, name } = await this.read(root);
 		if (key === name) {
 			if (value !== undefined) return this.make({ ...node, value });
 			if (!node.left || !node.right) {
@@ -82,12 +124,10 @@ export class CompactPagedTree<T> {
 				return child;
 			}
 			let next = await this.read(node.right);
-			while (next.left) next = await this.read(next.left);
-			const nextKey = await this.values.read(next.key);
-			if (typeof nextKey !== "string") throw new CompactReadError("ownership");
-			const right = await this.set(node.right, nextKey, undefined);
+			while (next.node.left) next = await this.read(next.node.left);
+			const right = await this.set(node.right, next.name, undefined);
 			try {
-				return await this.balance({ ...next, left: node.left, right });
+				return await this.balance({ ...next.node, left: node.left, right });
 			} finally {
 				this.adjust(right, -1, 0);
 			}
@@ -138,12 +178,12 @@ export class CompactPagedTree<T> {
 		const other = leftHeavy ? "right" : "left";
 		const heavy = node[side];
 		if ((!leftHeavy && !rightHeavy) || !heavy) return this.make(node);
-		const child = await this.read(heavy);
+		const { node: child } = await this.read(heavy);
 		const middle = child[other];
 		const owned: PagedRoot[] = [];
 		try {
 			if (middle && middle.height > (child[side]?.height ?? 0)) {
-				const pivot = await this.read(middle);
+				const { node: pivot } = await this.read(middle);
 				const a = await this.make({ ...child, [other]: pivot[side] });
 				owned.push(a);
 				const b = await this.make({ ...node, [side]: pivot[other] });
