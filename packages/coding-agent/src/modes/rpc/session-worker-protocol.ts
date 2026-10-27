@@ -1,6 +1,7 @@
 import type { BrowserEngine } from "../../core/browser-engine.ts";
 import type { McpFormInput, McpFormOutcome } from "../../core/mcp-form-types.ts";
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
+import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import type { PromptSurface } from "../../core/dynamic-prompt/types.ts";
 import type { MirroredLimits } from "../../core/subscription-limits/limit-store.ts";
 import type { CliRuntimeConfiguration } from "../../main.ts";
@@ -20,6 +21,18 @@ export const SESSION_WORKER_LIMITS = {
 	openMs: 30_000,
 	controlMs: 5_000,
 } as const;
+
+/** A transition over the frame limit leaves its epoch's transcript unavailable; S12 transfers it in fragments. */
+export function withinFrameLimit(transitions: readonly TranscriptTransition[]): TranscriptTransition[] {
+	// Reserve fixed metadata space; content is charged in the same raw UTF-8 bytes as the accepted tail.
+	const entryOverhead = 1024;
+	return transitions.map((transition) =>
+		(transition.kind === "append" ? Buffer.byteLength(transition.entry ?? "") : 0) + entryOverhead >
+		SESSION_WORKER_LIMITS.outputBytes
+			? { kind: "unavailable", reason: "transition_over_worker_frame_limit" }
+			: transition,
+	);
+}
 
 /** Wire values the host writes into a worker's wait signal; `conflict` is the generic denial. */
 export const WORKER_CREDIT_CODES = { granted: 1, conflict: 2, limit: 3 } as const;
@@ -98,6 +111,8 @@ export type SessionWorkerToHost =
 			ordinal?: number;
 			record: object;
 			recovery?: RecoveryCarrier;
+			/** Transcript transitions the isolate's manager committed before this record, accepted just before it. */
+			transitions?: readonly TranscriptTransition[];
 			/** The next incarnation's baseline, on the `session_replaced` record that starts it. */
 			bootstrap?: SessionBootstrap;
 			connection?: string;

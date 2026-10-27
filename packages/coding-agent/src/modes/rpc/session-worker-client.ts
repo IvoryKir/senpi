@@ -449,7 +449,10 @@ export class SessionWorkerClient {
 				const enqueue = () => {
 					// Applied before routing, and so before this frame's credit returns.
 					if (message.bootstrap) lane?.bootstrap(message.bootstrap);
-					else lane?.accept(message.record, message.recovery);
+					else {
+						lane?.applyTranscript(message.transitions ?? []);
+						lane?.accept(message.record, message.recovery);
+					}
 					if (!writer.enqueue(sessionId, message.record)) {
 						acknowledge(message.signal, false);
 						this.fail("session_output_overflow_or_closed");

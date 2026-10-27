@@ -28,6 +28,8 @@ it("Q6 worker: a correlation transition carried in worker frames is sequenced ju
 		// A frame arrives only after the previous frame's credit, which follows its apply: the root a frame
 		// meets is the root its predecessor left.
 		const after = (index: number) => frames[index + 1]?.atArrival;
+		// Transcript transitions a frame carries are accepted before its record, one sequence each (C1.1).
+		const carried = (index: number) => frames[index]?.frame.transitions?.length ?? 0;
 		const correlatedAt = frames.findIndex(
 			({ frame }) => "clientMessageId" in frame.record && frame.record.clientMessageId === "c-1",
 		);
@@ -42,11 +44,14 @@ it("Q6 worker: a correlation transition carried in worker frames is sequenced ju
 		expect(leftByFirst.correlation, "the correlation transition was accepted with that frame").toMatchObject({
 			clientMessageId: "c-1",
 		});
-		expect(leftByFirst.sequence - beforeFirst.sequence, "the correlation and its record, nothing else").toBe(2);
+		expect(
+			leftByFirst.sequence - beforeFirst.sequence,
+			"the frame's transcript transitions, the correlation and its record, nothing else",
+		).toBe(2 + carried(correlatedAt));
 		expect(leftByFirst.correlation?.sequence, "sequenced just before its record").toBe(leftByFirst.sequence - 1);
 
 		expect(after(correlatedAt + 1)?.sequence, "the next content takes the sequence after it").toBe(
-			leftByFirst.sequence + 1,
+			leftByFirst.sequence + 1 + carried(correlatedAt + 1),
 		);
 		const userStart = frames.findIndex(
 			({ frame }) =>
@@ -65,8 +70,8 @@ it("Q6 worker: a correlation transition carried in worker frames is sequenced ju
 			);
 			expect(
 				(left?.sequence ?? 0) - (previous?.sequence ?? 0),
-				`frame ${index} takes at most one sequence`,
-			).toBeLessThanOrEqual(1);
+				`frame ${index} takes at most one sequence besides its transcript transitions`,
+			).toBeLessThanOrEqual(1 + carried(index));
 		}
 	} finally {
 		await host.dispose();
@@ -108,7 +113,9 @@ it("Q6 worker: a trigger turn after a client turn sequences the end of the corre
 		if (!turn?.atArrival || !leftByTurn) throw new Error("the trigger turn crossed the worker boundary");
 		expect("clientMessageId" in turn.frame.record, "the trigger turn carries no client identity").toBe(false);
 		expect(turn.atArrival.correlation, "until then the client correlation stood").toBe(afterClient.correlation);
-		expect(leftByTurn.sequence - turn.atArrival.sequence, "the end of the correlation and its record").toBe(2);
+		expect(leftByTurn.sequence - turn.atArrival.sequence, "the end of the correlation and its record").toBe(
+			2 + (turn.frame.transitions?.length ?? 0),
+		);
 		expect(leftByTurn.correlation?.sequence, "sequenced just before the first uncorrelated record").toBe(
 			leftByTurn.sequence - 1,
 		);

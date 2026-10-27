@@ -11,6 +11,7 @@ import { open } from "node:fs/promises";
 import { StringDecoder } from "node:string_decoder";
 import { normalizePath } from "../utils/paths.ts";
 import { EventLoopSlicer } from "./event-loop-slicer.ts";
+import { captureAndCloseFileIdentity, captureFileIdentity, loadedFileIdentities } from "./session-file-identity.ts";
 import type { FileEntry } from "./session-manager.ts";
 import { backupTornBytes, type SessionRecovery, type SessionRecoveryCause } from "./session-write-recovery.ts";
 
@@ -57,8 +58,8 @@ function acceptSessionEntries(entries: FileEntry[]): FileEntry[] {
 }
 
 /** Exported for testing */
-export function loadEntriesFromFile(filePath: string): FileEntry[] {
-	return acceptSessionEntries(readRawEntriesFromFile(filePath));
+export function loadEntriesFromFile(filePath: string, captureIdentity = false): FileEntry[] {
+	return acceptSessionEntries(readRawEntriesFromFile(filePath, captureIdentity));
 }
 
 /** What `forkFrom` found in its source: the entries, whether the file had a header, and why it cannot be forked. */
@@ -93,7 +94,7 @@ export function readForkSource(filePath: string): ForkSource {
 	return { kind: "not-a-session" };
 }
 
-function readRawEntriesFromFile(filePath: string): FileEntry[] {
+function readRawEntriesFromFile(filePath: string, captureIdentity = false): FileEntry[] {
 	const resolvedFilePath = normalizePath(filePath);
 	if (!existsSync(resolvedFilePath)) return [];
 
@@ -113,7 +114,8 @@ function readRawEntriesFromFile(filePath: string): FileEntry[] {
 		const finalEntry = parseSessionEntryLine(splitter.finish());
 		if (finalEntry) entries.push(finalEntry);
 	} finally {
-		closeSync(fd);
+		if (captureIdentity) loadedFileIdentities.set(entries, captureAndCloseFileIdentity(fd, resolvedFilePath));
+		else closeSync(fd);
 	}
 	return entries;
 }
@@ -125,6 +127,7 @@ function readRawEntriesFromFile(filePath: string): FileEntry[] {
 export async function loadEntriesFromFileAsync(
 	filePath: string,
 	slicer: EventLoopSlicer = new EventLoopSlicer(),
+	captureIdentity = false,
 ): Promise<FileEntry[]> {
 	const resolvedFilePath = normalizePath(filePath);
 	if (!existsSync(resolvedFilePath)) return [];
@@ -146,6 +149,11 @@ export async function loadEntriesFromFileAsync(
 		const finalEntry = parseSessionEntryLine(splitter.finish());
 		if (finalEntry) entries.push(finalEntry);
 	} finally {
+		if (captureIdentity) {
+			const identity = captureFileIdentity(handle.fd, resolvedFilePath);
+			loadedFileIdentities.set(entries, identity);
+			await identity;
+		}
 		await handle.close();
 	}
 	return acceptSessionEntries(entries);

@@ -5,6 +5,7 @@ import { ProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.ts";
 import { recoveryCarrier, SessionRecoveryIdentity } from "../../../src/core/session-recovery-identity.ts";
+import { SessionManager } from "../../../src/core/session-manager.ts";
 import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance-lane.ts";
 import { createRpcSessionBinding } from "../../../src/modes/rpc/session-binding.ts";
 import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.ts";
@@ -57,7 +58,7 @@ it("T5 sequences in-process records in producer order, correlation before its co
 		},
 	);
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: harness.session.sessionManager.getLeafId() });
+	lane.bootstrap({ transcript: [] });
 	const entry: RpcSessionEntry = {
 		scope,
 		runtime,
@@ -177,7 +178,7 @@ it("mints opaque message and turn ids at their start, at a start-less terminal, 
 	expect(recoveryCarrier(update)).toEqual(recoveryCarrier(start));
 
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: [] });
 	expect(lane.accept({ type: "queue_update" }, undefined), "a pass-through record takes no sequence").toBeUndefined();
 	expect(lane.accept({ type: "agent_start" }, undefined)?.turnId).toBeNull();
 	const directTurnEnd = lane.accept({ type: "turn_end" }, undefined);
@@ -195,9 +196,15 @@ it("mints opaque message and turn ids at their start, at a start-less terminal, 
 });
 
 // Part of #4272, review MEDIUM-2: the host keeps each accepted append's id, never a serialized copy of its content.
-it("keeps host retention per accepted append bounded: entry ids only, no stringify on the host loop", () => {
+it("R21.1 R21.2 keeps persisted host retention per accepted append bounded: entry ids only, no stringify on the host loop", async () => {
+	vi.stubEnv(FLAG, "1");
+	const dir = await mkdtemp(join(tmpdir(), "senpi-4272-ids-"));
+	const manager = SessionManager.create(dir, dir);
+	await manager.persistHeaderNow();
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: manager.beginTranscriptJournal() });
+	const baseline = lane.freeze();
+	lane.release(baseline);
 	const content = "x".repeat(256 * 1024);
 	const appends = 64;
 	const entries = Array.from({ length: appends }, (_, index) => ({
@@ -206,12 +213,15 @@ it("keeps host retention per accepted append bounded: entry ids only, no stringi
 		parentId: index === 0 ? null : `e${index - 1}`,
 		message: { role: "toolResult", content },
 	}));
+	for (const entry of entries) manager.appendCustomEntry("retention", entry);
+	const transitions = manager.drainTranscript();
 	const clientMessages = [{ clientMessageId: "c-1" }, { clientMessageId: "c-2", clientTurnId: "t-1" }];
 	const correlation = { clientMessageId: "c-2", clientTurnId: "t-1", clientMessages };
 	lane.accept({ type: "turn_start", ...correlation }, undefined);
 	const before = lane.freeze();
 	lane.release(before);
 	const stringify = vi.spyOn(JSON, "stringify");
+	lane.applyTranscript(transitions);
 	const refs = entries.map((entry) => {
 		lane.accept(
 			{
@@ -227,17 +237,19 @@ it("keeps host retention per accepted append bounded: entry ids only, no stringi
 	const calls = stringify.mock.calls.length;
 	stringify.mockRestore();
 	expect(calls, "no serialization for appends or message_update records while client correlation stands").toBe(0);
-	expect(refs.map((ref) => ref?.historyVersion)).toEqual(entries.map((_, index) => index + 1));
+	expect(refs.every((ref) => ref?.historyVersion === baseline.transcript.historyVersion + appends)).toBe(true);
 	// Mirror trimming mutates the manager's entry objects later; the root names entries, it does not alias them.
 	for (const entry of entries) entry.parentId = "trimmed";
 	const root = lane.freeze();
 	expect(root.correlation, "shallow-equal client identities keep the same transition").toBe(before.correlation);
-	expect(root.transcript.count).toBe(appends);
-	expect(root.transcript.leafId).toBe(`e${appends - 1}`);
-	expect(root.transcript.entryIds.slice(0, root.transcript.count)).toEqual(entries.map((entry) => entry.id));
+	expect(root.transcript.count).toBe(appends + 1);
+	expect(root.transcript.leafId).toBe(manager.getLeafId());
+	expect(root.transcript.tail.retainedBytes).toBe(0);
 	const retained = JSON.stringify(root.transcript).length;
-	expect(retained, "retention is the ids, independent of entry size").toBeLessThan(appends * 16 + 128);
+	expect(retained, "retention is the ids, independent of entry size").toBeLessThan(appends * 16 + 1024);
 	lane.release(root);
+	manager.dispose();
+	await rm(dir, { recursive: true, force: true });
 });
 
 // Part of #4272, ruling 10: the accepted baseline exists before the router admits a connection to the session.

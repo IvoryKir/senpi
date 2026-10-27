@@ -42,12 +42,18 @@ export async function createRpcSessionBinding(
 	const toolSpans = createToolAttributionSpans(sessionId);
 	const lane = entry.acceptance;
 	if (lane) writer.registerAcceptance(sessionId, lane);
+	// The manager whose journal the lane follows; a replacement's bootstrap moves the lane to the new one.
+	let journaled = lane ? entry.runtime.session.sessionManager : undefined;
 	const enqueueRecord = (record: object): void => {
 		toolSpans.observe(record);
 		// Accepted before the writer serializes or routes it; a replacement is the next incarnation's bootstrap.
-		if (lane && "type" in record && record.type === "session_replaced")
-			lane.bootstrap({ leafId: entry.runtime?.session.sessionManager.getLeafId() ?? null });
-		else lane?.accept(record, recoveryCarrier(record));
+		if (lane && "type" in record && record.type === "session_replaced") {
+			journaled = entry.runtime?.session.sessionManager;
+			lane.bootstrap({ transcript: journaled?.beginTranscriptJournal() ?? [] });
+		} else if (lane) {
+			lane.applyTranscript(journaled?.drainTranscript() ?? []);
+			lane.accept(record, recoveryCarrier(record));
+		}
 		writer.enqueue(sessionId, record);
 	};
 	// Attachments share one entry, so resolve the host from the live runtime. In

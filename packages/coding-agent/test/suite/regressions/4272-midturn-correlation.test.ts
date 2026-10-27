@@ -6,7 +6,7 @@ import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance
 // Part of #4272, delta LOW-1: turn correlation is not the identity of an extension's own input.
 it("keeps a standing client correlation across identity-less user input within the same turn", () => {
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: [] });
 	const seen: Array<{
 		readonly record: object;
 		readonly ref: ReturnType<SessionAcceptanceLane["accept"]>;
@@ -62,7 +62,7 @@ it.each([
 	{ clientMessages: [{ clientMessageId: "c-1" }, { clientMessageId: "c-2", clientTurnId: "t-2" }] },
 ])("sequences a changed clientMessages list without relying on serialized equality: %j", ({ clientMessages }) => {
 	const lane = new SessionAcceptanceLane();
-	lane.bootstrap({ leafId: null });
+	lane.bootstrap({ transcript: [] });
 	lane.accept(
 		{
 			type: "turn_start",
