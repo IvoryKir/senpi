@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
@@ -58,14 +58,14 @@ afterEach(async () => {
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-async function listen(): Promise<{ server: Server; port: number; connected: Promise<Socket> }> {
+async function listen(): Promise<{ port: number; connected: Promise<Socket> }> {
 	const server = createServer();
 	const connected = new Promise<Socket>((resolve) => server.once("connection", resolve));
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("loopback server has no port");
-	return { server, port: address.port, connected };
+	return { port: address.port, connected };
 }
 
 describe.skipIf(process.platform === "win32")("X6: bash wake", () => {
@@ -85,7 +85,9 @@ describe.skipIf(process.platform === "win32")("X6: bash wake", () => {
 
 		const harness = await createHarness({ cwd: dir, extensionFactories: [registerTerminalExtension] });
 		cleanups.push(async () => {
-			await harness.session.executeTool("kill_bash", { bash_id: "bash_1" }).catch(() => undefined);
+			// `all` reports a count instead of an error when the waiter already exited, so a real
+			// kill failure (a test that failed with the waiter still running) is not swallowed.
+			await harness.session.executeTool("kill_bash", { all: true });
 			harness.cleanup();
 		});
 		await harness.session.bindExtensions({ mode: "tui" });
@@ -123,6 +125,8 @@ describe.skipIf(process.platform === "win32")("X6: bash wake", () => {
 		socket.write("PING");
 		await withTimeout(wakeTurnStarted, "the wake turn starting");
 		await withTimeout(wakeTurnEnded, "the wake turn ending");
+		// A second wake would start only after the first turn's agent_end, so settle before counting.
+		await withTimeout(harness.session.waitForSettledSessionWork(), "the session settling");
 
 		// Then: exactly one hidden notice with the exit status and the output tail started one model turn.
 		const notices = terminalNotices(harness);
