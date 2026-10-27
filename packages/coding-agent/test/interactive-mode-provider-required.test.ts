@@ -1,8 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
-import { formatNoApiKeyFoundMessage } from "../src/core/auth-guidance.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
-const GUIDANCE = formatNoApiKeyFoundMessage("unknown");
+const GUIDANCE = "No API key found for the selected model.\n\nUse /login to log into a provider via OAuth or API key.";
 
 function makeFakeThis(startupProviderGuidanceShown: boolean) {
 	return {
@@ -17,12 +16,6 @@ function makeFakeThis(startupProviderGuidanceShown: boolean) {
 }
 
 type FakeThis = ReturnType<typeof makeFakeThis>;
-
-// senpi#4329: the shared notice is surface-neutral; the TUI adds its own commands to it.
-function expectTuiCommands(fakeThis: FakeThis): void {
-	const shown = String(fakeThis.showWarning.mock.calls.at(-1)?.[0]);
-	expect(shown.match(/\/(?:login|model)\b/g)).toEqual(["/login", "/model"]);
-}
 
 const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
 	this: FakeThis,
@@ -52,8 +45,7 @@ describe("first-run provider guidance in the interactive mode", () => {
 
 		// then
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
-		expect(fakeThis.showWarning).toHaveBeenCalledWith(expect.stringContaining(GUIDANCE));
-		expectTuiCommands(fakeThis);
+		expect(fakeThis.showWarning).toHaveBeenCalledWith(GUIDANCE);
 	});
 
 	test("#given no startup warning was shown #when the session reports provider_required #then the guidance is shown once as a warning, never as an error", async () => {
@@ -65,8 +57,7 @@ describe("first-run provider guidance in the interactive mode", () => {
 
 		// then
 		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
-		expect(fakeThis.showWarning).toHaveBeenCalledWith(expect.stringContaining(GUIDANCE));
-		expectTuiCommands(fakeThis);
+		expect(fakeThis.showWarning).toHaveBeenCalledWith(GUIDANCE);
 		expect(fakeThis.showError).not.toHaveBeenCalled();
 	});
 });

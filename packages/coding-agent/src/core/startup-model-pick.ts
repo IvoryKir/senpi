@@ -33,14 +33,14 @@ export function nextStartableModel(
 }
 
 export function startupReplacementMessage(replacement: Model<Api>, refused: ModelUsabilityBudgetProjection): string {
-	return `No usable default model is set, so ${replacement.provider}/${replacement.id} was chosen: ${refused.model} has a ${refused.contextWindow}-token context window and needs ${refused.requiredTokens} to start. Choose another model, or set a default model.`;
+	return `No usable default model is set, so ${replacement.provider}/${replacement.id} was chosen: ${refused.model} has a ${refused.contextWindow}-token context window and needs ${refused.requiredTokens} to start. Use /model to pick another, or set a default model.`;
 }
 
 export function startupRefusalMessage(refused: ModelUsabilityBudgetProjection, automatic: boolean): string {
 	const why = `${refused.model} cannot start: its context window is ${refused.contextWindow} tokens and starting needs ${refused.requiredTokens}.`;
 	return automatic
-		? `${why} It was picked automatically because no usable default model is set, and no other available model fits. Connect a provider that has a larger model, or start with another model.`
-		: `${why} Choose a model with a larger context window.`;
+		? `${why} It was picked automatically because no usable default model is set, and no other available model fits. Add a provider with a larger model (/login), or pass --model <provider>/<id>.`
+		: `${why} Choose a model with a larger context window (--model <provider>/<id>, or /model).`;
 }
 
 type StartAdmission = {

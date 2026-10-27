@@ -33,7 +33,7 @@ export const EXPIRING_WITHIN_MS = 5 * 60_000;
 /** A managed lane with an empty pool must refuse rather than spawn the SDK against ambient host credentials. */
 const NO_MANAGED_ACCOUNTS_ERROR =
 	"authentication_failed: No Anthropic Subscription accounts configured for the managed lane; " +
-	"sign in to Anthropic Subscription or set CLAUDE_CODE_OAUTH_TOKEN";
+	"run /login anthropic-subscription or set CLAUDE_CODE_OAUTH_TOKEN";
 
 export type { AuthenticatedAttemptInput } from "./auth-attempt.ts";
 

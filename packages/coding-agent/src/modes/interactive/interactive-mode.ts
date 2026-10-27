@@ -468,7 +468,6 @@ function isCompactionCostNotice(item: RenderSessionItem): item is CompactionCost
 	return "type" in item && item.type === "compaction_cost";
 }
 
-const PROVIDER_REQUIRED_TUI_HINT = "Use /login to sign in or add an API key, and /model to select a model.";
 const DEAD_TERMINAL_ERROR_CODES = new Set(["EIO", "EPIPE", "ENOTCONN"]);
 // Bun's macOS tty shim can report a dead terminal as raw positive errno 5 without a string code.
 const EIO_ERRNO = 5;
@@ -5421,8 +5420,7 @@ export class InteractiveMode {
 					this.startupProviderGuidanceShown = false;
 					break;
 				}
-				// The shared notice names no TUI command because RPC clients show it too (senpi#4329).
-				this.showWarning(`${event.notice}\n\n${PROVIDER_REQUIRED_TUI_HINT}`);
+				this.showWarning(event.notice);
 				break;
 
 			case "settings_source_selected":

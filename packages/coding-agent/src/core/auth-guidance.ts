@@ -5,7 +5,7 @@ const UNKNOWN_PROVIDER = "unknown";
 
 export function getProviderLoginHelp(): string {
 	return [
-		"Connect a provider by signing in or adding an API key. See:",
+		"Use /login to log into a provider via OAuth or API key. See:",
 		`  ${join(getDocsPath(), "providers.md")}`,
 		`  ${join(getDocsPath(), "models.md")}`,
 	].join("\n");
@@ -16,7 +16,7 @@ export function formatNoModelsAvailableMessage(): string {
 }
 
 export function formatNoModelSelectedMessage(): string {
-	return `No model selected.\n\n${getProviderLoginHelp()}\n\nThen select a model.`;
+	return `No model selected.\n\n${getProviderLoginHelp()}\n\nThen use /model to select a model.`;
 }
 
 export function formatNoApiKeyFoundMessage(provider: string): string {

@@ -823,7 +823,7 @@ export const stream: StreamFunction<"cursor-agent", CursorAgentOptions> = (
 			try {
 				const apiKey = options?.apiKey;
 				if (!apiKey) {
-					throw new Error("Cursor access token is required; sign in to Cursor");
+					throw new Error("Cursor access token is required; run /login cursor");
 				}
 
 				baseConversationId = options?.conversationId ?? options?.sessionId ?? randomUUID();

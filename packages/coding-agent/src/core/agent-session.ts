@@ -2048,7 +2048,7 @@ export class AgentSession {
 			throw new Error(
 				`Authentication failed for "${model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Sign in to ${model.provider} again.`,
+					`Run '/login ${model.provider}' to re-authenticate.`,
 			);
 		}
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
@@ -10555,7 +10555,7 @@ export class AgentSession {
 			throw new ModelNotReadyError(
 				`Authentication failed for "${this.model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Sign in to ${this.model.provider} again.`,
+					`Run '/login ${this.model.provider}' to re-authenticate.`,
 			);
 		}
 		throw new ModelNotReadyError(formatNoApiKeyFoundMessage(this.model.provider));
@@ -12695,6 +12695,10 @@ export class AgentSession {
 		};
 	}
 
+	private _compactionFailureModel(): string | undefined {
+		return this.model ? `${this.model.provider}/${this.model.id}` : undefined;
+	}
+
 	/**
 	 * User-facing text for a turn that is really over. A provider-stream stall
 	 * or a transport drop carries the classifier's own wording (`Provider stream
@@ -12704,10 +12708,6 @@ export class AgentSession {
 	 * senpi#1628). Anything else keeps its error verbatim, minus the internal
 	 * replay marker.
 	 */
-	private _compactionFailureModel(): string | undefined {
-		return this.model ? `${this.model.provider}/${this.model.id}` : undefined;
-	}
-
 	private _terminalFailureText(message: AssistantMessage, attempts: number): string | undefined {
 		const model = this.model ? `${this.model.provider}/${this.model.id}` : undefined;
 		return (

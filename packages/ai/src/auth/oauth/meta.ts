@@ -158,7 +158,9 @@ async function mintApiKey(identityToken: string, signal: AbortSignal): Promise<O
 	const json = await readJson(response);
 	if (response.status === 401 || response.status === 403) {
 		// Identity token is not renewable (see file header); only a fresh device flow helps.
-		throw new Error(`Meta session expired (status ${response.status}). Sign in to Meta again.${errorDetail(json)}`);
+		throw new Error(
+			`Meta session expired (status ${response.status}). Run \`/login meta\` to sign in again.${errorDetail(json)}`,
+		);
 	}
 	if (!response.ok) {
 		throw new Error(`Meta API key mint failed with status ${response.status}${errorDetail(json)}`);
