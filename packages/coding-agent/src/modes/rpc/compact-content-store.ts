@@ -275,6 +275,10 @@ export class CompactContentStore extends CompactSegmentStorage {
 			}
 		}
 		if (!placements) return;
+		// Publication point: every file of the batch is durable and nothing below awaits, so the batch becomes
+		// visible here as a whole. The commit record is this in-memory step; the spool is never crash-recovery state
+		// (a crashed epoch directory is refused as pre_existing and the state is rebuilt from the transcript).
+		// If a future slice ever adopts a spool for crash recovery, it must first add a durable commit record written last.
 		const placed: LeafId[] = [];
 		for (const [n, [id, leaf]] of batch.entries()) {
 			const [segment, offset] = placements[n];

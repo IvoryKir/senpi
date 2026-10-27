@@ -127,6 +127,10 @@ it("packs each compaction round into bounded node files and writes no node it re
 			const nodeBytes = nodes.reduce((sum, file) => sum + file.bytes, 0);
 			expect(nodes.length, `round ${n} node files for ${nodeBytes} bytes`).toBe(Math.ceil(nodeBytes / PAGE_BYTES));
 			expect(own.length, `round ${n} round-job file creates`).toBe(nodes.length + 1);
+			expect(
+				own.filter((file) => !file.name.startsWith("node-")).map((file) => file.name.replace(/-\d+\.bin$/, "")),
+				`round ${n} the one non-node create is its page`,
+			).toEqual(["page"]);
 			const markers = window.filter((file) => file.job === "value_write").length;
 			expect(markers, `round ${n} owner markers`).toBeLessThanOrEqual(1);
 			expect(round.deadWrites, `round ${n} writes of replaced nodes`).toBe(0);
