@@ -24,7 +24,10 @@ const imported = `try{await import("node:worker_threads");return "loaded";}catch
 const states: { readonly row: string; readonly state?: CellPermissionState }[] = [
 	{ row: "no permissions" },
 	{ row: "inactive", state: { epoch: 1, active: false, rules: [] } },
-	{ row: "active", state: { epoch: 1, active: true, rules: [] } },
+	{
+		row: "active deny",
+		state: { epoch: 1, active: true, rules: [{ permission: "write", pattern: "*", layer: "user" }] },
+	},
 ];
 
 async function run(state: CellPermissionState | undefined, code: string): Promise<string> {
