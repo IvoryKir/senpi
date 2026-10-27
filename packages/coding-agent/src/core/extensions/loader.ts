@@ -52,6 +52,7 @@ import {
 	extensionModuleImporter,
 	rememberExtensionFactory,
 } from "./extension-module-cache.ts";
+import { kernelToolInvokerStorage } from "./kernel-tools-context.ts";
 import { createLifecycleApi } from "./lifecycle-api.ts";
 import { StaleExtensionContextError } from "./stale-context-error.ts";
 import type {
@@ -63,6 +64,7 @@ import type {
 	EntryRendererOptions,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionSessionProfile,
@@ -74,6 +76,7 @@ import type {
 	MemoryReporter,
 	MessageRenderer,
 	PendingProviderRegistration,
+	ProjectTrustContext,
 	ProviderConfig,
 	RegisteredChildModule,
 	RegisteredCommand,
@@ -430,7 +433,16 @@ function createExtensionAPI(
 			options?: BeforeAgentStartHandlerOptions & ContextHandlerOptions,
 		): () => void {
 			assertActive();
-			const registeredHandler: HandlerFn = ownedBy(extension, (...args: unknown[]) => handler(...args));
+			const registeredHandler: HandlerFn = ownedBy(extension, (...args: unknown[]) => {
+				// A child event can run inside its parent's task-tool async scope.
+				// Bind the host context here, preserving registered-handler metadata.
+				const context = args[1] as ExtensionContext | ProjectTrustContext | undefined;
+				const manager = context && "sessionManager" in context ? context.sessionManager : undefined;
+				const invoke = () => handler(...args);
+				return manager
+					? kernelToolInvokerStorage.run({ sessionId: manager.getSessionId() }, invoke)
+					: kernelToolInvokerStorage.exit(invoke);
+			});
 			const list = extension.handlers.get(event) ?? [];
 			list.push(registeredHandler);
 			extension.handlers.set(event, list);

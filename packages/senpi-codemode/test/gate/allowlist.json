@@ -7,6 +7,9 @@
 				"imports/firstKernel/packages/senpi-codemode/src/kernels/shared/invocation-authority.ts",
 				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens keeps a settled cross-session continuation alive yet revocable by its invoker",
 				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens mints owner tokens for absent/same invokers and invoking-session tokens otherwise",
+				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens identifies the cross-session barrier when owner enforces",
+				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens identifies the cross-session barrier when invoker enforces",
+				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens identifies the cross-session barrier when both enforces",
 				"legacyContracts/test/kernel-tool-invoker-authority.test.ts/kernel-tool invoker authority (worker) decides before the body runs: {\"ownerActive\":true,\"invokerActive\":false,\"same\":true,\"denied\":false}",
 				"legacyContracts/test/kernel-tool-invoker-authority.test.ts/kernel-tool invoker authority (worker) decides before the body runs: {\"ownerActive\":true,\"invokerActive\":false,\"same\":false,\"denied\":true}",
 				"legacyContracts/test/kernel-tool-invoker-authority.test.ts/kernel-tool invoker authority (worker) decides before the body runs: {\"ownerActive\":false,\"invokerActive\":true,\"same\":false,\"denied\":true}",
@@ -20,7 +23,7 @@
 				"legacyContracts/test/py-kernel-invoker-authority.test.ts/Python invoker authority refuses before the closure executes: {\"ownerActive\":false,\"invokerActive\":true,\"same\":false,\"denied\":true}",
 				"legacyContracts/test/py-kernel-invoker-authority.test.ts/Python invoker authority refuses before the closure executes: {\"ownerActive\":false,\"invokerActive\":false,\"same\":false,\"denied\":false}"
 			],
-			"reason": "senpi#4390: approve only the shared invoker-authority module's extension/first-kernel memberships and this PR's fourteen token and JS/Python invocation contracts. They prove host-bound session/cwd/epoch attribution, same-session admission, inactive cross-session compatibility (a settled inactive continuation stays revocable by its invoker), and refusal before the body runs when either session enforces. No inherited permission-core addition or existing baseline value is changed."
+			"reason": "senpi#4390: approve only the shared invoker-authority module's extension/first-kernel memberships and this PR's seventeen token and JS/Python invocation contracts. They prove host-bound session/cwd/epoch attribution, same-session admission, inactive cross-session compatibility (a settled inactive continuation stays revocable by its invoker), refusal before the body runs when either session enforces, and the cross-session reason with the enforcing session identified. No inherited permission-core addition or existing baseline value is changed."
 		},
 		"senpi#4387": {
 			"additions": [

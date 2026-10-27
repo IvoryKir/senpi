@@ -21,10 +21,15 @@ tools are not fenced by this core alone.
 
 The coding-agent dispatcher stamps `options.invoker.sessionId` from its own
 SessionManager. Neither cell data nor tool arguments can override that identity.
+Registered extension event handlers also bind their own host context, rather
+than inheriting a parent task tool's identity when a child emits an event.
 The shared host pump forwards these options to `resolveInvocationToken` before
 posting an invocation frame. Absent or owner identity mints an owner token;
 another session is refused before the body runs if either session enforces,
-with the deciding rule attached. Otherwise its token identifies the invoker.
+with `reason: "cross_session_authority"` and the enforcing session identified.
+The attached `rule` names a deny rule activating that session's enforcement;
+it does not claim that this rule matched an operation inside the unexecuted
+tool body. Otherwise the token identifies the invoker.
 Python applies the same cross-session check before posting to the interpreter.
 
 Live kernel owners publish their current permission snapshots to the host-only

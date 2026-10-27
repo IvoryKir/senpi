@@ -1,8 +1,13 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ToolRuntimeKind } from "../../cli/tool-runtime.ts";
-import { kernelToolInvokerStorage } from "../extensions/kernel-tools-context.ts";
-import type { ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
+import { AuthStorage } from "../auth-storage.ts";
+import { createEventBus } from "../event-bus.ts";
+import { kernelToolInvokerStorage, kernelToolsStorage } from "../extensions/kernel-tools-context.ts";
+import { createExtensionRuntime, loadExtensionFromFactory } from "../extensions/loader.ts";
+import { ExtensionRunner } from "../extensions/runner.ts";
+import type { ExtensionContext, ExtensionToolContext, ToolDefinition } from "../extensions/types.ts";
+import { ModelRegistry } from "../model-registry.ts";
 import { SessionManager } from "../session-manager.ts";
 import { wrapToolDefinition } from "../tools/tool-definition-wrapper.ts";
 import { createToolDispatcher } from "./tool-dispatcher.ts";
@@ -75,5 +80,87 @@ describe.each<ToolRuntimeKind>(["in-process", "child"])("invoker context (%s)", 
 			else await run();
 			expect(kernelToolInvokerStorage.getStore()).toBeUndefined();
 		});
+	});
+});
+
+// #4390 review: a child event inherits the parent's task-tool async scope.
+// All registered event paths must stamp the child, including captured capabilities.
+describe("registered event invoker context", () => {
+	const emissions: Array<{ name: string; emit: (runner: ExtensionRunner) => Promise<unknown> }> = [
+		{ name: "session event", emit: (runner) => runner.emit({ type: "session_start", reason: "startup" }) },
+		{ name: "queued lifecycle", emit: (runner) => runner.emit({ type: "agent_start" }) },
+		{
+			name: "tool call hook",
+			emit: (runner) =>
+				runner.emitToolCall({ type: "tool_call", toolName: "probe", toolCallId: "probe", input: {} }),
+		},
+		{
+			name: "tool result hook",
+			emit: (runner) =>
+				runner.emitToolResult({
+					type: "tool_result",
+					toolName: "probe",
+					toolCallId: "probe",
+					input: {},
+					content: [],
+					details: undefined,
+					isError: false,
+				}),
+		},
+		{ name: "context transform", emit: (runner) => runner.emitContext([]) },
+		{
+			name: "preview-safe prompt hook",
+			emit: (runner) =>
+				runner.emitBeforeAgentStart("probe", undefined, "", { cwd: process.cwd() }, { preview: true }),
+		},
+	];
+
+	it.each(emissions)("uses the handler's session for $name", async ({ emit }) => {
+		const owner = SessionManager.inMemory();
+		const child = SessionManager.inMemory();
+		const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+		const ownerRunner = new ExtensionRunner([], createExtensionRuntime(), process.cwd(), owner, registry);
+		const runtime = createExtensionRuntime();
+		const observed: string[] = [];
+		const request = { name: "probe", kernel_generation: 1, definition_revision: 1, args: {}, call_id: "probe" };
+		await kernelToolsStorage.run(
+			{
+				capabilities: { invokeScope: true },
+				describe: async () => undefined,
+				invoke: async (_request, options) => {
+					if (!options || "aborted" in options || !options.invoker) throw new Error("missing invoker");
+					observed.push(options.invoker.sessionId);
+				},
+			},
+			async () => {
+				const captured = ownerRunner.createContext().kernelTools;
+				if (!captured) throw new Error("missing owner capability");
+				const extension = await loadExtensionFromFactory(
+					(pi) => {
+						const invoke = async (_event: unknown, context: ExtensionContext) => {
+							await Promise.resolve();
+							await context.kernelTools?.invoke(request);
+							await captured.invoke(request);
+						};
+						pi.on("session_start", invoke);
+						pi.on("agent_start", invoke);
+						pi.on("tool_call", invoke);
+						pi.on("tool_result", invoke);
+						pi.on("context", invoke, { mutatesMessages: false });
+						pi.on("before_agent_start", invoke, { previewSafe: true });
+					},
+					process.cwd(),
+					createEventBus(),
+					runtime,
+					"invoker-context.ts",
+				);
+				const runner = new ExtensionRunner([extension], runtime, process.cwd(), child, registry);
+				await kernelToolInvokerStorage.run({ sessionId: owner.getSessionId() }, async () => {
+					await emit(runner);
+					expect(observed).toEqual([child.getSessionId(), child.getSessionId()]);
+					expect(kernelToolInvokerStorage.getStore()).toEqual({ sessionId: owner.getSessionId() });
+				});
+			},
+		);
 	});
 });

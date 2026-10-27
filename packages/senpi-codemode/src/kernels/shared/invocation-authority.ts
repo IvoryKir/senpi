@@ -37,16 +37,19 @@ export function invocationSession(
 	if (invokerId === undefined || invokerId === ownerId) return { sessionId: ownerId, ...owner };
 	const registered = [...(sessions.get(invokerId) ?? [])].map((read) => read());
 	const invoker = resolveSession?.(invokerId) ?? registered.find((session) => session.state.active) ?? registered[0];
-	for (const state of [owner.state, invoker?.state]) {
+	for (const [enforcingSessionId, state] of [
+		[ownerId, owner.state],
+		[invokerId, invoker?.state],
+	] as const) {
 		if (!state?.active) continue;
 		const rule = state.rules[0];
 		throw Object.assign(
 			new Error(
 				rule
-					? `Cross-session kernel tool refused by ${rule.permission} ${rule.pattern} (${rule.layer})`
+					? `Cross-session kernel tool refused while session ${enforcingSessionId} enforces deny rules, including ${rule.permission} ${rule.pattern} (${rule.layer})`
 					: "Cross-session kernel tool refused: permission authority unavailable",
 			),
-			{ code: "cell_permission_denied", rule },
+			{ code: "cell_permission_denied", reason: "cross_session_authority", enforcingSessionId, rule },
 		);
 	}
 	return {

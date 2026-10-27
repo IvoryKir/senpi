@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { JavaScriptKernel, revokeSessionKernels } from "../src/kernels/js/context-manager.ts";
 import type { CellPermissionState } from "../src/kernels/js/kernel-contract.ts";
 import { KernelPermissionHost } from "../src/kernels/js/permission-host.ts";
+import { invocationSession } from "../src/kernels/shared/invocation-authority.ts";
 
 // #4309: the host-minted token, not caller arguments, chooses the permission session and cwd.
 describe("kernel invocation tokens", () => {
@@ -65,6 +66,33 @@ describe("kernel invocation tokens", () => {
 			await rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it.each([
+		{ name: "owner", ownerActive: true, invokerActive: false, enforcingSessionId: "owner" },
+		{ name: "invoker", ownerActive: false, invokerActive: true, enforcingSessionId: "invoker" },
+		{ name: "both", ownerActive: true, invokerActive: true, enforcingSessionId: "owner" },
+	])(
+		"identifies the cross-session barrier when $name enforces",
+		({ ownerActive, invokerActive, enforcingSessionId }) => {
+			const rule = { permission: "bash", pattern: "unrelated-command", layer: "user" };
+			const snapshot = (active: boolean) => ({
+				cwd: "/work",
+				state: { epoch: 1, active, rules: active ? [rule] : [] },
+			});
+			expect(() =>
+				invocationSession("owner", snapshot(ownerActive), { invoker: { sessionId: "invoker" } }, () =>
+					snapshot(invokerActive),
+				),
+			).toThrowError(
+				expect.objectContaining({
+					code: "cell_permission_denied",
+					reason: "cross_session_authority",
+					enforcingSessionId,
+					rule,
+				}),
+			);
+		},
+	);
 
 	it("mints owner tokens for absent/same invokers and invoking-session tokens otherwise", async () => {
 		const host = new KernelPermissionHost(
