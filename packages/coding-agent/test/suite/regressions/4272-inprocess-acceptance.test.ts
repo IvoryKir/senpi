@@ -12,6 +12,7 @@ import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.
 import type { RpcSessionEntry } from "../../../src/modes/rpc/session-registry.ts";
 import { createStructuredHarness } from "../structured-lane-sdk-harness.ts";
 import { scriptProvider, textReply } from "../structured-lane-support.ts";
+import { expectSameBytesExceptDeliveryStamp } from "../../helpers/rpc-delivery-stamp.ts";
 import { createInProcessRig } from "../rpc-inprocess-host-support.ts";
 
 const FLAG = "SENPI_ENGINE_SOCKET_COMPACT_UPDATES";
@@ -148,17 +149,7 @@ it("T5 sequences in-process records in producer order, correlation before its co
 		expect(seen.slice(turn, turnEnd).every((record) => record.turnId === turnId)).toBe(true);
 		expect(seen.at(-1)?.turnId, "agent_end closes the turn").toBeNull();
 
-		// observedAt is re-stamped per delivered copy at the writer boundary (#3864), so it is the one field
-		// allowed to differ from the pre-S04 reference bytes; every other byte must match.
-		const deliveryStamp = /"observedAt":"[^"]*"/g;
-		const unstamped = (lines: string[]) =>
-			lines.map((line) => line.replace(deliveryStamp, '"observedAt":"<delivery>"'));
-		expect(unstamped(actual)).toEqual(unstamped(expected));
-		expect(
-			actual
-				.filter((line) => line.includes('"type":"session_lifecycle"'))
-				.every((line) => line.includes('"observedAt":"')),
-		).toBe(true);
+		expectSameBytesExceptDeliveryStamp(actual, expected);
 		expect(actual.some((line) => /"(messageId|turnId|sessionEpoch)":/.test(line))).toBe(false);
 	} finally {
 		await binding.dispose();
