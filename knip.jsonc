@@ -153,51 +153,6 @@
         "scripts/oxlint/*.{mjs,ts}",
         // These sidecars type an .mjs module for its importers and tests.
         "scripts/**/*.d.mts",
-        // Run by path from a package.json script or a CI workflow `run:` line. knip skips export checks for such
-        // files unless they are listed here by name in a workspace with includeEntryExports; the
-        // scripts/knip-entry-exports.test.mjs probe fails when one is missing.
-        "scripts/audit-changes-md.mjs",
-        "scripts/build-all.mjs",
-        "scripts/build-binaries-flags.test.mjs",
-        "scripts/build-coding-agent-bundle.mjs",
-        "scripts/check-browser-smoke.mjs",
-        "scripts/check-claude-code-model-support.mjs",
-        "scripts/check-conflict-markers.mjs",
-        "scripts/check-entry-graphs.mjs",
-        "scripts/check-pinned-deps.mjs",
-        "scripts/check-pr-changelog.mjs",
-        "scripts/check-runtime-deps.mjs",
-        "scripts/check-ts-relative-imports.mjs",
-        "scripts/ci-platform-scope.mjs",
-        "scripts/coding-agent-consumer.mjs",
-        "scripts/copy-codemode-sidecar.mjs",
-        "scripts/copy-pty-native.mjs",
-        "scripts/create-bin-stubs.mjs",
-        "scripts/diff-model-catalog.mjs",
-        "scripts/generate-claude-agent-sdk-platform-lock.mjs",
-        "scripts/generate-coding-agent-install-lock.mjs",
-        "scripts/hydrate-lock-registry-metadata.mjs",
-        "scripts/lint-ratchet.mjs",
-        "scripts/local-release.mjs",
-        "scripts/local-release.test.mjs",
-        "scripts/model-catalog-refresh.mjs",
-        "scripts/prepare-bun-compile-assets.mjs",
-        "scripts/probe-native-grep.mjs",
-        "scripts/probe-native-pty-lifecycle.mjs",
-        "scripts/profile-coding-agent-node.mjs",
-        "scripts/publish-catalog-refresh.mjs",
-        "scripts/publish-model-catalog.mjs",
-        "scripts/publish.mjs",
-        "scripts/qa/read-summary-build.mjs",
-        "scripts/qa/read-summary-smoke.mjs",
-        "scripts/regenerate-bun-lock-isolated.mjs",
-        "scripts/release-notes.mjs",
-        "scripts/release.mjs",
-        "scripts/run-tests.mjs",
-        "scripts/run-workspaces.mjs",
-        "scripts/sync-versions.js",
-        "scripts/test-temp-guard.mjs",
-        "scripts/verify-package-managers.mjs",
       ],
       "includeEntryExports": true,
     },
@@ -206,8 +161,7 @@
       "project": ["scripts/**/*.{js,mjs,cjs,ts,mts}"],
       // Every QA driver is run by path (node .agents/skills/senpi-qa/scripts/<driver>.mjs), including
       // scenarios/*.mjs and drivers added later under any subdirectory.
-      // Run by path from a CI workflow `run:` line (see the root workspace's run-by-path list).
-      "entry": ["scripts/**/*.{mjs,ts}", "scripts/mock-loop.mjs"],
+      "entry": ["scripts/**/*.{mjs,ts}"],
       "includeEntryExports": true,
       "ignoreIssues": {
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @anthropic-ai/claude-agent-sdk; imports that do not resolve ../../../packages/coding-agent/src/core/extensions/builtin/anthropic-subscription/executable.ts
@@ -255,7 +209,7 @@
       // Design notes with illustrative code, not part of the package.
       "project": ["**/*.{js,mjs,cjs,ts,mts}", "!docs/**"],
       "vitest": { "config": ["vitest.config.ts", "vitest.harness.config.ts", "vitest.benchmark.config.ts"] },
-      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      // Run by path from package.json scripts (scripts/knip-entry-exports.test.mjs fails when one is missing).
       "entry": [
         "benchmark/session/allocation-profile.ts",
         "benchmark/session/loaded-footprint.ts",
@@ -325,10 +279,6 @@
         "bedrock-provider.d.ts",
         // The pi-ai bin (package.json bin points at dist/cli.js).
         "src/cli.ts",
-        // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
-        "scripts/check-model-data.ts",
-        "scripts/generate-models.ts",
-        "scripts/opengateway-catalog-diff.ts",
       ],
       "includeEntryExports": true,
       // dist/cli.js is a committed bin stub the build overwrites.
@@ -589,7 +539,10 @@
         // their own package.json are separate workspaces.
         "examples/**/*.ts",
         "!examples/extensions/{with-deps,custom-provider-anthropic,custom-provider-gitlab-duo,sandbox,gondolin}/**",
+        // The vitest setup file vitest.config.ts loads by path.
+        "test/setup.ts",
       ],
+      "includeEntryExports": true,
       // Minified vendor bundles read as text by export-html.
       "project": ["**/*.{js,mjs,cjs,ts,mts}", "!src/core/export-html/vendor/**"],
       // dist/cli.js is a committed bin stub the build overwrites.
@@ -637,6 +590,172 @@
         "@code-yeongyu/senpi-codemode",
       ],
       "ignoreIssues": {
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/auto-commit-on-exit.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/bash-spawn-hook.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/bookmark.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/border-status-editor.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/built-in-tool-renderer.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/claude-rules.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/commands.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/confirm-destructive.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/custom-footer.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/custom-header.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/debug-provider.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/dirty-repo-guard.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/doom-overlay/index.ts": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export findWadFile (entry, newly export-checked)
+        "examples/extensions/doom-overlay/wad-finder.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/dynamic-resources/index.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/dynamic-tools.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/entry-renderer.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/event-bus.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/file-trigger.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/git-checkpoint.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/github-issue-autocomplete.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/handoff.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/hello.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/hidden-thinking-label.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/inline-bash.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/input-transform.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/interactive-shell.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/mac-system-theme.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/message-renderer.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/minimal-mode.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/modal-editor.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/model-status.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/notify.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/overlay-qa-tests.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/overlay-test.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/permission-gate.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/pirate.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/preset.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/project-trust.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/prompt-customizer.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/protected-paths.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/provider-payload.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/qna.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/question.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/questionnaire.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/rainbow-editor.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/reload-runtime.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/rpc-demo.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/searchable-tools.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/send-user-message.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/session-name.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/shutdown-command.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/snake.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/space-invaders.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/ssh.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/status-line.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/structured-output.ts": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export formatAgentList (entry, newly export-checked)
+        "examples/extensions/subagent/agents.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/summarize.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/system-prompt-header.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/tic-tac-toe.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/timed-confirm.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/titlebar-spinner.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/todo.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/tool-override.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/tools.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/truncated-tool.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/widget-placement.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/working-indicator.ts": ["exports"],
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "examples/extensions/working-message-test.ts": ["exports"],
+        // default export is the plugin module the loader imports by path, not an import (entry, newly export-checked)
+        "examples/plugins/pi-example-plugin/src/session.ts": ["exports"],
+        // default export is the plugin module the loader imports by path, not an import (entry, newly export-checked)
+        "examples/plugins/pi-example-plugin/src/tui.ts": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export loadUsageLimitTransform (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/expected-entries.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export writeBigSession (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/offload-big-open.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export REQUIRED_PHASES (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/offload-evaluate.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused exports footprintMb, descendantsOf (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/offload-memory.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export workload (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/offload-workload.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export parseInject (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/qa-args.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused exports sandboxHostEnv, QA_READINESS_TIMEOUT_MS, qaHostLaunch (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/qa-host.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export REQUIREMENT_CAPABILITIES (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/qa-scenarios.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export connectSocket (entry, newly export-checked)
+        "scripts/qa-rpc-socket/lib/rpc-client.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export cleanupAll (entry, newly export-checked)
+        "scripts/qa-shared/lib/cleanup.mjs": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused exports cleanupAll, qaPortRange, findQaPort, uniqueLabel (entry, newly export-checked)
+        "scripts/qa-shared/lib/env.mjs": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports omoLocalUpdateWorkerLogPath
         "src/beta/omo-local-update-worker.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports ensureBuildWorktree
@@ -1267,8 +1386,12 @@
         "src/modes/rpc/host-idle-policy.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports OWNER_EXIT_GRACE_MS
         "src/modes/rpc/host-lifecycle-activity.ts": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused export parseColdStart (entry, newly export-checked)
+        "src/modes/rpc/host-lifecycle-policy.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports CHILD_STOP_TIMEOUT_MS, childExited, waitForChildExit
         "src/modes/rpc/host-lifecycle-shutdown.ts": ["exports"],
+        // pre-existing at origin main aceb1cc1d9: unused exports HANDOFF_GRACE_MS_ENV, parseColdStart (entry, newly export-checked)
+        "src/modes/rpc/host-lifecycle.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports HOST_RSS_WARN_MB_ENV, HOST_MEMORY_SAMPLE_MS
         "src/modes/rpc/host-memory-sampler.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports DETACH_ACK_TIMEOUT_MS
@@ -1388,16 +1511,32 @@
     "packages/coding-agent/examples/extensions/*": {
       // Each example extension is loaded through its package.json "pi.extensions" list, never imported.
       "entry": ["*.ts"],
+      "includeEntryExports": true,
+      "ignoreIssues": {
+        // default export is the extension factory the loader imports by path, not an import (entry, newly export-checked)
+        "index.ts": ["exports"],
+      },
     },
     "packages/evals": {
       "vitest": { "config": ["vitest.evals.config.ts", "vitest.test.config.ts"] },
       // The container runner's entrypoint and install step (docker/Dockerfile).
-      // Run by path from package.json scripts (see the root workspace's run-by-path list).
-      "entry": ["docker/*.{ts,mjs}", "scripts/run-evals.mjs", "src/cli.ts"],
+      // Run by path from package.json scripts (scripts/knip-entry-exports.test.mjs fails when one is missing).
+      "entry": [
+        "docker/*.{ts,mjs}",
+        "scripts/run-evals.mjs",
+        "src/cli.ts",
+        // The reporter and setup file vitest.evals.config.ts loads by path.
+        "src/vitest-evals/reporter.ts",
+        "src/vitest-evals/setup.ts",
+      ],
       "includeEntryExports": true,
+      "ignoreIssues": {
+        // default export is the reporter vitest.evals.config.ts loads by path, not an import (entry, newly export-checked)
+        "src/vitest-evals/reporter.ts": ["exports"],
+      },
     },
     "packages/pty": {
-      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      // Run by path from package.json scripts (scripts/knip-entry-exports.test.mjs fails when one is missing).
       "entry": ["native/check-prebuild-fresh.mjs"],
       "includeEntryExports": true,
       "ignoreIssues": {
@@ -1420,10 +1559,6 @@
         // Kernel worker and child-process entries started by path (inline-worker.ts, process-worker.ts).
         "src/kernels/js/inline-worker-entry.js",
         "src/kernels/js/process-entry.js",
-        // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
-        "scripts/bench-eval.ts",
-        "scripts/gate-build.ts",
-        "scripts/gate-eval.ts",
       ],
       "includeEntryExports": true,
       "ignoreFiles": [
@@ -1576,7 +1711,7 @@
       },
     },
     "packages/session-backends/sqlite-node": {
-      // Run by path from package.json scripts (see the root workspace's run-by-path list).
+      // Run by path from package.json scripts (scripts/knip-entry-exports.test.mjs fails when one is missing).
       "entry": ["scripts/copy-migrations.mjs"],
       "includeEntryExports": true,
       "ignoreIssues": {
@@ -1592,8 +1727,8 @@
     },
     "packages/tui": {
       // Benchmarks run by path (run-pr530-benchmarks.mjs, perf-trend-local.sh).
-      // Run by path from package.json scripts or CI workflow `run:` lines (see the root workspace's run-by-path list).
-      "entry": ["bench/*.ts", "bench/frame-cost.ts", "native/win32/build.mjs", "test/tui-main-screen-mouse.test.ts"],
+      // Run by path from package.json scripts or CI workflow `run:` lines (scripts/knip-entry-exports.test.mjs fails when one is missing).
+      "entry": ["bench/*.ts", "native/win32/build.mjs", "test/tui-main-screen-mouse.test.ts", "test/setup-multiplexer-env.mjs"],
       "includeEntryExports": true,
       "ignoreIssues": {
         // pre-existing at origin main aceb1cc1d9: unused exports parseKeyboardProtocolNegotiationSequence
