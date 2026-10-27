@@ -95,6 +95,7 @@ import {
 	validateExtensionProvider,
 } from "./provider-composer.ts";
 import { createProviderSemaphores } from "./provider-concurrency.ts";
+import { type ProviderOrigin, providerOriginOf } from "./provider-origin.ts";
 import { remoteCatalogServesProvider, withRemoteCatalog } from "./remote-catalog-provider.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 import { ServedCredentials } from "./served-credentials.ts";
@@ -151,6 +152,12 @@ function installClaudeCodeVersionCache(modelsPath: string | undefined): void {
 		path: join(dirname(modelsPath), "claude-code-version.json"),
 		offline: envValue("OFFLINE") !== undefined,
 	});
+}
+
+export interface ProviderRegistrationOptions {
+	refresh?: boolean;
+	/** The registering extension, reported as the provider's origin (senpi#4328). */
+	extensionPath?: string | undefined;
 }
 
 export interface CreateModelRuntimeOptions {
@@ -283,6 +290,8 @@ export class ModelRuntime implements Models {
 	private readonly builtins = new Map<string, Provider>();
 	private readonly nativeExtensionProviders = new Map<string, Provider>();
 	private readonly extensionProviders = new Map<string, ProviderConfigInput>();
+	/** The extension behind each registration that named one (senpi#4328). */
+	private readonly providerExtensionPaths = new Map<string, string>();
 	/** Virtual models by provider id, then model id. */
 	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
 	private readonly compositionErrors = new Map<string, string>();
@@ -755,6 +764,21 @@ export class ModelRuntime implements Models {
 
 	getRegisteredNativeProvider(providerId: string): Provider | undefined {
 		return this.nativeExtensionProviders.get(providerId);
+	}
+
+	getProviderOrigin(providerId: string): ProviderOrigin | undefined {
+		return providerOriginOf({
+			builtin: this.builtins.has(providerId),
+			nativeExtension: this.nativeExtensionProviders.has(providerId),
+			extension: this.extensionProviders.has(providerId) || this.virtualModels.has(providerId),
+			extensionPath: this.providerExtensionPaths.get(providerId),
+			modelsJsonPath: this.config.getProvider(providerId) === undefined ? undefined : this.modelsPath,
+		});
+	}
+
+	private noteExtensionPath(providerId: string, extensionPath: string | undefined): void {
+		if (extensionPath === undefined) this.providerExtensionPaths.delete(providerId);
+		else this.providerExtensionPaths.set(providerId, extensionPath);
 	}
 
 	/** @internal Compatibility fallback for ModelRegistry when provider auth is unconfigured. */
@@ -1434,11 +1458,12 @@ export class ModelRuntime implements Models {
 		}).finally(() => clearTimeout(timeout));
 	}
 
-	registerNativeProvider(provider: Provider, options?: { refresh?: boolean }): Promise<ModelsRefreshResult> {
+	registerNativeProvider(provider: Provider, options?: ProviderRegistrationOptions): Promise<ModelsRefreshResult> {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		const alreadyFresh = this.shouldSkipRegistrationRefresh(provider.id);
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
+		this.noteExtensionPath(provider.id, options?.extensionPath);
 		this.recomposeProvider(provider.id);
 		const composedOAuth = this.models.getProvider(provider.id)?.auth.oauth;
 		if (composedOAuth) this.credentials.registerOAuthProvider(provider.id, composedOAuth);
@@ -1481,7 +1506,7 @@ export class ModelRuntime implements Models {
 	registerProvider(
 		providerId: string,
 		config: ProviderConfigInput,
-		options?: { refresh?: boolean },
+		options?: ProviderRegistrationOptions,
 	): Promise<ModelsRefreshResult> {
 		// Validate the incoming registration on its own, like the legacy registry:
 		// a broken re-registration must throw without touching the stored config.
@@ -1496,6 +1521,7 @@ export class ModelRuntime implements Models {
 			if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
 		}
 		this.extensionProviders.set(providerId, effective);
+		this.noteExtensionPath(providerId, options?.extensionPath);
 		this.recomposeProvider(providerId);
 		const composedOAuth = this.models.getProvider(providerId)?.auth.oauth;
 		if (composedOAuth) this.credentials.registerOAuthProvider(providerId, composedOAuth);
@@ -1515,6 +1541,7 @@ export class ModelRuntime implements Models {
 	unregisterProvider(providerId: string): void {
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
+		this.providerExtensionPaths.delete(providerId);
 		this.recomposeProvider(providerId);
 		this.credentials.unregisterOAuthProvider(providerId);
 		this.updateModelSnapshot();
