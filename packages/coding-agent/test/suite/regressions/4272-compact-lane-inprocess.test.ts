@@ -61,7 +61,9 @@ it("T6 Q2 in-process canonical records fold with their legacy record at one lane
 				?.blocks.map((block) => block.text)
 				.join(""),
 		).toContain("first");
-		expect(role("custom")?.message).toMatchObject({ details: { kept: 1, nested: {} } });
+		// Select the test's own note: the session also carries other custom messages (workstation facts).
+		const note = messages.find((message) => message.message?.customType === "note");
+		expect(note?.message).toMatchObject({ details: { kept: 1, nested: {} } });
 	} finally {
 		lane.release(root);
 	}
