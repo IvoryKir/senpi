@@ -1,4 +1,9 @@
-import { type AssistantMessage, type AssistantProgress, seedNextOffset } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessage,
+	type AssistantProgress,
+	SeedFrontierError,
+	seedNextOffset,
+} from "@earendil-works/pi-ai";
 import type { SeededJsonMessageUpdateEvent } from "../json-event.ts";
 import { type ActiveBlock, appendBlock, deltaBlock } from "./compact-active-block.ts";
 import { type CompactSeededDraft, type SeededFields } from "./compact-seeded-draft.ts";
@@ -28,6 +33,16 @@ function parseFrontier(next: number, length: number, previous = 0): void {
 		throw new CompactTransitionError("invalid_parse_frontier", `${next} outside [${previous}, ${length}]`);
 }
 
+/** The producer's frontier helper stays the single rule; its rejection joins the reducer's typed set. */
+function seedOffset(next: number, length: number): number {
+	try {
+		return seedNextOffset(next, length);
+	} catch (error) {
+		if (error instanceof SeedFrontierError) throw new CompactTransitionError("invalid_seed_frontier", error.code);
+		throw error;
+	}
+}
+
 function seedBlock(draft: CompactSeededDraft, block: PublicBlock, frontier?: Frontier): SeededBlock {
 	const text =
 		block.type === "text"
@@ -35,7 +50,7 @@ function seedBlock(draft: CompactSeededDraft, block: PublicBlock, frontier?: Fro
 			: block.type === "thinking"
 				? block.thinking
 				: (frontier?.rawArgumentPrefix ?? "");
-	const nextOffset = frontier ? seedNextOffset(frontier.nextOffset, text.length) : text.length;
+	const nextOffset = frontier ? seedOffset(frontier.nextOffset, text.length) : text.length;
 	const covered = frontier?.coveredCodeUnits ?? 0;
 	if (
 		!Number.isSafeInteger(covered) ||
@@ -81,11 +96,11 @@ export function foldSeededBlock(
 		case "toolcall_start":
 			if (old) throw new CompactTransitionError("duplicate_block", `${event.contentIndex}`);
 			return seedBlock(draft, event.seed.block, event.seed);
-		case "message_block_state": {
-			if (event.phase === "end" && !old) throw new CompactTransitionError("unknown_block", `${event.contentIndex}`);
-			if (old?.phase === "ended") throw new CompactTransitionError("invalid_phase", old.phase);
-			return { ...seedBlock(draft, event.block), phase: event.phase === "end" ? "ended" : "open" };
-		}
+		case "message_block_state":
+			// A native insert installs a new block, like a seeded start; only its end replaces an open block.
+			if (event.phase !== "insert") break;
+			if (old) throw new CompactTransitionError("duplicate_block", `${event.contentIndex}`);
+			return seedBlock(draft, event.block);
 	}
 	if (!old) throw new CompactTransitionError("unknown_block", `${event.contentIndex}`);
 	if (old.phase !== "open") throw new CompactTransitionError("invalid_phase", old.phase);
@@ -140,11 +155,14 @@ export function foldSeededBlock(
 				),
 			};
 		}
+		case "message_block_state":
 		case "text_end":
-		case "thinking_end":
-			if (old.type !== (event.type === "text_end" ? "text" : "thinking"))
-				throw new CompactTransitionError("wrong_kind", old.type);
+		case "thinking_end": {
+			const kind =
+				event.type === "message_block_state" ? event.block.type : event.type === "text_end" ? "text" : "thinking";
+			if (old.type !== kind) throw new CompactTransitionError("wrong_kind", `${old.type} / ${kind}`);
 			return { ...seedBlock(draft, event.block), phase: "ended" };
+		}
 		case "toolcall_end":
 			if (old.type !== "toolCall") throw new CompactTransitionError("wrong_kind", old.type);
 			return { ...old, fields: draft.fields(event.toolCall), phase: "ended" };

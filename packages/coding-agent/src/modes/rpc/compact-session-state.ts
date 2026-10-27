@@ -194,7 +194,6 @@ export class CompactSessionState extends CompactStateStorage {
 		this.publish(t, block);
 		adjustBlock(this.store, block, -1);
 		this.identity.commit(t);
-		this.cold.activate(t.messageId);
 	}
 
 	private publish(address: BlockAddress, block: ActiveBlock): void {
@@ -230,6 +229,8 @@ export class CompactSessionState extends CompactStateStorage {
 		message.witnessBytes += witness;
 		this.residentTailBytes += tails;
 		this.hotWitnessBytes += witness;
+		// The only entry into `active`, so every start path voids cold work queued while the key was settled.
+		if (!this.active.has(address.messageId)) this.cold.activate(address.messageId);
 		this.active.set(address.messageId, message);
 	}
 

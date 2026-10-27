@@ -21,6 +21,33 @@ it("T6 rejects a foreign epoch without replacing the captured block", async () =
 	expect(await owner.view()).toEqual(before);
 });
 
+const native = (value: string) => ({ type: "providerNative" as const, subtype: "fixture", raw: { value } });
+
+// A native insert installs a new block; only its end is authoritative over an open block (S03b design section 4).
+it.each([
+	["an insert over an open native block", "providerNative", "insert", "duplicate_block"],
+	["an insert over an open text block", "text", "insert", "duplicate_block"],
+	["a native end of a text block", "text", "end", "wrong_kind"],
+] as const)("T6 rejects %s without replacing it", async (_name, opened, phase, reason) => {
+	await using owner = await seededOwner();
+	const { partial, state } = owner;
+	if (opened === "text") {
+		partial.content.push({ type: "text", text: "seed" });
+		owner.push({ type: "text_start", contentIndex: 0, partial });
+	} else owner.control({ type: "message_block_state", contentIndex: 0, phase: "insert", block: native("first") });
+	const before = await owner.view();
+	const status = state.storageStatus();
+	expect(() =>
+		owner.control({ type: "message_block_state", contentIndex: 0, phase, block: native("second") }),
+	).toThrow(expect.objectContaining({ reason }));
+	expect(state.acceptedSequence).toBe(1);
+	expect(await owner.view()).toEqual(before);
+	expect(state.storageStatus()).toMatchObject({
+		residentTailBytes: status.residentTailBytes,
+		hotWitnessBytes: status.hotWitnessBytes,
+	});
+});
+
 it.each([-1, 1, 3, 0.5, NaN, Infinity])(
 	"T6 rejects invalid coverage %s before publication",
 	async (coveredCodeUnits) => {
