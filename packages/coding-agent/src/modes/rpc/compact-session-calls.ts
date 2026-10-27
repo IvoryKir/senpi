@@ -9,7 +9,7 @@ import {
 	TERMINAL_PHASE,
 	terminal,
 } from "./compact-call-model.ts";
-import { NOT_EXECUTED, settleCall, settledPatch } from "./compact-call-retirement.ts";
+import { NOT_EXECUTED, orphaned, settleCall, settledPatch } from "./compact-call-retirement.ts";
 import { CompactCallTable, creationOf } from "./compact-call-table.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
 import type { ValueRef } from "./compact-values.ts";
@@ -33,6 +33,9 @@ export interface ExecutionStart {
 	readonly args: unknown;
 	readonly parentToolCallId?: string;
 }
+
+const stillOpen = (call: OutstandingCall) => !terminal(call);
+const awaitingCarrier = (call: OutstandingCall) => call.join === "pending";
 
 const FRESH = {
 	owningMessageId: null,
@@ -192,21 +195,24 @@ export class CompactSessionCalls {
 	/** An end closes the oldest call still open under its id (senpi#4278); with none open it may replace an abandoned one. */
 	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
 		const turnId = step.scope.turnId;
-		const call = this.table.oldestById(toolCallId, turnId) ?? this.lookup(turnId, toolCallId);
+		const call = this.table.oldestById(toolCallId, turnId, stillOpen) ?? this.lookup(turnId, toolCallId);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call) && call.outcome?.kind !== "abandoned") return this.ignore("late");
 		const ended = this.table.replaceSlot(call, "result", result);
-		const orphan = call.parentKey !== null && this.table.get(call.parentKey) === undefined;
 		this.update(step, ended, {
 			phase: TERMINAL_PHASE,
 			outcome: { kind: "result", isError, source: "execution_end" },
-			join: orphan || call.join === "carrierless" ? "carrierless" : "pending",
+			join: orphaned(this.table, call) || call.join === "carrierless" ? "carrierless" : "pending",
 		});
 	}
 
-	/** The carrier settled (RULING-13 Q2): the call and its completed children leave with a full projection. */
+	/**
+	 * The carrier settled (RULING-13 Q2): the oldest call under its id still awaiting a carrier, own turn first (the
+	 * same order the ends closed them in, senpi#4278), leaves with its completed descendants as one projection.
+	 */
 	settle(step: CallStep, toolCallId: string, isError: boolean): CallProjection | undefined {
-		const call = this.lookup(step.scope.turnId, toolCallId);
+		const turnId = step.scope.turnId;
+		const call = this.table.oldestById(toolCallId, turnId, awaitingCarrier) ?? this.lookup(turnId, toolCallId);
 		if (!call) return undefined;
 		const projection = settleCall(this.table, call, isError);
 		this.sequence = step.sequence;

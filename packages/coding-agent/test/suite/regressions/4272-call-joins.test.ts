@@ -150,7 +150,7 @@ it("Q4 a started call with no carrier is abandoned at agent_settled and a late r
 	}
 });
 
-it("Q5 completed nested children ride on the parent projection and executing ones stay carrierless", async () => {
+it("Q5 completed nested children ride on the parent projection and an executing one ends carrierless as an orphan", async () => {
 	const rig = await callsRig();
 	try {
 		rig.record({ type: "turn_start" });
