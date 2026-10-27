@@ -6,8 +6,10 @@ import type { FrozenCompactState, MessageRoot } from "./compact-state-view.ts";
 import { type FrozenBlock, readCompactBlocks } from "./compact-text-view.ts";
 import { CompactValues, type ValueRef } from "./compact-values.ts";
 
-export interface CallView extends Omit<OutstandingCall, "raw" | "result"> {
+export interface CallView extends Omit<OutstandingCall, "raw" | "hook" | "progress" | "result"> {
 	readonly raw: string | null;
+	readonly hook: unknown;
+	readonly progress: unknown;
 	readonly result: unknown;
 }
 export interface CallsView {
@@ -44,7 +46,13 @@ export async function readCalls(frozen: FrozenCompactState, owner: Owner, valid:
 	};
 	const calls: CallView[] = [];
 	for await (const [, call] of owner.calls.entries(frozen.calls.ref, valid))
-		calls.push({ ...call, raw: await raw(call.raw), result: await slot(call.result) });
+		calls.push({
+			...call,
+			raw: await raw(call.raw),
+			hook: await slot(call.hook),
+			progress: await slot(call.progress),
+			result: await slot(call.result),
+		});
 	valid();
 	return { sequence: frozen.calls.sequence, calls, counters: frozen.calls.counters };
 }

@@ -85,10 +85,7 @@ it("T3i legacy records keep their grammar while the real lane tracks the call th
 		});
 		const turnEnd = cuts.find((cut) => cut.type === "turn_end");
 		if (!turnEnd) throw new Error("no turn_end cut");
-		expect(
-			(await lane.readCurrentCalls(turnEnd.root)).calls.map((entry) => entry.phase),
-			"the completed call stays until its result message retires it (S06b)",
-		).toEqual(["completed-awaiting-entry"]);
+		expect((await lane.readCurrentCalls(turnEnd.root)).calls, "the result message settled the call").toEqual([]);
 	} finally {
 		for (const cut of cuts) lane.release(cut.root);
 	}

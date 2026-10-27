@@ -1,11 +1,12 @@
 import type { ActiveBlock } from "./compact-active-block.ts";
-import type { CallCorrelation, CallRaw, CallScope } from "./compact-call-model.ts";
+import type { CallCorrelation, CallProjection, CallRaw, CallScope } from "./compact-call-model.ts";
 import type { CallStep, CompactSessionCalls } from "./compact-session-calls.ts";
 import type { SeededMessage } from "./compact-seeded-messages.ts";
 import type { CompactTransition } from "./compact-transition.ts";
 
 export interface CallFold {
 	readonly changed: boolean;
+	readonly projection?: CallProjection;
 }
 
 type SeededBlockTransition = Extract<CompactTransition, { type: "seeded_block" }>;
@@ -85,13 +86,25 @@ export function foldCallRecord(
 ): CallFold {
 	const step = { sequence, scope };
 	const before = calls.table.counters.replacements;
+	let projection: CallProjection | undefined;
 	switch (field(record, "type")) {
-		case "tool_execution_start":
+		case "tool_execution_start": {
+			const parentToolCallId = field(record, "parentToolCallId");
 			calls.executionStart(step, {
 				toolCallId: text(record, "toolCallId"),
 				toolName: text(record, "toolName"),
 				args: field(record, "args") ?? null,
+				...(typeof parentToolCallId === "string" ? { parentToolCallId } : {}),
 			});
+			break;
+		}
+		case "tool_execution_update":
+			calls.executionUpdate(
+				step,
+				text(record, "toolCallId"),
+				field(record, "args") ?? null,
+				field(record, "partialResult") ?? null,
+			);
 			break;
 		case "tool_execution_end":
 			calls.executionEnd(
@@ -101,6 +114,21 @@ export function foldCallRecord(
 				field(record, "isError") === true,
 			);
 			break;
+		case "tool_hook_status":
+			calls.hook(step, text(record, "toolCallId"), record);
+			break;
+		case "turn_end":
+			calls.turnEnd(step);
+			break;
+		case "agent_settled":
+			calls.agentSettled(step);
+			break;
+		case "message_end": {
+			const message = Object(field(record, "message"));
+			if (field(message, "role") === "toolResult")
+				projection = calls.settle(step, text(message, "toolCallId"), field(message, "isError") === true);
+			break;
+		}
 	}
-	return { changed: calls.table.counters.replacements !== before };
+	return { changed: calls.table.counters.replacements !== before, ...(projection ? { projection } : {}) };
 }

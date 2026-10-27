@@ -1,5 +1,6 @@
 import {
 	type CallCorrelation,
+	type CallProjection,
 	type CallRaw,
 	type CallScope,
 	type FrozenCalls,
@@ -8,6 +9,7 @@ import {
 	TERMINAL_PHASE,
 	terminal,
 } from "./compact-call-model.ts";
+import { NOT_EXECUTED, settleCall, settledPatch } from "./compact-call-retirement.ts";
 import { CompactCallTable, creationOf } from "./compact-call-table.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
 import type { ValueRef } from "./compact-values.ts";
@@ -29,11 +31,14 @@ export interface ExecutionStart {
 	readonly toolCallId: string;
 	readonly toolName: string;
 	readonly args: unknown;
+	readonly parentToolCallId?: string;
 }
 
 const FRESH = {
 	owningMessageId: null,
 	contentIndex: null,
+	parentKey: null,
+	join: "pending",
 	startSequence: null,
 	startedAtMs: null,
 	requestedName: null,
@@ -42,6 +47,8 @@ const FRESH = {
 	raw: null,
 	input: { announced: null, started: null, prepared: null },
 	correlation: null,
+	hook: null,
+	progress: null,
 	result: null,
 	outcome: null,
 } as const;
@@ -77,7 +84,7 @@ export class CompactSessionCalls {
 			seed: block.arguments,
 			...(block.correlation ? { correlation: block.correlation } : {}),
 		};
-		if (existing && existing.owningMessageId === null) {
+		if (existing && existing.owningMessageId === null && existing.parentKey === null) {
 			this.update(step, existing, { ...fields, requestedName: existing.requestedName ?? block.name });
 			return;
 		}
@@ -149,9 +156,11 @@ export class CompactSessionCalls {
 			return;
 		}
 		if (existing) this.table.counters.reused++;
+		const parent = start.parentToolCallId ? this.lookup(turnId, start.parentToolCallId) : undefined;
 		const created = this.create(step, {
 			turnId,
 			toolCallId: start.toolCallId,
+			parentKey: parent?.runtimeItemKey ?? null,
 			phase: "executing",
 			input: { announced: null, started: start.args, prepared: null },
 			...started,
@@ -159,15 +168,60 @@ export class CompactSessionCalls {
 		if (existing) this.table.repoint(turnId, start.toolCallId, created.runtimeItemKey);
 	}
 
-	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
-		const call = this.table.byTurnId(step.scope.turnId, toolCallId);
+	executionUpdate(step: CallStep, toolCallId: string, args: unknown, partialResult: unknown): void {
+		const call = this.lookup(step.scope.turnId, toolCallId);
+		if (!call) return this.ignore("unknown");
+		if (call.phase !== "executing") return this.ignore("late");
+		const progressed = this.table.replaceSlot(call, "progress", partialResult);
+		this.table.counters.progressReplacements++;
+		if (call.input.prepared === null) this.update(step, progressed, { input: { ...call.input, prepared: args } });
+		this.sequence = step.sequence;
+	}
+
+	hook(step: CallStep, toolCallId: string, record: unknown): void {
+		const call = this.lookup(step.scope.turnId, toolCallId);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call)) return this.ignore("late");
+		this.table.replaceSlot(call, "hook", record);
+		this.sequence = step.sequence;
+	}
+
+	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
+		const call = this.lookup(step.scope.turnId, toolCallId);
+		if (!call) return this.ignore("unknown");
+		if (terminal(call) && call.outcome?.kind !== "abandoned") return this.ignore("late");
 		const ended = this.table.replaceSlot(call, "result", result);
+		const orphan = call.parentKey !== null && this.table.get(call.parentKey) === undefined;
 		this.update(step, ended, {
 			phase: TERMINAL_PHASE,
 			outcome: { kind: "result", isError, source: "execution_end" },
+			join: orphan || call.join === "carrierless" ? "carrierless" : "pending",
 		});
+	}
+
+	/** The carrier settled (RULING-13 Q2): the call and its completed children leave with a full projection. */
+	settle(step: CallStep, toolCallId: string, isError: boolean): CallProjection | undefined {
+		const call = this.lookup(step.scope.turnId, toolCallId);
+		if (!call) return undefined;
+		const projection = settleCall(this.table, call, isError);
+		this.sequence = step.sequence;
+		return projection;
+	}
+
+	/** RULING-13 Q3: a never-started call ends as an explicit `not-executed` terminal, never a silent removal. */
+	turnEnd(step: CallStep): void {
+		const turnId = step.scope.turnId;
+		if (turnId === null) return;
+		for (const call of [...this.table.ofTurn(turnId)])
+			if (call.startSequence === null && !terminal(call)) this.update(step, call, NOT_EXECUTED);
+	}
+
+	/** RULING-13 Q4: after the run settled no carrier can arrive; started calls stay carrierless until retirement. */
+	agentSettled(step: CallStep): void {
+		for (const call of [...this.table.all()]) {
+			const patch = settledPatch(call);
+			if (patch) this.update(step, call, patch);
+		}
 	}
 
 	freeze(): FrozenCalls {
@@ -180,6 +234,10 @@ export class CompactSessionCalls {
 
 	entries(ref: ValueRef | undefined, valid: () => void) {
 		return this.table.entriesOf(ref, valid);
+	}
+
+	private lookup(turnId: string | null, toolCallId: string): OutstandingCall | undefined {
+		return this.table.byTurnId(turnId, toolCallId) ?? this.table.newestById(toolCallId);
 	}
 
 	private ignore(kind: "unknown" | "late"): void {

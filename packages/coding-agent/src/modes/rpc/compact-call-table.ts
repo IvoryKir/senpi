@@ -1,4 +1,4 @@
-import { type CallCounters, callLeaves, callOrder, type OutstandingCall } from "./compact-call-model.ts";
+import { type CallCounters, callLeaves, callOrder, type OutstandingCall, terminal } from "./compact-call-model.ts";
 import { CompactComponentRoots, type ComponentRoot } from "./compact-component-roots.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
 import { CompactValues, type ValueRef } from "./compact-values.ts";
@@ -15,7 +15,7 @@ const turnKey = (turnId: string, toolCallId: string) => `${turnId}\u0000${toolCa
 const messageKey = (messageId: string, contentIndex: number) => `${messageId}#${contentIndex}`;
 
 /**
- * The resident side of the calls component (S06 design section 2): the live entries, two indexes, the owned slot
+ * The resident side of the calls component (S06 design section 2): the live entries, four indexes, the owned slot
  * values, and the persistent root every change republishes through the shared component roots.
  */
 export class CompactCallTable {
@@ -26,9 +26,11 @@ export class CompactCallTable {
 	private readonly entries = new Map<string, Entry>();
 	private readonly byTurn = new Map<string, string>();
 	private readonly byMessage = new Map<string, string>();
+	private readonly byId = new Map<string, string[]>();
+	private readonly children = new Map<string, Set<string>>();
 	private slotBytes = 0;
 	private headerBytes = 0;
-	readonly counters = { replacements: 0, unknown: 0, late: 0, collisions: 0, reused: 0 };
+	readonly counters = { replacements: 0, progressReplacements: 0, unknown: 0, late: 0, collisions: 0, reused: 0 };
 
 	constructor(store: CompactContentStore) {
 		this.store = store;
@@ -51,12 +53,35 @@ export class CompactCallTable {
 		return key === undefined ? undefined : this.get(key);
 	}
 
+	/** The newest call with this id that is non-terminal or holds a synthetic outcome (design section 3). */
+	newestById(toolCallId: string): OutstandingCall | undefined {
+		const keys = this.byId.get(toolCallId) ?? [];
+		for (let index = keys.length - 1; index >= 0; index--) {
+			const call = this.get(keys[index]);
+			if (call && (!terminal(call) || call.outcome?.kind === "abandoned")) return call;
+		}
+		return undefined;
+	}
+
+	*ofTurn(turnId: string): Iterable<OutstandingCall> {
+		for (const { call } of this.entries.values()) if (call.turnId === turnId) yield call;
+	}
+
+	*all(): Iterable<OutstandingCall> {
+		for (const { call } of this.entries.values()) yield call;
+	}
+
+	childrenOf(parentKey: string): readonly OutstandingCall[] {
+		const keys = [...(this.children.get(parentKey) ?? [])];
+		return keys.flatMap((key) => this.get(key) ?? []);
+	}
+
 	own(value: unknown): Slot {
 		return { ref: this.values.own(value), bytes: Buffer.byteLength(JSON.stringify(value) ?? "") };
 	}
 
 	/** X07 `slotBytes` counts one copy per slot: the replaced value's bytes leave with it. */
-	replaceSlot(call: OutstandingCall, field: "result", value: unknown): OutstandingCall {
+	replaceSlot(call: OutstandingCall, field: "hook" | "progress" | "result", value: unknown): OutstandingCall {
 		const slot = this.own(value);
 		const previous = call[field];
 		const next = { ...call, [field]: slot.ref };
@@ -82,6 +107,21 @@ export class CompactCallTable {
 		this.index(call);
 	}
 
+	remove(key: string): void {
+		const entry = this.entries.get(key);
+		if (!entry) return;
+		this.unindex(entry.call);
+		for (const slot of [entry.call.hook, entry.call.progress, entry.call.result])
+			if (slot) {
+				this.slotBytes -= this.slotBytesOf.get(slot) ?? 0;
+				this.slotBytesOf.delete(slot);
+			}
+		this.headerBytes -= headerBytes(entry.call);
+		this.entries.delete(key);
+		this.root = this.roots.set(this.root, entry.order, undefined);
+		this.counters.replacements++;
+	}
+
 	/** Whether another live call already owns this (turn, id) slot: a collision leaves the index unchanged. */
 	indexedTo(turnId: string, toolCallId: string): string | undefined {
 		return this.byTurn.get(turnKey(turnId, toolCallId));
@@ -93,11 +133,15 @@ export class CompactCallTable {
 	}
 
 	snapshot(): CallCounters {
+		let carrierless = 0;
+		for (const { call } of this.entries.values()) if (call.join === "carrierless") carrierless++;
 		return {
 			live: this.entries.size,
+			carrierless,
 			replacements: this.counters.replacements,
 			headerBytes: this.headerBytes,
 			slotBytes: this.slotBytes,
+			progressReplacements: this.counters.progressReplacements,
 			ignored: { unknown: this.counters.unknown, late: this.counters.late },
 			collisions: this.counters.collisions,
 			reused: this.counters.reused,
@@ -122,19 +166,34 @@ export class CompactCallTable {
 			const slot = turnKey(call.turnId, call.toolCallId);
 			if (!this.byTurn.has(slot) || this.byTurn.get(slot) === call.runtimeItemKey)
 				this.byTurn.set(slot, call.runtimeItemKey);
+			const keys = this.byId.get(call.toolCallId) ?? [];
+			if (!keys.includes(call.runtimeItemKey)) this.byId.set(call.toolCallId, [...keys, call.runtimeItemKey]);
 		}
 		if (call.owningMessageId !== null && call.contentIndex !== null)
 			this.byMessage.set(messageKey(call.owningMessageId, call.contentIndex), call.runtimeItemKey);
+		if (call.parentKey !== null) {
+			const siblings = this.children.get(call.parentKey) ?? new Set();
+			siblings.add(call.runtimeItemKey);
+			this.children.set(call.parentKey, siblings);
+		}
 	}
 
 	private unindex(call: OutstandingCall): void {
 		if (call.toolCallId) {
 			const slot = turnKey(call.turnId, call.toolCallId);
 			if (this.byTurn.get(slot) === call.runtimeItemKey) this.byTurn.delete(slot);
+			const keys = (this.byId.get(call.toolCallId) ?? []).filter((key) => key !== call.runtimeItemKey);
+			if (keys.length) this.byId.set(call.toolCallId, keys);
+			else this.byId.delete(call.toolCallId);
 		}
 		if (call.owningMessageId !== null && call.contentIndex !== null) {
 			const slot = messageKey(call.owningMessageId, call.contentIndex);
 			if (this.byMessage.get(slot) === call.runtimeItemKey) this.byMessage.delete(slot);
+		}
+		if (call.parentKey !== null) {
+			const siblings = this.children.get(call.parentKey);
+			siblings?.delete(call.runtimeItemKey);
+			if (siblings?.size === 0) this.children.delete(call.parentKey);
 		}
 	}
 }

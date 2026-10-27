@@ -180,7 +180,7 @@ export class SessionAcceptanceLane {
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
-		if (type === "message_end") this.settled.end(record, carrier, this.sequence, turnId);
+		if (type === "message_end") this.settled.end(record, carrier, this.sequence, turnId, call?.projection);
 		if (type === "transcript_write_failed") this.settled.fail(carrier, String(field(record, "errorMessage")));
 		// A failed write, or a terminal whose entry was committed before it, settles its compact persistence too.
 		const persisted = type === "message_end" && carrier?.durableEntryId ? "appended" : undefined;

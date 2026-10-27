@@ -1,5 +1,6 @@
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
+import type { CallProjection } from "./compact-call-model.ts";
 import { CompactContentIndex, type FrozenIndex } from "./compact-content-index.ts";
 import {
 	COMPACT_LEAF_CODE_UNITS,
@@ -21,7 +22,8 @@ export interface TerminalRow {
 	readonly turnId: string | null;
 	readonly terminalSequence: number;
 	readonly role: string;
-	readonly runtimeItemKey: null;
+	/** A toolResult row carries the key of the call it retired (RULING-13 Q7); every other row has none. */
+	readonly runtimeItemKey: string | null;
 	readonly entryId: null;
 	readonly status: "pending" | "failed";
 	readonly error: { readonly errorMessage: string } | null;
@@ -61,7 +63,14 @@ export class CompactSettledMessages {
 		return carrier !== undefined && carrier.epoch === this.epoch;
 	}
 
-	end(record: object, carrier: RecoveryCarrier | undefined, sequence: number, turnId: string | null): void {
+	/** `call`: the projection of the outstanding call this toolResult settles, stored with the terminal (Q2). */
+	end(
+		record: object,
+		carrier: RecoveryCarrier | undefined,
+		sequence: number,
+		turnId: string | null,
+		call?: CallProjection,
+	): void {
 		if (!this.valid(carrier)) return this.diagnose("unknown_message");
 		const id = carrier.messageId;
 		if (this.keys.has(`end:${id}`)) return this.diagnose("duplicate_end");
@@ -81,6 +90,7 @@ export class CompactSettledMessages {
 				clientTurnId: Reflect.get(record, "clientTurnId"),
 				clientMessages: Reflect.get(record, "clientMessages"),
 			},
+			...(call ? { call } : {}),
 		});
 		for (let offset = 0; offset < text.length; offset += COMPACT_LEAF_CODE_UNITS)
 			payload.push(this.store.createLeaf(text.slice(offset, offset + COMPACT_LEAF_CODE_UNITS)));
@@ -90,7 +100,7 @@ export class CompactSettledMessages {
 			turnId,
 			terminalSequence: sequence,
 			role,
-			runtimeItemKey: null,
+			runtimeItemKey: call?.runtimeItemKey ?? null,
 			entryId: null,
 			status: "pending",
 			error: null,
@@ -162,15 +172,18 @@ export class CompactSettledMessages {
 	}
 
 	async read(root: SettledRoot) {
-		const settledMessages: (Omit<TerminalRow, "kind" | "payload"> & { terminal: unknown; correlation: unknown })[] =
-			[];
+		const settledMessages: (Omit<TerminalRow, "kind" | "payload"> & {
+			terminal: unknown;
+			correlation: unknown;
+			call?: CallProjection;
+		})[] = [];
 		const owners: OwnerRow[] = [];
 		for (const [key, row] of await this.rows.entries(root)) {
 			if (row.kind === "owner" && key.startsWith("owner:")) owners.push(row);
 			if (row.kind !== "terminal") continue;
 			const { payload, kind: _kind, ...fields } = row;
 			const bytes = (await Promise.all(payload.map((leaf) => this.store.readLeaf(leaf)))).join("");
-			const value: { terminal: unknown; correlation: unknown } = JSON.parse(bytes);
+			const value: { terminal: unknown; correlation: unknown; call?: CallProjection } = JSON.parse(bytes);
 			settledMessages.push({ ...fields, ...value });
 		}
 		return { settledMessages, owners };

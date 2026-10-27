@@ -21,6 +21,7 @@ it("T3a C3.2 C3.3 phases only move forward and every cut holds the exact raw pre
 		rig.end(owner, [call]);
 		const announced = await rig.calls();
 		rig.record({ type: "tool_execution_start", toolCallId: "call-a", toolName: "write", args });
+		rig.record({ type: "tool_execution_update", toolCallId: "call-a", toolName: "write", args, partialResult: 1 });
 		const executing = await rig.calls();
 		rig.record({ type: "tool_execution_end", toolCallId: "call-a", toolName: "write", result: "ok", isError: false });
 		const completed = await rig.calls();
@@ -51,8 +52,9 @@ it("T3a C3.2 C3.3 phases only move forward and every cut holds the exact raw pre
 			runtimeItemKey: key,
 			phase: "executing",
 			raw: RAW,
-			input: { announced: args, started: args, prepared: null },
-			startSequence: executing.root.sequence,
+			input: { announced: args, started: args, prepared: args },
+			progress: 1,
+			startSequence: executing.root.sequence - 1,
 		});
 		expect(completed.calls[0]).toMatchObject({
 			runtimeItemKey: key,
@@ -137,18 +139,22 @@ it("C3.1 a later assistant message never clears earlier calls", async () => {
 	}
 });
 
-it("Q9 an ignored execution end takes no sequence and publishes no calls root", async () => {
+it("Q9 ignored execution records take no sequence and publish no calls root", async () => {
 	const rig = await callsRig();
 	try {
 		rig.record({ type: "turn_start" });
 		const before = await rig.calls();
-		const ghost = { type: "tool_execution_end", toolCallId: "ghost", toolName: "t", result: "x", isError: false };
-		expect(rig.lane.accept(ghost, undefined)).toBeUndefined();
+		for (const record of [
+			{ type: "tool_execution_update", toolCallId: "ghost", toolName: "t", args: {}, partialResult: 1 },
+			{ type: "tool_execution_end", toolCallId: "ghost", toolName: "t", result: "x", isError: false },
+			{ type: "tool_hook_status", toolCallId: "codemode-1", hookName: "PreToolUse", phase: "start" },
+		])
+			expect(rig.lane.accept(record, undefined), `${record.type} is ignored`).toBeUndefined();
 		const after = await rig.calls();
 		expect(after.root.sequence).toBe(before.root.sequence);
 		expect(after.sequence).toBe(before.sequence);
 		expect(after.calls).toEqual([]);
-		expect(after.counters.ignored).toEqual({ unknown: 1, late: 0 });
+		expect(after.counters.ignored).toEqual({ unknown: 3, late: 0 });
 		rig.lane.release(before.root);
 		rig.lane.release(after.root);
 	} finally {
