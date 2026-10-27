@@ -29,7 +29,8 @@ it("orders cold operations after acceptance without mutating active blocks or a 
 	const state = new CompactSessionState({ dir: root.dir, io: io.io, compactAboveRows: 1 });
 	const hold = io.hold("read", (path) => path.includes("/page-"));
 	try {
-		state.accept(startBlock("cold", "body"));
+		const original = startBlock("cold", "body");
+		state.accept(original);
 		state.accept({ type: "message_status", messageId: "cold", persistence: "pending" });
 		await state.idle();
 		const before = state.freeze();
@@ -54,8 +55,8 @@ it("orders cold operations after acceptance without mutating active blocks or a 
 			expect(() => state.accept({ type, messageId: "cold", contentIndex: 0, offset: 0, text: "bad" })).toThrow(
 				expect.objectContaining({ reason: "unknown_block" }),
 			);
-		expect(() => state.accept(startBlock("cold", "duplicate"))).toThrow(
-			expect.objectContaining({ reason: "duplicate_block" }),
+		expect(() => state.accept({ ...startBlock("cold", "duplicate"), firstOrdinal: original.firstOrdinal })).toThrow(
+			expect.objectContaining({ reason: "duplicate_or_stale_start" }),
 		);
 		expect(state.acceptedSequence).toBe(4);
 		hold.release();

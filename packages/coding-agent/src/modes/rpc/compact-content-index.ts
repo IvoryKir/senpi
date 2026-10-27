@@ -1,6 +1,7 @@
 import { CompactCommitDependencies } from "./compact-commit-dependencies.ts";
 import type { CompactContentStore, LeafId } from "./compact-content-store.ts";
 import { CompactIndexTree, type IndexNode } from "./compact-index-tree.ts";
+import { CompactPagedTree, type PagedRoot } from "./compact-paged-tree.ts";
 import { CompactReadError, CompactReadLease } from "./compact-read-lease.ts";
 import { CompactValues, type ValueRef } from "./compact-values.ts";
 import { CompactIndexCompactor } from "./compact-index-compactor.ts";
@@ -16,8 +17,6 @@ export interface IndexPage {
 	readonly bytes: number;
 	readonly count: number;
 	readonly owner: LeafId;
-	live: number;
-	pins: number;
 }
 export interface BaseRow {
 	readonly page: IndexPage;
@@ -31,7 +30,7 @@ export interface IndexOverride {
 	readonly deleted: boolean;
 }
 export interface FrozenIndex {
-	readonly base: IndexNode<BaseRow> | undefined;
+	readonly base: PagedRoot | undefined;
 	readonly overrides: IndexNode<IndexOverride> | undefined;
 }
 export interface IndexCursor {
@@ -39,13 +38,13 @@ export interface IndexCursor {
 	readonly after: string;
 }
 
-/** Persistent roots; RULING-34 deliberately retains exact key/path membership until 1b-II. */
+/** Pending overlays stay resident; settled keys and navigation paths live in spillable nodes. */
 export class CompactContentIndex<Row extends object> {
 	readonly store: CompactContentStore;
 	readonly values: CompactValues;
-	readonly bases: CompactIndexTree<BaseRow>;
+	readonly bases: CompactPagedTree<BaseRow>;
 	readonly overlays: CompactIndexTree<IndexOverride>;
-	base: IndexNode<BaseRow> | undefined;
+	base: PagedRoot | undefined;
 	overrides: IndexNode<IndexOverride> | undefined;
 	readonly pages = new Set<IndexPage>();
 	readonly pending: CompactCommitDependencies<string>;
@@ -61,24 +60,10 @@ export class CompactContentIndex<Row extends object> {
 		this.store = store;
 		this.leavesOf = leavesOf;
 		this.values = new CompactValues(store);
-		this.bases = new CompactIndexTree(({ page }, live, pins) => {
-			const l = Number(page.live > 0);
-			const p = Number(page.live === 0 && page.pins > 0);
-			page.live += live;
-			page.pins += pins;
-			store.adjust(page.owner, Number(page.live > 0) - l, Number(page.live === 0 && page.pins > 0) - p);
-			if (page.live > 0) this.pages.add(page);
-			else this.pages.delete(page);
-			if (page.live === 0 && page.pins === 0) store.discard(page.path, page.bytes);
-		});
+		this.bases = new CompactPagedTree(store, ({ page }) => [page.owner]);
 		this.overlays = new CompactIndexTree((value, live, pins) => store.adjust(value.owner, live, pins));
 		this.pending = new CompactCommitDependencies(store, () => this.maybeCompact());
 		this.compactor = new CompactIndexCompactor(this, threshold);
-	}
-
-	has(key: string): boolean {
-		const overlay = this.overlays.get(this.overrides, key);
-		return overlay ? !overlay.deleted : this.bases.get(this.base, key) !== undefined;
 	}
 
 	set(key: string, row: Row): void {
@@ -112,8 +97,7 @@ export class CompactContentIndex<Row extends object> {
 	}
 
 	delete(key: string): void {
-		if (this.bases.get(this.base, key)) this.put(key, undefined, new Map(), true);
-		else this.drop(key);
+		this.put(key, undefined, new Map(), true);
 	}
 
 	freeze(): FrozenIndex {
@@ -144,7 +128,7 @@ export class CompactContentIndex<Row extends object> {
 			const change = this.overlays.get(cut.overrides, key);
 			if (change?.deleted) return undefined;
 			if (change?.row) return change.row;
-			const old = this.bases.get(cut.base, key);
+			const old = await this.bases.get(cut.base, key);
 			if (!old) return undefined;
 			using held = await this.readPage(old.page);
 			return held.rows[old.offset];
@@ -188,7 +172,7 @@ export class CompactContentIndex<Row extends object> {
 			deletionMaskBytes: this.maskUnits * 2,
 			basePages: this.pages.size,
 			baseRows: this.base?.size ?? 0,
-			residentIndexNodes: this.bases.residentNodes + this.overlays.residentNodes,
+			residentIndexNodes: this.overlays.residentNodes,
 			allocatedIndexNodes: this.bases.allocatedNodes + this.overlays.allocatedNodes,
 			residentPages: this.residentPages + this.values.residentPages,
 			peakResidentPages: this.peakResidentPages + this.values.peakResidentPages,

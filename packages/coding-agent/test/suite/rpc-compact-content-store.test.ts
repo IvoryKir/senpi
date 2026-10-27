@@ -157,8 +157,8 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 		pageWrite.release();
 		await state.idle();
 
-		// The immutable old body remains a valid base beneath the newer field-reference override.
-		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 2, overrideSlots: 1, deletionMasks: 0 });
+		// Deletion drains the pending mask, folding the newer field update without changing either cut.
+		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 2, overrideSlots: 0, deletionMasks: 0 });
 		const persistence = async (cut = state.freeze()) => {
 			const view = await state.read(cut);
 			state.release(cut);
@@ -167,7 +167,7 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 		expect(await persistence()).toEqual({ m1: "appended", m3: "pending" });
 		expect(await persistence(before)).toEqual({ m1: "pending", m2: "pending", m3: "pending" });
 
-		for (const id of ["m4", "m5"]) {
+		for (const id of ["m4", "m5", "m6"]) {
 			state.accept(start(id, ""));
 			state.accept({ type: "message_status", messageId: id, persistence: "failed" });
 		}
@@ -175,10 +175,10 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 		expect(state.storageStatus()).toMatchObject({
 			overrideSlots: 0,
 			deletionMasks: 0,
-			baseRows: 4,
+			baseRows: 5,
 			reclaimDebtBytes: 0,
 		});
-		expect(await persistence()).toEqual({ m1: "appended", m3: "pending", m4: "failed", m5: "failed" });
+		expect(await persistence()).toEqual({ m1: "appended", m3: "pending", m4: "failed", m5: "failed", m6: "failed" });
 	});
 });
 
@@ -203,11 +203,16 @@ describe("compact session state: exact settled-row transitions", () => {
 			{ type: "message_status", messageId: "never", persistence: "failed" },
 		] as const) {
 			expect(() => state.accept(transition)).toThrow(
-				expect.objectContaining({ name: "CompactTransitionError", reason: "unknown_message" }),
+				expect.objectContaining({ name: "CompactTransitionError", reason: "cold_operation_required" }),
 			);
 		}
 		expect(state.acceptedSequence).toBe(sequence);
 		expect(state.storageStatus()).toEqual(status);
+		for (const messageId of ["m2", "never"])
+			expect(await state.applyCold({ type: "message_remove", messageId })).toMatchObject({
+				kind: "rejected",
+				reason: "unknown_message",
+			});
 
 		const persistence = async (cut = state.freeze()) => {
 			const view = await state.read(cut);
@@ -230,7 +235,7 @@ describe("compact session state: exact settled-row transitions", () => {
 			persistence: "failed",
 			blocks: [{ contentIndex: 0, kind: "text", text: "new" }],
 		});
-		expect(state.storageStatus()).toMatchObject({ overrideSlots: 3, deletionMasks: 0, reclaimDebtBytes: 0 });
+		expect(state.storageStatus()).toMatchObject({ overrideSlots: 1, deletionMasks: 0, reclaimDebtBytes: 0 });
 	});
 });
 

@@ -122,8 +122,8 @@ describe("compact content index: transitions racing a compaction", () => {
 
 		settle(state, "m4", "");
 		await state.idle();
-		// m4's newly owned value is not committed when the three older eligible rows are selected.
-		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 3, overrideSlots: 1 });
+		// The bounded structural flush makes m4 eligible alongside the three retained rows.
+		expect(state.storageStatus()).toMatchObject({ basePages: 1, baseRows: 4, overrideSlots: 0 });
 		expect(Object.keys(await texts(state))).toEqual(["m1", "m2", "m3", "m4"]);
 	});
 

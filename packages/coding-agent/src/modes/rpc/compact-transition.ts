@@ -16,6 +16,8 @@ export type CompactTransition =
 			readonly type: "block_start";
 			readonly epoch: string;
 			readonly ordinal: number;
+			/** Producer-owned ordinal of this message's first block_start, stable across all its blocks. */
+			readonly firstOrdinal: number;
 			readonly kind: CompactBlockKind;
 			readonly seed: string;
 			/**

@@ -14,7 +14,7 @@ export type CompactColdOutcome =
 
 type Index = Pick<
 	CompactContentIndex<{ readonly persistence: CompactPersistence }>,
-	"store" | "has" | "freeze" | "lookup" | "patch" | "delete" | "release"
+	"store" | "freeze" | "lookup" | "patch" | "delete" | "release"
 >;
 /** Non-acceptance FIFO. Capacity rejection leaves work unqueued; callers await admitted operations. */
 export class CompactColdOperations {
@@ -29,7 +29,6 @@ export class CompactColdOperations {
 	run(input: CompactColdOperation, afterSequence: number): Promise<CompactColdOutcome> {
 		const operation = { ...input };
 		const key = operation.messageId;
-		if (!this.index.has(key)) return Promise.resolve({ kind: "rejected", reason: "unknown_message", afterSequence });
 		// Bound queued roots, keys and closures independently of the settled membership catalog.
 		if (this.pending === 128) return Promise.resolve({ kind: "rejected", reason: "capacity", afterSequence });
 		const token = this.keys.get(key) ?? { removed: false, pending: 0 };
@@ -39,8 +38,7 @@ export class CompactColdOperations {
 		const result = this.chain.then(async (): Promise<CompactColdOutcome> => {
 			try {
 				this.index.store.assertReadable();
-				if (token.removed || !this.index.has(key))
-					return { kind: "rejected", reason: "unknown_message", afterSequence };
+				if (token.removed) return { kind: "rejected", reason: "unknown_message", afterSequence };
 				const cut = this.index.freeze();
 				try {
 					if (!(await this.index.lookup(cut, key)))

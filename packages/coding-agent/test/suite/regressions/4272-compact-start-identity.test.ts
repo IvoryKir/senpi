@@ -20,6 +20,7 @@ const start = (epoch: string, ordinal: number, messageId = `${epoch}-${ordinal}`
 	type: "block_start" as const,
 	epoch,
 	ordinal,
+	firstOrdinal: ordinal,
 	messageId,
 	contentIndex: 0,
 	kind: "text" as const,

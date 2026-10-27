@@ -18,6 +18,7 @@ type Index = Pick<
 	| "freeze"
 	| "release"
 	| "drop"
+	| "status"
 >;
 
 /** One bounded selection and one optional small page, with a single atomic representation swap. */
@@ -36,7 +37,7 @@ export class CompactIndexCompactor {
 		if (
 			this.running ||
 			!index.store.spillAllowed ||
-			(index.overrides?.size ?? 0) - index.pending.size < this.threshold
+			((index.overrides?.size ?? 0) - index.pending.size < this.threshold && !index.status().deletionMasks)
 		)
 			return;
 		this.running = true;
@@ -54,17 +55,11 @@ export class CompactIndexCompactor {
 	private async compact(): Promise<boolean> {
 		const i = this.index;
 		if (!i.store.spillAllowed) return false;
+		await i.store.flushValues();
+		if (!i.store.spillAllowed) return false;
 		const cut = i.freeze();
 		const selected = new Map<string, IndexOverride>();
 		let touched: IndexPage | undefined;
-		for (const [key, value] of i.overlays.entries(cut.overrides)) {
-			const page = i.bases.get(cut.base, key)?.page;
-			if (!i.pending.has(key) && (!page || !touched || page === touched)) {
-				selected.set(key, value);
-				touched ??= page;
-			}
-			if (selected.size === 128) break;
-		}
 		const rows = new Map<string, IndexRow>();
 		const removed = new Set<string>();
 		const merged: number[] = [];
@@ -74,6 +69,14 @@ export class CompactIndexCompactor {
 		let draft = i.base;
 		i.bases.adjust(draft, 1, 0);
 		try {
+			for (const [key, value] of i.overlays.entries(cut.overrides)) {
+				const page = (await i.bases.get(cut.base, key))?.page;
+				if (!i.pending.has(key) && (!page || !touched || page.path === touched.path)) {
+					selected.set(key, value);
+					touched ??= page;
+				}
+				if (selected.size === 128) break;
+			}
 			let small: IndexPage | undefined;
 			for (const page of i.pages) {
 				if (page.count < 64 && page.bytes < 32_768) {
@@ -81,14 +84,14 @@ export class CompactIndexCompactor {
 					break;
 				}
 			}
-			for (const page of new Set([small, touched])) {
+			for (const page of small?.path === touched?.path ? [small] : [small, touched]) {
 				if (!page) continue;
 				const data = await i.readPage(page);
 				loaded.push(data);
 				for (const row of data.rows) {
 					const key = await i.values.read(row.key);
 					if (typeof key !== "string") throw new CompactReadError("ownership");
-					if (i.bases.get(cut.base, key)?.page === page) {
+					if ((await i.bases.get(cut.base, key))?.page.path === page.path) {
 						rows.set(key, row);
 						removed.add(key);
 					}
@@ -121,8 +124,6 @@ export class CompactIndexCompactor {
 						bytes: data.byteLength,
 						count: chunk.length,
 						owner: 0,
-						live: 0,
-						pins: 0,
 					},
 					keys: ordered.slice(offset, offset + chunk.length).map(([key]) => key),
 				});
@@ -131,7 +132,7 @@ export class CompactIndexCompactor {
 			}
 			if (!i.store.spillAllowed) return false;
 			for (const key of removed) {
-				const next = i.bases.set(draft, key, undefined);
+				const next = await i.bases.set(draft, key, undefined);
 				i.bases.adjust(draft, -1, 0);
 				draft = next;
 			}
@@ -150,27 +151,37 @@ export class CompactIndexCompactor {
 					refs.push(row.value.owner, row.payload);
 					kept.push([key, offset]);
 				}
-				const page = { ...candidate.page, owner: i.store.text.own(refs) };
+				const file = i.store.ownFile(candidate.page.path, candidate.page.bytes);
+				const page = { ...candidate.page, owner: i.store.text.own([...refs, file]) };
+				i.store.adjust(file, -1, 0);
+				unowned.delete(candidate.page);
 				try {
 					for (const [key, offset] of kept) {
-						const next = i.bases.set(draft, key, { page, offset });
-						unowned.delete(candidate.page);
+						const next = await i.bases.set(draft, key, { page, offset });
 						i.bases.adjust(draft, -1, 0);
 						draft = next;
 					}
+					if (kept.length) candidate.page = page;
 				} finally {
 					i.store.adjust(page.owner, -1, 0);
 				}
 			}
+			await i.bases.flush();
+			if (!i.store.spillAllowed) return false;
 			const previous = i.base;
 			i.base = draft;
 			draft = undefined;
 			i.bases.adjust(previous, -1, 0);
+			for (const page of i.pages) if (page.path === small?.path || page.path === touched?.path) i.pages.delete(page);
+			for (const { page } of written) if (page.owner) i.pages.add(page);
 			for (const [key, value] of selected) {
 				const current = i.overlays.get(i.overrides, key);
-				if (current === value || (current?.deleted && !i.bases.get(i.base, key))) i.drop(key);
+				if (current === value) i.drop(key);
 			}
 			return selected.size > 0;
+		} catch (error) {
+			if (error instanceof CompactReadError && error.reason === "retired") return false;
+			throw error;
 		} finally {
 			i.bases.adjust(draft, -1, 0);
 			for (const page of loaded) page[Symbol.dispose]();

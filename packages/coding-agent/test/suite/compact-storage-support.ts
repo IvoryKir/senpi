@@ -5,7 +5,11 @@ import type { CompactStorageIo } from "../../src/modes/rpc/compact-storage-io.ts
 
 let ordinal = 0;
 /** Producer-side fixture numbering; the consumer never fills missing identity fields. */
-export const startIdentity = () => ({ epoch: "fixture-producer", ordinal: ordinal++ });
+export const startIdentity = (firstOrdinal = ordinal) => ({
+	epoch: "fixture-producer",
+	firstOrdinal,
+	ordinal: ordinal++,
+});
 export const startBlock = (messageId: string, seed: string) => ({
 	type: "block_start" as const,
 	...startIdentity(),

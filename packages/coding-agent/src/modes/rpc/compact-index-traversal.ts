@@ -12,7 +12,7 @@ export async function readIndexPage(
 	const rows: { row: IndexRow; patch: ValueRef | undefined }[] = [];
 	const base = index.bases.entries(cut.base, cursor?.after);
 	const overlay = index.overlays.entries(cut.overrides, cursor?.after);
-	let a = base.next(),
+	let a = await base.next(),
 		b = overlay.next(),
 		last: string | undefined;
 	let loaded: Awaited<ReturnType<typeof index.readPage>> | undefined;
@@ -24,7 +24,7 @@ export async function readIndexPage(
 			const old = !a.done && a.value[0] === key ? a.value[1] : undefined;
 			const change = !b.done && b.value[0] === key ? b.value[1] : undefined;
 			if (!change?.deleted) {
-				if (!change?.row && old && from !== old.page) {
+				if (!change?.row && old && from?.path !== old.page.path) {
 					loaded?.[Symbol.dispose]();
 					loaded = undefined;
 					from = old.page;
@@ -34,7 +34,7 @@ export async function readIndexPage(
 				if (row) rows.push({ row, patch: change?.patchValue });
 			}
 			last = key;
-			if (!a.done && a.value[0] === key) a = base.next();
+			if (!a.done && a.value[0] === key) a = await base.next();
 			if (!b.done && b.value[0] === key) b = overlay.next();
 		}
 	} finally {

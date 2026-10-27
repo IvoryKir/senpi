@@ -46,7 +46,7 @@ export class CompactSessionState {
 
 	accept(t: CompactTransition): number {
 		if (t.type !== "message_remove") this.store.assertReadable();
-		if ((t.type === "message_status" || t.type === "message_remove") && this.settled.has(t.messageId))
+		if ((t.type === "message_status" || t.type === "message_remove") && !this.active.has(t.messageId))
 			throw new CompactTransitionError("cold_operation_required", "use applyCold after acceptance");
 		switch (t.type) {
 			case "block_start":
@@ -177,8 +177,8 @@ export class CompactSessionState {
 	}
 
 	private start(t: Extract<CompactTransition, { type: "block_start" }>): void {
-		this.identity.validate(t.epoch, t.ordinal);
-		if (this.active.get(t.messageId)?.blocks.has(t.contentIndex) || this.settled.has(t.messageId))
+		this.identity.validate(t);
+		if (this.active.get(t.messageId)?.blocks.has(t.contentIndex))
 			throw new CompactTransitionError("duplicate_block", `${t.messageId}#${t.contentIndex}`);
 		const covered = t.coveredCodeUnits;
 		if (!Number.isInteger(covered) || (covered !== 0 && covered !== t.seed.length))
@@ -196,7 +196,7 @@ export class CompactSessionState {
 		appendBlock(this.store, block, t.seed);
 		this.publish(t, block);
 		adjustBlock(this.store, block, -1);
-		this.identity.commit(t.epoch, t.ordinal);
+		this.identity.commit(t);
 	}
 
 	private publish(address: BlockAddress, block: ActiveBlock): void {
@@ -237,6 +237,7 @@ export class CompactSessionState {
 		this.residentTailBytes -= message.tailBytes;
 		this.hotWitnessBytes -= message.witnessBytes;
 		this.active.delete(messageId);
+		this.identity.release(messageId);
 	}
 
 	private block(address: BlockAddress): ActiveBlock {
