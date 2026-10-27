@@ -165,8 +165,11 @@ export class KernelPermissionHost {
 
 	#release(token: CellAuthorityToken): void {
 		if (!this.#tokens.delete(token.id)) return;
-		// Settled no-deny work keeps its async resources; the kernel word still revokes them. A live inactive
-		// token also keeps its invoker binding, so that session's revocation reaches the work until the worker retires.
+		// Settled no-deny work keeps its async resources; the kernel word still revokes them. A live
+		// inactive token is retained rather than forgotten, and keeps its invoker binding for as long as it
+		// is alive, so that session's revocation still reaches the continuation it left behind. Nothing
+		// reports when that continuation actually finishes, so the binding ends with the token, which is
+		// what closing the kernel does; it does not end earlier.
 		const word = Atomics.load(new Int32Array(token.authority), 0);
 		if (word & 2 && !(word & 1)) {
 			if (this.#invokerBindings.has(token.sessionId)) {
@@ -181,7 +184,7 @@ export class KernelPermissionHost {
 		this.#unbind(token.sessionId);
 	}
 
-	/** A retained continuation holds its own binding, and gives it back as soon as that token is dead. */
+	/** A retained token holds its own binding and gives it back once that token is dead, not before. */
 	#sweepRetained(sessionId: string): void {
 		const held = this.#retained.get(sessionId);
 		if (!held) return;
