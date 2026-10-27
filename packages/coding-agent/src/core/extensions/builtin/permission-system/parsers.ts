@@ -144,22 +144,25 @@ function withExternalDirectoryRequests(
 	resolveTarget: TargetResolver,
 ): PermissionRequest[] {
 	// Classify the paths the tool opens (senpi#4316), each through the canonical spelling walk (senpi#4351).
-	const seen = new Set<string>();
-	const externalPaths = paths.flatMap((inputPath) =>
+	const opened = paths.flatMap((inputPath) =>
 		resolveTarget(inputPath, cwd).flatMap((openedPath) => {
 			const target = resolveExternalPath(openedPath, cwd);
-			if (target === undefined || seen.has(target)) return [];
-			seen.add(target);
-			return [{ inputPath, openedPath, target }];
+			return target === undefined ? [] : [{ inputPath, openedPath, target }];
 		}),
 	);
+	// One pattern per canonical target, but every opened spelling keeps its lexical alias, so a rule on
+	// a second spelling of the same target still decides the call (senpi#4316).
+	const seen = new Set<string>();
+	const externalPaths = opened.filter(({ target }) => !seen.has(target) && seen.add(target));
 	if (externalPaths.length === 0) {
 		return requests;
 	}
-	const ruleAliases = externalPaths.flatMap(({ openedPath, target }) => {
-		const lexical = resolve(cwd, expandHome(openedPath));
-		return lexical === target ? [] : [lexical];
-	});
+	const ruleAliases = uniq(
+		opened.flatMap(({ openedPath, target }) => {
+			const lexical = resolve(cwd, expandHome(openedPath));
+			return lexical === target ? [] : [lexical];
+		}),
+	);
 
 	return [
 		...requests,
