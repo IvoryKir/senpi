@@ -5,6 +5,7 @@ import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 import { correlatedRecord } from "./client-message-events.ts";
+import { CALL_ONLY_RECORDS, CALL_RECORDS } from "./compact-call-model.ts";
 import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import { CompactLaneCurrent } from "./compact-lane-current.ts";
 import type { CanonicalUnit } from "./compact-lane-transitions.ts";
@@ -65,6 +66,7 @@ const SEQUENCED = new Set([
 	"session_abort",
 	"transcript_write_failed",
 	...COMPONENT_RECORDS,
+	...CALL_RECORDS,
 ]);
 
 function field(record: object, key: string): unknown {
@@ -135,12 +137,13 @@ export class SessionAcceptanceLane {
 			},
 			this.diagnose,
 		);
+		this.epoch = randomUUID();
 		this.current.bootstrap({
 			...this.storage,
 			dir: join(this.storage?.dir ?? tmpdir(), `senpi-current-${randomUUID()}`),
 			epoch: nonce,
+			sessionEpoch: this.epoch,
 		});
-		this.epoch = randomUUID();
 		this.sequence = 0;
 		this.transcript = new AcceptedTranscript();
 		for (const transition of input.transcript) this.transcript.apply(transition);
@@ -165,11 +168,15 @@ export class SessionAcceptanceLane {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
 		this.acceptCorrelation(record);
-		this.sequence += 1;
-		if (canonical) this.current.fold(canonical, this.sequence);
-		if (COMPONENT_RECORDS.has(type)) this.current.foldComponent(record, this.sequence);
 		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
 		const turnId = this.turnId;
+		const next = this.sequence + 1;
+		if (canonical) this.current.fold(canonical, next, turnId);
+		if (COMPONENT_RECORDS.has(type)) this.current.foldComponent(record, next);
+		const call = CALL_RECORDS.has(type) ? this.current.foldCall(record, next, turnId) : undefined;
+		// An ignored call-only record changes no component, takes no sequence and publishes no root (RULING-13 Q9).
+		if (call && !call.changed && CALL_ONLY_RECORDS.has(type)) return undefined;
+		this.sequence = next;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
@@ -234,6 +241,11 @@ export class SessionAcceptanceLane {
 	readCurrentComponents(root: FrozenAcceptedRoot) {
 		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readComponents(root.current);
+	}
+
+	readCurrentCalls(root: FrozenAcceptedRoot) {
+		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		return this.current.readCalls(root.current);
 	}
 
 	readSettled(root: FrozenAcceptedRoot) {

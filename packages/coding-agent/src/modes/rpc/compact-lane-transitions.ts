@@ -31,12 +31,13 @@ export function laneTransition({
 }: CanonicalUnit): CompactTransition | undefined {
 	const identity = { messageId: carrier.messageId, epoch: carrier.epoch, ordinal, firstOrdinal };
 	const correlated = CORRELATION.filter((key) => key in record);
+	const correlation = correlated.length
+		? { correlation: Object.fromEntries(correlated.map((key) => [key, Reflect.get(record, key)])) }
+		: {};
 	const message = {
 		type: "seeded_message" as const,
 		...identity,
-		...(correlated.length
-			? { correlation: Object.fromEntries(correlated.map((key) => [key, Reflect.get(record, key)])) }
-			: {}),
+		...correlation,
 		...(record.invalidatedBlocks ? { invalidatedBlocks: record.invalidatedBlocks } : {}),
 		...(record.rewrittenFrom === undefined ? {} : { rewrittenFrom: record.rewrittenFrom }),
 	};
@@ -57,6 +58,8 @@ export function laneTransition({
 				event,
 				usage: record.usage,
 				...(record.messageMetadata ? { messageMetadata: record.messageMetadata } : {}),
+				...correlation,
+				...(record.resolvedToolName === undefined ? {} : { resolvedToolName: record.resolvedToolName }),
 			};
 		}
 	}
