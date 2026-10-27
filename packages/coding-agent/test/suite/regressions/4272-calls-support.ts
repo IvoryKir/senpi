@@ -1,4 +1,4 @@
-import { type AssistantMessage, fauxAssistantMessage, type ToolCall } from "@earendil-works/pi-ai";
+import { type AssistantMessage, fauxAssistantMessage, fauxToolCall, type ToolCall } from "@earendil-works/pi-ai";
 import type { RecoveryCarrier } from "../../../src/core/session-recovery-identity.ts";
 import { recoveryCarrier } from "../../../src/core/session-recovery-identity.ts";
 import type { CanonicalUnit } from "../../../src/modes/rpc/compact-lane-transitions.ts";
@@ -124,3 +124,17 @@ export async function callsRig() {
 }
 
 export type CallsRig = Awaited<ReturnType<typeof callsRig>>;
+
+/** Announces one complete call `id` in its own assistant message, the way a model turn does before execution. */
+export async function announced(
+	rig: CallsRig,
+	id: string,
+	name = "bash",
+): Promise<{ owner: ReturnType<CallsRig["start"]>; call: ToolCall; started: Accepted }> {
+	const owner = rig.start();
+	const call = fauxToolCall(name, { command: id }, { id });
+	const started = rig.toolStart(owner, 0, call, name);
+	rig.toolEnd(owner, 0, call, name);
+	rig.end(owner, [call]);
+	return { owner, call, started };
+}
