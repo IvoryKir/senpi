@@ -16,6 +16,7 @@ import type {
 	RpcSessionParkedEvent,
 } from "./rpc-types.ts";
 import { RpcSecurityPresentations } from "./security-presentations.ts";
+import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { SessionEventFanout, type SessionEventWriterConnection } from "./session-event-fanout.ts";
 import { SessionOpenTurns } from "./session-open-turns.ts";
 import { type QueueNode, type RecordQueue, SessionRecordAccounting } from "./session-record-accounting.ts";
@@ -384,6 +385,11 @@ export class SessionEventWriter {
 	setSessionMedia(sessionId: string, persister: MediaPersister | undefined): void {
 		if (persister === undefined) this.mediaPersisters.delete(sessionId);
 		else this.mediaPersisters.set(sessionId, persister);
+	}
+
+	/** The session's records reach `lane` before `enqueue`; sealing or forgetting the session retires it. */
+	registerAcceptance(sessionId: string, lane: SessionAcceptanceLane): void {
+		if (!this.sealedSessions.has(sessionId)) this.fanout.acceptance.set(sessionId, lane);
 	}
 
 	setSessionKind(sessionId: string, kind: SessionKind): void {
