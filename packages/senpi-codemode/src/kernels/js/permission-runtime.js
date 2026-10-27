@@ -21,6 +21,7 @@ export async function initializePermissionRuntime(install, workerData, engine) {
 	const requester = data && createPermissionRequester(data.slots, {
 		wake: (slot, generation) => data.port.postMessage({ type: "check", slot, generation }),
 		retire: () => data.port.postMessage({ type: "retire" }),
+		deadlineMs: data.deadlineMs,
 	});
 	const refusal = (reason, rule) => {
 		const error = new Error(`${reason}${rule ? ` (${rule.permission}: ${rule.pattern}, ${rule.layer})` : ""}`);

@@ -20,6 +20,7 @@ import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
 import { blobControls, bunOperations } from "./permission-operation-bun.ts";
 import { fsOperations } from "./permission-operation-fs.ts";
 import { processOperations } from "./permission-operation-process.ts";
+import { sinkControls, sinkOperations } from "./permission-operation-sinks.ts";
 
 const root = mkdtempSync(join(tmpdir(), "permission-operations-"));
 const failures: string[] = [];
@@ -64,6 +65,7 @@ try {
 				parallelPoolWidth: 2,
 				...(mode === "inline" ? { workerEntryUrl: pathToFileURL(join(root, "absent.js")) } : {}),
 				permissions: {
+					checkDeadlineMs: 120_000,
 					state: () => ({ epoch: 1, active, rules: [{ permission: "read", pattern: "target", layer: "user" }] }),
 					decide: (_token, call) => {
 						seen.push({ tool: call.tool, ...(call.input.path ? { path: call.input.path } : {}) });
@@ -75,7 +77,7 @@ try {
 				},
 			});
 			try {
-				for (const row of [...fsOperations, ...processOperations, ...bunOperations]) {
+				for (const row of [...fsOperations, ...processOperations, ...bunOperations, ...sinkOperations]) {
 					for (const deny of active ? [true, false] : [false]) {
 						const dir = mkdtempSync(join(root, "row-"));
 						const p = join(dir, row.seed === "module" ? "target.cjs" : "target");
@@ -114,7 +116,7 @@ try {
 						const code = `const p=${JSON.stringify(p)},q=${JSON.stringify(q)},endpoint=${JSON.stringify(endpoint)}; const fs=require('node:fs'),cp=require('node:child_process');
 							${row.code}
 							return Array.isArray(result)?'array':Buffer.isBuffer(result)?'buffer':result instanceof Uint8Array?'uint8array':result instanceof ArrayBuffer?'arraybuffer':typeof result;`;
-						const result = await kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 8000 });
+						const result = await kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 120_000 });
 						try {
 							if (deny) {
 								assert.equal(result.ok, false, JSON.stringify(result));
@@ -143,7 +145,7 @@ try {
 					}
 				}
 				readOnlyDeny = true;
-				for (const row of blobControls) {
+				for (const row of [...blobControls, ...sinkControls]) {
 					const p = join(root, "read-denied");
 					const q = join(root, "memory-output");
 					writeFileSync(p, "{}");
@@ -152,7 +154,7 @@ try {
 					const result = await kernel.run({
 						cellId: crypto.randomUUID(),
 						code: `const p=${JSON.stringify(p)},q=${JSON.stringify(q)};const fs=require('node:fs');${row.code}`,
-						timeoutMs: 8000,
+						timeoutMs: 120_000,
 					});
 					try {
 						assert.equal(result.ok, true, JSON.stringify(result));

@@ -23,6 +23,7 @@ export function createPermissionRequester(
 		wake(index: number, generation: number): void;
 		wait?: typeof Atomics.wait;
 		generationLimit?: number;
+		deadlineMs?: number;
 		retire?(): void;
 	},
 ): { check(request: PermissionRequest): CellDecision };

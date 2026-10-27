@@ -222,6 +222,7 @@ export class KernelPermissionHost {
 			port: port2,
 			slots,
 			kernel: this.wireToken(this.#kernel),
+			deadlineMs: this.#options.permissions?.checkDeadlineMs,
 			token: token && this.wireToken(token),
 			cwd: this.#options.cwd,
 		};

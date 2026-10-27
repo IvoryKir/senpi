@@ -33,8 +33,7 @@ const permissionIO = {
 	},
 };
 const resources = installFilesystemPermissions(authorize);
-installProcessPermissions(authorize);
-installBunPermissions(authorize, resources);
+installProcessPermissions(authorize, installBunPermissions(authorize, resources));
 installSqlitePermissions(authorize);
 const sealModules = installModulePermissions(authorize);
 

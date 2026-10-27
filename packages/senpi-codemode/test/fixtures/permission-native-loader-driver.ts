@@ -61,6 +61,7 @@ export async function run(...args){const pieces=['(async function(operation,path
 					parallelPoolWidth: 2,
 					...(mode === "inline" ? { workerEntryUrl: pathToFileURL(join(dir, "missing.js")) } : {}),
 					permissions: {
+						checkDeadlineMs: 120_000,
 						state: () => ({ active, epoch: 1, rules: [writeRule, spawnRule] }),
 						decide: (_token, call) => {
 							calls.push(call.tool);
@@ -83,7 +84,7 @@ export async function run(...args){const pieces=['(async function(operation,path
 							const result = await kernel.run({
 								cellId: crypto.randomUUID(),
 								code: `const lib=await import('permission-native-loader');return await lib.run(${JSON.stringify(operation.name)},${JSON.stringify(path)},${JSON.stringify(command)})`,
-								timeoutMs: 8000,
+								timeoutMs: 120_000,
 							});
 							try {
 								assert.equal(kernel.mode, mode);

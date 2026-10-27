@@ -8,21 +8,27 @@ export function installModulePermissions(check) {
 	const nativeRequire = module.createRequire(import.meta.url);
 	const resolveSync = globalThis.Bun?.resolveSync;
 	let sealed = false;
+	// Resolving a specifier re-enters this hook, because the engine resolver is itself observed. That
+	// re-entry is one import still being decided, not another import, so it must not ask again.
+	let resolving = false;
 	const forbidden = /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
 	const pathLike = (name) => name.startsWith(".") || isAbsolute(name) || name.startsWith("file:");
 	const guard = (source, importer) => {
 		const specifier = String(source);
-		if (!sealed) return;
+		if (!sealed || resolving) return;
 		if (forbidden.test(specifier) || specifier.endsWith(".node")) check(() => ({ unsupported: true }));
 		if (!pathLike(specifier)) return;
 		const parent = importer?.startsWith("file:") ? fileURLToPath(importer) : importer;
 		const base = parent ? dirname(parent) : process.cwd();
 		const candidate = specifier.startsWith("file:") ? fileURLToPath(specifier) : specifier;
 		let target;
+		resolving = true;
 		try {
 			target = resolveSync ? resolveSync(candidate, base) : nativeRequire.resolve(resolve(base, candidate));
 		} catch {
 			target = isAbsolute(candidate) ? candidate : resolve(base, candidate);
+		} finally {
+			resolving = false;
 		}
 		checkPath(check, "read", target);
 	};

@@ -68,7 +68,7 @@ export function createPermissionRequester(buffer, hooks) {
 				if (Atomics.compareExchange(control, 0, old, requested) !== old) throw new Error("Permission slot ownership changed");
 				try {
 					hooks.wake(index, generation);
-					(hooks.wait ?? Atomics.wait)(control, 0, requested, 2000);
+					(hooks.wait ?? Atomics.wait)(control, 0, requested, hooks.deadlineMs ?? 2000);
 					const current = Atomics.load(control, 0);
 					if (current === ((generation << 3) | ANSWERED)) {
 						const result = decode(response, control[2]);

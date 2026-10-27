@@ -4,7 +4,7 @@ const { basename } = process.getBuiltinModule("node:path");
 const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const cwdOf = (value) => requestedPath(value) ?? process.cwd();
 
-export function installProcessPermissions(check) {
+export function installProcessPermissions(check, files) {
 	const cp = process.getBuiltinModule("node:child_process");
 	for (const name of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
 		replaceMethod(cp, name, (original) => function (...parameters) {
@@ -28,15 +28,19 @@ export function installProcessPermissions(check) {
 	const bun = globalThis.Bun;
 	if (!bun) return;
 	for (const name of ["spawn", "spawnSync"]) replaceMethod(bun, name, (original) => function (...parameters) {
+		const [first, second] = parameters;
+		const options = Array.isArray(first) ? second : first;
 		check(() => {
-			const [first, second] = parameters;
 			const argv = Array.isArray(first) ? first : first?.cmd;
-			const options = Array.isArray(first) ? second : first;
 			return {
 				call: { tool: "bash", input: { command: Array.isArray(argv) ? argv.map(quote).join(" ") : "" }, cwd: cwdOf(options?.cwd) },
 				unsupported: !Array.isArray(argv),
 			};
 		});
+		const slots = Array.isArray(options?.stdio) ? options.stdio : [];
+		files.source(options?.stdin ?? slots[0]); // sink:spawn-stdin
+		files.handle(options?.stdout ?? slots[1], "write"); // sink:spawn-stdout
+		files.handle(options?.stderr ?? slots[2], "write"); // sink:spawn-stderr
 		return original.apply(this, parameters);
 	});
 	const shell = bun.$;

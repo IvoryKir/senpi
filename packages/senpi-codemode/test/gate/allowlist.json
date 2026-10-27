@@ -104,7 +104,8 @@
 				"legacyContracts/test/js-kernel-permission-open-flags.test.ts/open flag grants (inline) decides write-only without widening or narrowing the mode",
 				"legacyContracts/test/js-kernel-permission-open-flags.test.ts/open flag grants (inline) decides read-write without widening or narrowing the mode",
 				"legacyContracts/test/js-kernel-permission-open-flags.test.ts/open flag grants (inline) decides readonly with truncation without widening or narrowing the mode",
-				"legacyContracts/test/js-kernel-permission-operations.test.ts/decides every filesystem, process, Bun and SQLite operation in worker and inline modes"
+				"legacyContracts/test/js-kernel-permission-operations.test.ts/decides every filesystem, process, Bun and SQLite operation in worker and inline modes",
+				"legacyContracts/test/js-kernel-permission-sink-mutations.test.ts/refuses every file sink, and reopens each one when its own decision is removed"
 			],
 			"reason": "senpi#4391: operation interposition and engine file helpers are new first-kernel modules; the operation, boundary, lexical-eval, numeric-open and native-loader proof contracts exercise the added JS enforcement. Inherited imports and contracts belong to the earlier stack PRs and are not approved here."
 		},

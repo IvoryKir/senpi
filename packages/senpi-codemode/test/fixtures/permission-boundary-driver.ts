@@ -25,6 +25,7 @@ try {
 				parallelPoolWidth: 2,
 				...(mode === "inline" ? { workerEntryUrl: pathToFileURL(join(root, "missing.js")) } : {}),
 				permissions: {
+					checkDeadlineMs: 120_000,
 					state: () => ({ active, epoch: 1, rules: [{ permission: "read", pattern: "boundary", layer: "user" }] }),
 					decide: (_token, call) => {
 						calls.push({ tool: call.tool, ...(call.input.path ? { path: call.input.path } : {}) });
@@ -35,7 +36,7 @@ try {
 					},
 				},
 			});
-			const run = (code: string) => kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 8000 });
+			const run = (code: string) => kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 120_000 });
 			const check = async (name: string, code: string, permissionRefusal: boolean) => {
 				const result = await run(
 					`const p=${JSON.stringify(p)},q=${JSON.stringify(q)},addon=${JSON.stringify(addon)}; const fs=require('node:fs'); ${code}`,

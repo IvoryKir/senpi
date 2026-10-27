@@ -5293,6 +5293,7 @@
       "test/js-kernel-permission-open-flags.test.ts/open flag grants (inline) decides read-write without widening or narrowing the mode": "passed",
       "test/js-kernel-permission-open-flags.test.ts/open flag grants (inline) decides readonly with truncation without widening or narrowing the mode": "passed",
       "test/js-kernel-permission-operations.test.ts/decides every filesystem, process, Bun and SQLite operation in worker and inline modes": "passed",
+      "test/js-kernel-permission-sink-mutations.test.ts/refuses every file sink, and reopens each one when its own decision is removed": "passed",
       "test/js-process-fixtures.test.ts/awaits a fixture kernel child before removing its cwd (#3064)": "passed",
       "test/environments/py-installer-cleanup.test.ts/pip scratch cleanup errors preserves success and reports exhausted cleanup retries (#3064)": "passed",
       "test/environments/py-installer-cleanup.test.ts/pip scratch cleanup errors preserves failure and reports exhausted cleanup retries (#3064)": "passed",
