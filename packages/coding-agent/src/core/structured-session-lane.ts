@@ -27,11 +27,18 @@ export class StructuredSessionLane {
 	private readonly listeners = new Set<StructuredListener>();
 	readonly #channel: InternalAgentChannel | undefined;
 	readonly #enqueue: (deliver: () => void) => void;
+	readonly #own: (control: object) => void;
 	private releaseChannel: (() => void) | undefined;
 
-	constructor(channel: InternalAgentChannel | undefined, enqueue: (deliver: () => void) => void) {
+	/** `own` binds a block control to the message open when it leaves the session queue (its emission point). */
+	constructor(
+		channel: InternalAgentChannel | undefined,
+		enqueue: (deliver: () => void) => void,
+		own: (control: object) => void = () => {},
+	) {
 		this.#channel = channel;
 		this.#enqueue = enqueue;
+		this.#own = own;
 	}
 
 	get active(): boolean {
@@ -42,7 +49,11 @@ export class StructuredSessionLane {
 		if (!this.#channel) throw new StructuredLaneUnavailableError();
 		this.listeners.add(listener);
 		this.releaseChannel ??= this.#channel.subscribe((record) => {
-			if ("progress" in record) this.#enqueue(() => this.emit(record.progress));
+			if ("progress" in record)
+				this.#enqueue(() => {
+					this.#own(record.progress);
+					this.emit(record.progress);
+				});
 		});
 		return () => {
 			this.listeners.delete(listener);

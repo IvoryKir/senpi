@@ -1033,13 +1033,15 @@ export function createRpcConnectionHandler(
 		function installSessionSubscriptions(): void {
 			unsubscribe?.();
 			unsubscribeBackpressure?.();
-			unsubscribe = subscribeSessionRecords(session, outputEvent, (abortSource) => {
-				lastAbortSource = abortSource;
-			});
 			unsubscribeStructured?.();
+			unsubscribe = unsubscribeBackpressure = undefined;
+			// Structured first: an Agent built outside the session layer refuses it before anything is installed.
 			unsubscribeStructured = sink.writeStructured
 				? subscribeStructuredSessionRecords(session, (record) => sink.writeStructured?.(tagSessionRecord(record)))
 				: undefined;
+			unsubscribe = subscribeSessionRecords(session, outputEvent, (abortSource) => {
+				lastAbortSource = abortSource;
+			});
 			unsubscribeBackpressure = session.agent.subscribe(async () => {
 				await waitForRpcBackpressure();
 			});

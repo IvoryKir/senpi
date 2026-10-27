@@ -25,6 +25,8 @@ import { canonicalSessionPath } from "./session-path-key.ts";
 import type { RpcSessionEntry, RpcSessionRegistry } from "./session-registry.ts";
 import { resolveMovedProfile } from "./session-registry-moved-path.ts";
 import { createWorkerCredit } from "./session-worker-credit.ts";
+import { type CanonicalControl, carriedCanonical } from "./compact-canonical-pairing.ts";
+import { CompactProducerStamp } from "./compact-producer-stamp.ts";
 import {
 	type HostToSessionWorker,
 	SESSION_WORKER_LIMITS,
@@ -115,13 +117,19 @@ class WorkerEventWriter extends SessionEventWriter {
 		if (replacement && Buffer.byteLength(JSON.stringify(replacement)) > SESSION_WORKER_LIMITS.outputBytes)
 			failWorker("session_worker_snapshot_limit");
 		const replaced = "type" in record && record.type === "session_replaced";
-		if (ordered && replaced) journaled = session.sessionManager;
+		if (ordered && replaced) {
+			journaled = session.sessionManager;
+			stamp.forget();
+		}
 		const transitions = ordered && !replaced ? (journaled?.drainTranscript() ?? []) : [];
 		const epochSignal = ordered && replaced ? new SharedArrayBuffer(36) : undefined;
+		const recovery = recoveryCarrier(record);
+		const canonical = carriedCanonical(record);
 		const order = ordered
 			? {
-					ordinal: outputOrdinal++,
-					recovery: recoveryCarrier(record),
+					...stamp.stamp(recovery, canonical),
+					recovery,
+					...(canonical ? { canonical } : {}),
 					...(replaced
 						? {
 								bootstrap: {
@@ -147,6 +155,12 @@ class WorkerEventWriter extends SessionEventWriter {
 		if (epochSignal) setSessionRecoveryEpoch(session, Buffer.from(epochSignal).toString("ascii"));
 		return true;
 	}
+	override enqueueCanonical(_sessionId: string, control: CanonicalControl): void {
+		if (!ordered) return;
+		const { ordinal, firstOrdinal = ordinal } = stamp.stamp(control.carrier, control.record);
+		const { record, carrier: recovery } = control;
+		exchange((signal) => ({ type: "canonical", ordinal, firstOrdinal, recovery, record, signal }));
+	}
 }
 
 const writer = new WorkerEventWriter();
@@ -159,7 +173,8 @@ let binding: RpcSessionBinding | undefined;
 let closing = false;
 /** Set by `commit` when the host owns an acceptance lane; each output frame then carries the next ordinal. */
 let ordered = false;
-let outputOrdinal = 0;
+/** The output-frame ordinal (S04a) is the compact producer ordinal: one numbering (RULING-36). */
+const stamp = new CompactProducerStamp();
 /** The manager whose committed transcript changes ride the next output frame; replaced with the session. */
 let journaled: SessionManager | undefined;
 let unsubscribe: (() => void) | undefined;

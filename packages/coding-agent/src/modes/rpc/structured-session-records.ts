@@ -1,6 +1,7 @@
 import { getAssistantCapture, SeedFrontierError } from "@earendil-works/pi-ai";
 import { envValue } from "../../core/brand.ts";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
+import { carryRecovery } from "../../core/session-recovery-identity.ts";
 import type { AgentSessionStructuredRecord } from "../../core/structured-session-lane.ts";
 import { type SeededJsonAgentSessionEvent, toJsonEvent } from "../json-event.ts";
 import { subscribeSessionRecords } from "./session-record-stream.ts";
@@ -48,7 +49,12 @@ class SeededBlockGate {
 		if (record.type !== "message_update") return toJsonEvent(record, SEEDS);
 		if (!this.blocks) return undefined;
 		const update = record.assistantMessageEvent;
-		if (!("contentIndex" in update)) return toJsonEvent(record, SEEDS);
+		if (!("contentIndex" in update)) {
+			// A nested terminal carries its capture cutoff, so the reducer drops raw spelling at and above it.
+			const seeded = toJsonEvent(record, SEEDS);
+			const rewrittenFrom = getAssistantCapture(record)?.rewrittenFrom;
+			return seeded && rewrittenFrom !== undefined ? { ...seeded, rewrittenFrom } : seeded;
+		}
 		const index = getAssistantCapture(record)?.contentIndex ?? update.contentIndex;
 		const starts =
 			update.type === "text_start" || update.type === "thinking_start" || update.type === "toolcall_start";
@@ -117,7 +123,8 @@ export function subscribeStructuredSessionRecords(session: AgentSession, output:
 		session.subscribeStructured((record) => {
 			const accepted = gate.accept(record);
 			// Correlation reads only `type`, `role` and outer fields, which seeded records and controls keep.
-			if (accepted) listener(accepted as AgentSessionEvent);
+			// The projection keeps its event's recovery carrier, which pairs it with that event's legacy record.
+			if (accepted) listener(carryRecovery(record, accepted) as AgentSessionEvent);
 		}),
 	);
 }

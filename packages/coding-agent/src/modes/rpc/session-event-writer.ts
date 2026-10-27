@@ -3,6 +3,7 @@ import type { ExtensionUIContext, SessionKind } from "../../core/extensions/type
 import { bindPrivateMcpForms, type McpFormBinding } from "../../core/mcp-form-types.ts";
 import { McpPresenterAuthority, type McpPresenterConnection } from "./mcp-presenter-authority.ts";
 import type { SecurityNoticeSnapshot, SecurityNoticeState } from "../../core/security-notices.ts";
+import type { CanonicalControl } from "./compact-canonical-pairing.ts";
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
 import { normalizeJsonValue } from "./json-normal-value.ts";
 import { SessionStructuredLanes } from "./session-structured-lanes.ts";
@@ -386,6 +387,9 @@ export class SessionEventWriter {
 		if (persister === undefined) this.mediaPersisters.delete(sessionId);
 		else this.mediaPersisters.set(sessionId, persister);
 	}
+
+	/** A worker isolate frames a canonical-only unit; an in-process host folds block controls in its own lane. */
+	enqueueCanonical(_sessionId: string, _control: CanonicalControl): void {}
 
 	/** The session's records reach `lane` before `enqueue`; sealing or forgetting the session retires it. */
 	registerAcceptance(sessionId: string, lane: SessionAcceptanceLane): void {

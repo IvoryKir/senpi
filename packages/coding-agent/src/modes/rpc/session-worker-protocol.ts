@@ -5,6 +5,7 @@ import type { TranscriptTransition } from "../../core/session-transcript-journal
 import type { PromptSurface } from "../../core/dynamic-prompt/types.ts";
 import type { MirroredLimits } from "../../core/subscription-limits/limit-store.ts";
 import type { CliRuntimeConfiguration } from "../../main.ts";
+import type { CanonicalRecord } from "./compact-lane-transitions.ts";
 import type { RpcSessionState } from "./rpc-types.ts";
 import type { SessionBootstrap } from "./session-acceptance-lane.ts";
 import type { RpcSessionLaunchProfile } from "./session-registry.ts";
@@ -115,10 +116,22 @@ export type SessionWorkerToHost =
 			transitions?: readonly TranscriptTransition[];
 			/** The next incarnation's baseline, on the `session_replaced` record that starts it. */
 			bootstrap?: SessionBootstrap;
+			/** The record's canonical projection, folded in the same unit; `firstOrdinal` is the producer's binding. */
+			canonical?: CanonicalRecord;
+			firstOrdinal?: number;
 			connection?: string;
 			signal: SharedArrayBuffer;
 			activity: Pick<WorkerSnapshot, "busy" | "handoffBusy" | "streaming">;
 			snapshot?: WorkerSnapshot;
+	  }
+	/** A block control: a canonical-only unit taking the next frame ordinal, never delivered to a legacy destination. */
+	| {
+			type: "canonical";
+			ordinal: number;
+			firstOrdinal: number;
+			recovery: RecoveryCarrier;
+			record: CanonicalRecord;
+			signal: SharedArrayBuffer;
 	  }
 	| { type: "capabilities"; connection?: string; capabilities: readonly string[]; signal: SharedArrayBuffer }
 	| { type: "loaded_surfaces"; previous?: string; digest: string; signal: SharedArrayBuffer }
