@@ -21,6 +21,7 @@ import {
 } from "../../src/core/extensions/builtin/permission-system/storage.ts";
 import {
 	CorrectedError,
+	DENIAL_IS_FINAL,
 	DeniedError,
 	type PermissionConfig,
 	RejectedError,
@@ -1342,7 +1343,7 @@ describe("permission integration", () => {
 				expect(result).toEqual({
 					requestID: "req-noui-3",
 					reply: "reject",
-					message: "Permission required for bash (ls, pwd). Use --permission bash=allow to override.",
+					message: `Permission required for bash (ls, pwd), and there is no UI to ask, so the call did not run. ${DENIAL_IS_FINAL} The user can allow it with --permission bash=allow.`,
 				});
 			});
 		});
