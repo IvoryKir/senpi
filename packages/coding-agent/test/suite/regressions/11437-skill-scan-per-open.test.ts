@@ -26,7 +26,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { dedupePathsByPackageIdentity } from "../../../src/core/package-identity.ts";
 import { DefaultResourceLoader } from "../../../src/core/resource-loader.ts";
 import { SettingsManager } from "../../../src/core/settings-manager.ts";
-import { readUserSkillSource } from "../../../src/core/skill-source-cache.ts";
+import { createSkillSourceCache, readUserSkillSource } from "../../../src/core/skill-source-cache.ts";
 
 let root: string;
 let cwd: string;
@@ -42,11 +42,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.unstubAllEnvs();
 	rmSync(root, { recursive: true, force: true });
 });
 
-const AN_HOUR_AGO = new Date(Date.now() - 3_600_000);
+const AN_HOUR_MS = 3_600_000;
+const AN_HOUR_AGO = new Date(Date.now() - AN_HOUR_MS);
+
+/** The cache's racy-write window reads `Date.now()`; tests pin it instead of waiting it out. */
+function pinClock(at: number): number {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	vi.setSystemTime(at);
+	return at;
+}
 
 function skill(dir: string, name: string, description = "synthetic skill"): string {
 	const file = join(dir, name, "SKILL.md");
@@ -68,6 +77,8 @@ function installSkills(count: number): { readonly dirs: number; readonly bundled
 	for (let index = 0; index < copies; index++) installedEarlier(skill(join(agentDir, "skills"), `skill-${index}`));
 	const bundled = join(root, "bundled");
 	installedEarlier(skill(bundled, "bundled-skill"));
+	// Installed skills were last changed long ago: move the clock past their change time (ctime included).
+	pinClock(Date.now() + AN_HOUR_MS);
 	return { dirs: count + copies + 1, bundled };
 }
 
@@ -121,6 +132,44 @@ it("reads a just-written SKILL.md again even when a same-size rewrite keeps its 
 	expect(readUserSkillSource(file, sameStamp)).toContain("description: first");
 	writeFileSync(file, "---\nname: racy\ndescription: later\n---\nbody\n");
 	expect(readUserSkillSource(file, sameStamp)).toContain("description: later");
+});
+
+it("reads a same-size rewrite again when its mtime was back-dated and only ctime moved within one coarse tick", () => {
+	const now = pinClock(Date.UTC(2026, 9, 27, 12));
+	const file = skill(root, "backdated", "first");
+	const { dev, ino, size } = statSync(file);
+	// cp -p, tar, rsync -t and utimes restore an old mtime; only the kernel-set ctime says "just changed",
+	// and a coarse ctime clock gives both writes the same value.
+	const backdated = { dev, ino, size, mtimeMs: now - AN_HOUR_MS, ctimeMs: now } as Stats;
+	expect(readUserSkillSource(file, backdated)).toContain("description: first");
+	writeFileSync(file, "---\nname: backdated\ndescription: later\n---\nbody\n");
+	expect(readUserSkillSource(file, backdated)).toContain("description: later");
+});
+
+it("does not keep the whole body of a SKILL.md whose frontmatter never closes", () => {
+	const now = pinClock(Date.UTC(2026, 9, 27, 12));
+	const file = join(root, "unclosed", "SKILL.md");
+	mkdirSync(join(root, "unclosed"));
+	writeFileSync(file, `---\nname: unclosed\ndescription: no closing fence\n${"x".repeat(200 * 1024)}\n`);
+	const { dev, ino, size } = statSync(file);
+	const installed = { dev, ino, size, mtimeMs: now - AN_HOUR_MS, ctimeMs: now - AN_HOUR_MS } as Stats;
+	calls.length = 0;
+	expect(readUserSkillSource(file, installed).length).toBeGreaterThan(200 * 1024);
+	expect(readUserSkillSource(file, installed).length).toBeGreaterThan(200 * 1024);
+	expect(calls.filter((call) => call.name === "openSync" && call.path === file).length).toBe(2);
+});
+
+it("keeps the cached sources within a byte budget, dropping the oldest first", () => {
+	const now = Date.UTC(2026, 9, 27, 12);
+	const read = createSkillSourceCache({ maxEntryBytes: 1024, maxTotalBytes: 250 }, () => now);
+	const files = ["a", "b", "c"].map((name) => skill(root, name, "d".repeat(60)));
+	const settled = (file: string) =>
+		({ ...statSync(file), mtimeMs: now - AN_HOUR_MS, ctimeMs: now - AN_HOUR_MS }) as Stats;
+	for (const file of files) read(file, settled(file));
+	calls.length = 0;
+	for (const file of [...files].reverse()) read(file, settled(file));
+	const opened = calls.filter((call) => call.name === "openSync").map((call) => call.path);
+	expect(opened).toEqual([files[0]]);
 });
 
 it("looks up the nearest package.json once per directory, not once per skill", () => {
