@@ -107,6 +107,11 @@ export class SessionAcceptanceLane {
 		return this.live.size;
 	}
 
+	/** Open broadcast questions now (a hot count for status); undefined when the compact state is unavailable. */
+	get openBroadcastDialogs(): number | undefined {
+		return this.retired ? undefined : this.current.openBroadcastDialogs;
+	}
+
 	bootstrap(input: SessionBootstrap, nonce: string = randomUUID()): void {
 		if (this.retired) return;
 		if (this.settled) this.retireSettled();
@@ -226,6 +231,11 @@ export class SessionAcceptanceLane {
 	readCurrentComponents(root: FrozenAcceptedRoot) {
 		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readComponents(root.current);
+	}
+
+	readCurrentActive(root: FrozenAcceptedRoot) {
+		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		return this.current.readActive(root.current);
 	}
 
 	readCurrentCalls(root: FrozenAcceptedRoot) {

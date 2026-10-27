@@ -20,6 +20,11 @@ export class CompactLaneCurrent {
 	private coldChain: Promise<void> = Promise.resolve();
 	private readonly owners = new WeakMap<FrozenCompactState, CompactSessionState>();
 
+	/** Open broadcast questions now; undefined once this epoch's compact state is unavailable. */
+	get openBroadcastDialogs(): number | undefined {
+		return this.state?.openBroadcastDialogs;
+	}
+
 	bootstrap(options: CompactSessionStateOptions & { readonly epoch: string }): void {
 		this.retire();
 		this.state = new CompactSessionState(options);
@@ -116,6 +121,10 @@ export class CompactLaneCurrent {
 
 	readComponents(cut: FrozenCompactState | undefined) {
 		return this.owned(cut, (owner, held) => owner.readComponents(held));
+	}
+
+	readActive(cut: FrozenCompactState | undefined) {
+		return this.owned(cut, (owner, held) => owner.readActive(held));
 	}
 
 	readCalls(cut: FrozenCompactState | undefined) {
