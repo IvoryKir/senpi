@@ -70,7 +70,7 @@ it("T6 a flow answers active_message before capacity and an empty flow consumes 
 		const empty = state.applyColdFlow({ type: "compaction", removed: [] });
 		const last = state.applyCold({ type: "message_status", messageId: "a", persistence: "appended" });
 		const active = { kind: "rejected", reason: "active_message", afterSequence: 3 };
-		expect(await state.applyColdFlow({ type: "user_delete", messageId: "live" })).toEqual([active]);
+		expect(await state.applyColdFlow({ type: "context_edit_removal", messageId: "live" })).toEqual([active]);
 		expect(await state.applyColdFlow({ type: "compaction", removed: ["live", "a"] })).toEqual([
 			active,
 			{ kind: "rejected", reason: "capacity", afterSequence: 3 },

@@ -45,6 +45,6 @@ export function branchFlow(from: Context, to: Context): TranscriptFlow {
 
 /** A context edit replaces its target's message, or with no replacement removes it from the conversation. */
 export function contextEditFlow(edit: ContextEditEntry, edited: AgentMessage | undefined): TranscriptFlow | undefined {
-	if (edit.replacement === null) return { kind: "delete", targetId: edit.targetId };
+	if (edit.replacement === null) return { kind: "context_edit_removal", targetId: edit.targetId };
 	return edited ? { kind: "edit", targetId: edit.targetId, message: edited } : undefined;
 }
