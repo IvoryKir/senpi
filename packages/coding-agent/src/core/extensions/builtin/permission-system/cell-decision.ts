@@ -81,17 +81,24 @@ export function registerCellAuthorizer(
 }
 
 /** Compare the full ordered user rules, not just the deny subset. */
-export function updateCellEnforcement(session: object, rules: Ruleset, preset: PermissionPresetName): void {
+export function updateCellEnforcement(
+	session: object,
+	rules: Ruleset,
+	preset: PermissionPresetName | null,
+	setupFailed = false,
+): void {
 	const enforcement = enforcementFor(session);
 	const userRules = rules.filter((rule) => !isPresetRule(rule));
-	const active = userRules.some(
-		(rule) =>
-			rule.action === "deny" &&
-			["bash", "edit", "read", "list", "external_directory"].some((permission) =>
-				Wildcard.match(permission, rule.permission),
-			),
-	);
-	const fingerprint = JSON.stringify([userRules, preset]);
+	const active =
+		setupFailed ||
+		userRules.some(
+			(rule) =>
+				rule.action === "deny" &&
+				["bash", "edit", "read", "list", "external_directory"].some((permission) =>
+					Wildcard.match(permission, rule.permission),
+				),
+		);
+	const fingerprint = JSON.stringify([userRules, preset, setupFailed]);
 	const revoked = fingerprint !== enforcement.fingerprint && (enforcement.active || active);
 	enforcement.fingerprint = fingerprint;
 	enforcement.active = active;

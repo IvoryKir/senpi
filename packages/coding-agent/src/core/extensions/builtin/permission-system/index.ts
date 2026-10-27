@@ -186,6 +186,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 			// The runner reports a throwing handler and keeps the session running, so a rules
 			// failure must block tool calls itself instead of leaving them unchecked (#2617).
 			setupError = getReason(error);
+			if (cellSession) updateCellEnforcement(cellSession, staticRuleset, activePreset, true);
 			throw error;
 		}
 		retireAuthorizers.get(ctx.sessionManager)?.();
@@ -257,6 +258,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 			loadPermissionRules(cwd, sessionApproved, agentDir);
 		} catch (error) {
 			setupError = getReason(error);
+			if (cellSession) updateCellEnforcement(cellSession, staticRuleset, activePreset, true);
 			return;
 		}
 		applyToolDenials(true);
@@ -394,6 +396,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (event, ctx) => {
 		void event;
+		if (cellSession === ctx.sessionManager) cellSession = undefined;
 		retireAuthorizers.get(ctx.sessionManager)?.();
 		retireAuthorizers.delete(ctx.sessionManager);
 		retirePresetReaders.get(ctx.sessionManager)?.();

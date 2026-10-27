@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
 	cellEnforcementState,
@@ -5,6 +7,7 @@ import {
 	decideCellOperation,
 	onCellEnforcementChange,
 } from "../../src/core/extensions/builtin/permission-system/cell-decision.ts";
+import { authorizeToolDispatch } from "../../src/core/extensions/builtin/permission-system/dispatch.ts";
 import permissionSystemExtension from "../../src/core/extensions/builtin/permission-system/index.ts";
 import { createHarness } from "../suite/harness.ts";
 
@@ -13,9 +16,10 @@ afterEach(() => {
 	for (const harness of harnesses.splice(0)) harness.cleanup();
 });
 
-async function fixture(rules = "", preset = "full-access") {
+async function fixture(rules = "", preset = "full-access", settingsContent?: string) {
 	const asked = vi.fn();
 	const harness = await createHarness({
+		...(settingsContent === undefined ? {} : { fileSettings: true, settingsContent }),
 		extensionFlagValues: new Map([
 			["permission", rules],
 			["permission-preset", preset],
@@ -70,18 +74,31 @@ it.each([
 	expect(decideCellOperation(fx.session, call).action === "deny").toBe(denied);
 });
 
-it("uses the supplied execution cwd for external directory classification", async () => {
-	const fx = await fixture("external_directory:*=deny");
-	const call: CellOperation = { tool: "write", input: { path: "../outside.txt" }, cwd: "/project/elsewhere" };
-	vi.spyOn(fx.runner, "createContext").mockReturnValue({ ...fx.ctx, cwd: call.cwd });
-	const direct = await fx.runner.emitToolCall({
-		type: "tool_call",
-		toolCallId: "cwd",
-		toolName: call.tool,
-		input: call.input,
-	});
-	expect(decideCellOperation(fx.session, call).action === "deny").toBe(direct?.block === true);
-});
+it.each([
+	{ rules: "external_directory:*=deny", nested: false, denied: false },
+	{ rules: "external_directory:*=deny", nested: true, denied: true },
+	{ rules: "", nested: false, denied: false },
+	{ rules: "", nested: true, denied: false },
+])(
+	"uses the execution cwd for external directory classification: $rules / nested=$nested",
+	async ({ rules, nested, denied }) => {
+		const fx = await fixture(rules);
+		const call: CellOperation = {
+			tool: "write",
+			input: { path: join(fx.ctx.cwd, "inside.txt") },
+			cwd: nested ? join(fx.ctx.cwd, "other") : fx.ctx.cwd,
+		};
+		vi.spyOn(fx.runner, "createContext").mockReturnValue({ ...fx.ctx, cwd: call.cwd });
+		const direct = await fx.runner.emitToolCall({
+			type: "tool_call",
+			toolCallId: "cwd",
+			toolName: call.tool,
+			input: call.input,
+		});
+		expect(direct?.block === true).toBe(denied);
+		expect(decideCellOperation(fx.session, call).action === "deny").toBe(denied);
+	},
+);
 
 it("returns the deciding rule and its layer", async () => {
 	const fx = await fixture("read:secret.txt=deny");
@@ -136,13 +153,112 @@ it("fails closed without registration and after shutdown", async () => {
 	expect(decideCellOperation(fx.session, { tool: "ls", input: {}, cwd: fx.ctx.cwd }).action).toBe("deny");
 });
 
-it("fails closed when a preset reload fails", async () => {
-	const fx = await fixture();
-	fx.runner.setFlagValue("permission-preset", "invalid");
-	expect(
-		decideCellOperation(fx.session, { tool: "bash", input: { command: "uname" }, cwd: fx.ctx.cwd }),
-	).toMatchObject({
+it.each(
+	["", "read:*=deny"].flatMap((rules) =>
+		["preset", "rules"].flatMap((failure) =>
+			["state", "cell", "tool", "dispatch"].map((entry) => ({ rules, failure, entry })),
+		),
+	),
+)("publishes failed reload and recovery: $rules / $failure / $entry", async ({ rules, failure, entry }) => {
+	const fx = await fixture(rules, "full-access", "{}");
+	const initial = cellEnforcementState(fx.session);
+	const changed = vi.fn();
+	const unsubscribe = onCellEnforcementChange(fx.session, changed);
+	const call: CellOperation = { tool: "bash", input: { command: "uname" }, cwd: fx.ctx.cwd };
+	if (failure === "preset") {
+		fx.runner.setFlagValue("permission-preset", "invalid");
+	} else {
+		writeFileSync(join(fx.ctx.agentDir, "settings.json"), JSON.stringify({ permission: { read: null } }));
+	}
+	fx.runner.setFlagValue("permission", `${rules},bash:git *=allow`);
+	if (entry === "state") cellEnforcementState(fx.session);
+	else if (entry === "cell") decideCellOperation(fx.session, call);
+	else if (entry === "tool") {
+		expect(
+			await fx.runner.emitToolCall({
+				type: "tool_call",
+				toolCallId: "failed-reload",
+				toolName: call.tool,
+				input: call.input,
+			}),
+		).toMatchObject({ block: true });
+	} else {
+		await expect(
+			authorizeToolDispatch(
+				fx.session,
+				{
+					toolCallId: "failed-reload",
+					toolName: call.tool,
+					input: call.input,
+					identity: { owner: {}, metadata: "reload" },
+				},
+				fx.ctx,
+				undefined,
+			),
+		).rejects.toThrow();
+	}
+	const failed = { alive: true, active: true, epoch: initial.epoch + 1 };
+	expect(changed).toHaveBeenCalledExactlyOnceWith(failed);
+	expect(cellEnforcementState(fx.session)).toEqual(failed);
+	expect(decideCellOperation(fx.session, call)).toEqual({
 		action: "deny",
 		rule: { permission: "permission_authority", pattern: "setup_failed", layer: "system" },
 	});
+	expect(changed).toHaveBeenCalledTimes(1);
+
+	writeFileSync(join(fx.ctx.agentDir, "settings.json"), "{}");
+	fx.runner.setFlagValue("permission-preset", "full-access");
+	fx.runner.setFlagValue("permission", rules);
+	expect(decideCellOperation(fx.session, call)).toEqual({ action: "pass" });
+	expect(cellEnforcementState(fx.session)).toEqual({ ...initial, epoch: initial.epoch + 2 });
+	expect(changed).toHaveBeenCalledTimes(2);
+	expect(changed).toHaveBeenLastCalledWith({ ...initial, epoch: initial.epoch + 2 });
+	unsubscribe();
+});
+
+it.each(["preset", "rules"])("activates enforcement for failed initial %s setup", async (failure) => {
+	const fx = await fixture(
+		"",
+		failure === "preset" ? "invalid" : "full-access",
+		failure === "rules" ? JSON.stringify({ permission: { read: null } }) : undefined,
+	);
+	expect(cellEnforcementState(fx.session)).toEqual({ alive: true, active: true, epoch: 1 });
+	expect(decideCellOperation(fx.session, { tool: "ls", input: {}, cwd: fx.ctx.cwd })).toMatchObject({
+		action: "deny",
+		rule: { pattern: "setup_failed" },
+	});
+});
+
+it.each([
+	{ rules: "", next: "read:*=deny", preset: "full-access" },
+	{ rules: "read:*=deny", next: "", preset: "full-access" },
+	{ rules: "read:*=deny", next: "read:secret.txt=deny", preset: "full-access" },
+	{ rules: "", next: "bash:git *=allow", preset: "full-access" },
+	{ rules: "", next: "", preset: "invalid" },
+])("keeps retired state stable: $rules -> $next / $preset", async ({ rules, next, preset }) => {
+	const fx = await fixture(rules);
+	const changed = vi.fn();
+	const unsubscribe = onCellEnforcementChange(fx.session, changed);
+	await fx.runner.emit({ type: "session_shutdown", reason: "quit" });
+	const retired = cellEnforcementState(fx.session);
+	expect(retired.alive).toBe(false);
+	expect(changed).toHaveBeenCalledExactlyOnceWith(retired);
+	fx.runner.setFlagValue("permission", next);
+	fx.runner.setFlagValue("permission-preset", preset);
+	await fx.runner.emitToolCall({
+		type: "tool_call",
+		toolCallId: "after-retirement",
+		toolName: "read",
+		input: { path: "secret.txt" },
+	});
+	expect(cellEnforcementState(fx.session)).toEqual(retired);
+	expect(changed).toHaveBeenCalledTimes(1);
+	expect(decideCellOperation(fx.session, { tool: "read", input: {}, cwd: fx.ctx.cwd })).toMatchObject({
+		action: "deny",
+		rule: { pattern: "unavailable" },
+	});
+	unsubscribe();
+	fx.runner.setFlagValue("permission-preset", "full-access");
+	await fx.runner.emit({ type: "session_start", reason: "startup" });
+	expect(cellEnforcementState(fx.session)).toMatchObject({ alive: true, active: next.includes("deny") });
 });
