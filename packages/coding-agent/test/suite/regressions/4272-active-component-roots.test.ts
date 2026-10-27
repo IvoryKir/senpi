@@ -13,6 +13,7 @@ it("freezes and settles a large active collection with bounded ownership work", 
 				type: "block_start",
 				epoch: "A",
 				ordinal: i,
+				firstOrdinal: 0,
 				messageId: "m",
 				contentIndex: i,
 				kind: "text",
@@ -43,7 +44,7 @@ it("freezes and settles a large active collection with bounded ownership work", 
 				})),
 			);
 			const settled = state.freeze();
-			state.accept({ type: "message_remove", messageId: "m" });
+			await state.applyCold({ type: "message_remove", messageId: "m" });
 			const blocks = (await state.read(settled)).messages[0].blocks;
 			expect(blocks).toHaveLength(256);
 			expect(blocks[128].text).toBe("text-128!");
@@ -73,6 +74,7 @@ it("preserves active insertion order and only the addressed block across frozen 
 				type: "block_start",
 				epoch: "A",
 				ordinal,
+				firstOrdinal: ordinal,
 				messageId,
 				contentIndex: 10,
 				kind: "text",

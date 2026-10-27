@@ -22,9 +22,9 @@ it("bounds compaction of mixed ceiling-sized rows and overrides spread over many
 	const store = new CompactContentStore({
 		dir: root.dir,
 		io: {
-			async readFile(path) {
+			async readFile(path, range) {
 				sample();
-				return real.readFile(path);
+				return real.readFile(path, range);
 			},
 			async writeFile(path, data) {
 				sample();
@@ -58,7 +58,7 @@ it("bounds compaction of mixed ceiling-sized rows and overrides spread over many
 		index.maybeCompact();
 		await store.idle();
 		expect(index.pages.size).toBe(3);
-		expect([...index.pages].every((page) => page.keys.length === 128)).toBe(true);
+		expect([...index.pages].every((page) => page.count === 128)).toBe(true);
 		measuring = false;
 		const pauseAgain = vi.spyOn(index["compactor"], "schedule").mockImplementation(() => undefined);
 		for (let n = 0; n < 384; n += 3) {
