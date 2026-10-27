@@ -62,6 +62,31 @@ it("accepts never-seen epochs in consumer order, including ordinal zero after re
 	expect(state.acceptedSequence).toBe(3);
 });
 
+it("keeps a live old-epoch message readable but refuses further starts after rollover", async () => {
+	const state = await setup();
+	state.accept(start("A", 0, "live"));
+	state.accept(start("B", 0));
+	for (const [epoch, reason] of [
+		["A", "duplicate_or_stale_start"],
+		["B", "invalid_start_identity"],
+	] as const) {
+		expect(() => state.accept({ ...start(epoch, 1, "live"), firstOrdinal: 0, contentIndex: 1 })).toThrow(
+			expect.objectContaining({ reason }),
+		);
+		expect(state.acceptedSequence).toBe(2);
+	}
+	state.accept({ type: "block_delta", messageId: "live", contentIndex: 0, offset: 4, text: "!" });
+	state.accept({ type: "message_status", messageId: "live", persistence: "appended" });
+	const cut = state.freeze();
+	try {
+		expect((await state.read(cut)).messages.find((m) => m.messageId === "live")?.blocks).toEqual([
+			{ contentIndex: 0, kind: "text", text: "body!" },
+		]);
+	} finally {
+		state.release(cut);
+	}
+});
+
 it.each([undefined, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 	"rejects missing or invalid ordinal %s without retiring the current epoch",
 	async (ordinal) => {

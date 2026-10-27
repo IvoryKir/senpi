@@ -31,6 +31,11 @@ export class CompactStateStorage {
 			(row) => [row.blocks?.owner ?? 0],
 			options.compactAboveRows ?? 128,
 		);
-		this.cold = new CompactColdOperations(this.settled);
+		this.cold = new CompactColdOperations(this.settled, (key) => this.isActiveKey(key));
+	}
+
+	/** Whether a message is still live in acceptance; cold operations re-check this at apply time. */
+	protected isActiveKey(_key: string): boolean {
+		return false;
 	}
 }

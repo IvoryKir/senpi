@@ -8,7 +8,7 @@ export type CompactColdOutcome =
 	| {
 			readonly kind: "rejected";
 			readonly afterSequence: number;
-			readonly reason: "unknown_message" | "capacity" | "retired";
+			readonly reason: "unknown_message" | "active_message" | "capacity" | "retired";
 	  }
 	| { readonly kind: "failed"; readonly afterSequence: number; readonly cause: unknown };
 
@@ -19,31 +19,44 @@ type Index = Pick<
 /** Non-acceptance FIFO. Capacity rejection leaves work unqueued; callers await admitted operations. */
 export class CompactColdOperations {
 	private chain: Promise<void> = Promise.resolve();
-	private readonly keys = new Map<string, { removed: boolean; pending: number }>();
+	private readonly keys = new Map<string, { removed: boolean; active: boolean; pending: number }>();
 	private pending = 0;
 	private readonly index: Index;
-	constructor(index: Index) {
+	private readonly isActive: (key: string) => boolean;
+	constructor(index: Index, isActive: (key: string) => boolean) {
 		this.index = index;
+		this.isActive = isActive;
+	}
+
+	activate(key: string): void {
+		const token = this.keys.get(key);
+		if (token) token.active = true;
 	}
 
 	run(input: CompactColdOperation, afterSequence: number): Promise<CompactColdOutcome> {
 		const operation = { ...input };
 		const key = operation.messageId;
+		if (this.isActive(key)) return Promise.resolve({ kind: "rejected", reason: "active_message", afterSequence });
 		// Bound queued roots, keys and closures independently of the settled membership catalog.
 		if (this.pending === 128) return Promise.resolve({ kind: "rejected", reason: "capacity", afterSequence });
-		const token = this.keys.get(key) ?? { removed: false, pending: 0 };
+		const previous = this.keys.get(key);
+		const token = (previous?.active ? undefined : previous) ?? { removed: false, active: false, pending: 0 };
 		this.keys.set(key, token);
 		token.pending++;
 		this.pending++;
 		const result = this.chain.then(async (): Promise<CompactColdOutcome> => {
 			try {
 				this.index.store.assertReadable();
+				if (token.active || this.isActive(key))
+					return { kind: "rejected", reason: "active_message", afterSequence };
 				if (token.removed) return { kind: "rejected", reason: "unknown_message", afterSequence };
 				const cut = this.index.freeze();
 				try {
-					if (!(await this.index.lookup(cut, key)))
-						return { kind: "rejected", reason: "unknown_message", afterSequence };
+					const row = await this.index.lookup(cut, key);
 					this.index.store.assertReadable();
+					if (token.active || this.isActive(key))
+						return { kind: "rejected", reason: "active_message", afterSequence };
+					if (!row) return { kind: "rejected", reason: "unknown_message", afterSequence };
 					if (operation.type === "message_status") this.index.patch(key, { persistence: operation.persistence });
 					else {
 						this.index.delete(key);

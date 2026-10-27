@@ -143,6 +143,7 @@ it("releases settled membership instead of retaining a catalog after 10,000 mess
 			if (ordinal % 100 === 0) {
 				await state.idle();
 				expect(state.storageStatus().residentIndexNodes).toBe(0);
+				expect(state.storageStatus().structuredBytes.resident).toBe(0);
 				expect(state["identity"]["live"].size).toBe(1);
 			}
 		}

@@ -21,6 +21,10 @@ export class CompactSessionState extends CompactStateStorage {
 	private frozenTailBytes = 0;
 	private readonly cuts = new WeakMap<FrozenCompactState, CompactReadLease>();
 
+	protected override isActiveKey(key: string): boolean {
+		return this.active.has(key);
+	}
+
 	get acceptedSequence(): number {
 		return this.sequence;
 	}
@@ -77,18 +81,14 @@ export class CompactSessionState extends CompactStateStorage {
 				break;
 			}
 			case "message_status":
-				if (this.active.has(t.messageId)) {
-					const message = this.active.get(t.messageId);
-					this.settled.set(t.messageId, {
-						messageId: t.messageId,
-						persistence: t.persistence,
-						blocks: message?.root.ref,
-					});
-					this.dropActive(t.messageId);
-				} else throw new CompactTransitionError("unknown_message", t.messageId);
+				this.settled.set(t.messageId, {
+					messageId: t.messageId,
+					persistence: t.persistence,
+					blocks: this.active.get(t.messageId)?.root.ref,
+				});
+				this.dropActive(t.messageId);
 				break;
 			case "message_remove":
-				if (!this.active.has(t.messageId)) throw new CompactTransitionError("unknown_message", t.messageId);
 				this.dropActive(t.messageId);
 				break;
 		}
@@ -194,6 +194,7 @@ export class CompactSessionState extends CompactStateStorage {
 		this.publish(t, block);
 		adjustBlock(this.store, block, -1);
 		this.identity.commit(t);
+		this.cold.activate(t.messageId);
 	}
 
 	private publish(address: BlockAddress, block: ActiveBlock): void {
