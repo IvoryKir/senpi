@@ -12,10 +12,11 @@ it("retains a large settled block collection across a cold status update", async
 		compactAboveRows: 1,
 	});
 	try {
+		const identity = startIdentity();
 		for (let contentIndex = 0; contentIndex < 1024; contentIndex++)
 			state.accept({
 				type: "block_start",
-				...startIdentity(),
+				...(contentIndex === 0 ? identity : startIdentity(identity.firstOrdinal)),
 				messageId: "old",
 				contentIndex,
 				kind: "text",
@@ -25,7 +26,7 @@ it("retains a large settled block collection across a cold status update", async
 		state.accept({ type: "message_status", messageId: "old", persistence: "pending" });
 		await state.idle();
 		const cut = state.freeze();
-		state.accept({ type: "message_status", messageId: "old", persistence: "appended" });
+		await state.applyCold({ type: "message_status", messageId: "old", persistence: "appended" });
 		await state.idle();
 		try {
 			const view = await state.read(cut);

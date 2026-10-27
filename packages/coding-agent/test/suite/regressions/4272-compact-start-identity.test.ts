@@ -7,9 +7,9 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of cleanup.splice(0)) await close();
 });
-async function setup() {
+async function setup(compactAboveRows = 128) {
 	const root = await spoolRoot();
-	const state = new CompactSessionState({ dir: root.dir });
+	const state = new CompactSessionState({ dir: root.dir, compactAboveRows });
 	cleanup.push(async () => {
 		await state.retire();
 		await root.cleanup();
@@ -20,6 +20,7 @@ const start = (epoch: string, ordinal: number, messageId = `${epoch}-${ordinal}`
 	type: "block_start" as const,
 	epoch,
 	ordinal,
+	firstOrdinal: ordinal,
 	messageId,
 	contentIndex: 0,
 	kind: "text" as const,
@@ -61,6 +62,31 @@ it("accepts never-seen epochs in consumer order, including ordinal zero after re
 	expect(state.acceptedSequence).toBe(3);
 });
 
+it("keeps a live old-epoch message readable but refuses further starts after rollover", async () => {
+	const state = await setup();
+	state.accept(start("A", 0, "live"));
+	state.accept(start("B", 0));
+	for (const [epoch, reason] of [
+		["A", "duplicate_or_stale_start"],
+		["B", "invalid_start_identity"],
+	] as const) {
+		expect(() => state.accept({ ...start(epoch, 1, "live"), firstOrdinal: 0, contentIndex: 1 })).toThrow(
+			expect.objectContaining({ reason }),
+		);
+		expect(state.acceptedSequence).toBe(2);
+	}
+	state.accept({ type: "block_delta", messageId: "live", contentIndex: 0, offset: 4, text: "!" });
+	state.accept({ type: "message_status", messageId: "live", persistence: "appended" });
+	const cut = state.freeze();
+	try {
+		expect((await state.read(cut)).messages.find((m) => m.messageId === "live")?.blocks).toEqual([
+			{ contentIndex: 0, kind: "text", text: "body!" },
+		]);
+	} finally {
+		state.release(cut);
+	}
+});
+
 it.each([undefined, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
 	"rejects missing or invalid ordinal %s without retiring the current epoch",
 	async (ordinal) => {
@@ -100,11 +126,14 @@ it("keeps precisely the last 64 retired epochs at the 65th retirement", async ()
 	);
 });
 
-it("rejects a reused settled identity even after its key is removed", async () => {
-	const state = await setup();
+it("rejects a reused settled identity after page-out and after its key is removed", async () => {
+	const state = await setup(1);
 	state.accept(start("A", 0));
 	state.accept({ type: "message_status", messageId: "A-0", persistence: "pending" });
-	state.accept({ type: "message_remove", messageId: "A-0" });
+	await state.idle();
+	expect(state.storageStatus().baseRows).toBe(1);
 	expect(() => state.accept(start("A", 0))).toThrow(expect.objectContaining({ reason: "duplicate_or_stale_start" }));
-	expect(state.accept(start("A", 1))).toBe(4);
+	await state.applyCold({ type: "message_remove", messageId: "A-0" });
+	expect(() => state.accept(start("A", 0))).toThrow(expect.objectContaining({ reason: "duplicate_or_stale_start" }));
+	expect(state.accept(start("A", 1))).toBe(3);
 });
