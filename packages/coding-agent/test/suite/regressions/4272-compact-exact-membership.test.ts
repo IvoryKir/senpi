@@ -44,7 +44,7 @@ it("rejects duplicate settled starts and unknown operations without changing the
 			expect(() => state.accept(transition)).toThrow(expect.objectContaining({ reason }));
 		expect(state.acceptedSequence).toBe(sequence);
 		expect(state.storageStatus()).toEqual(status);
-		state.accept({ type: "message_status", messageId: "old", persistence: "appended" });
+		await state.applyCold({ type: "message_status", messageId: "old", persistence: "appended" });
 		const cut = state.freeze();
 		try {
 			expect((await state.read(cut)).messages[0]).toEqual({

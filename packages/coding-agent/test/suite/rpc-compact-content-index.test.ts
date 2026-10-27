@@ -72,7 +72,7 @@ async function compactionInFlight() {
 describe("compact content index: transitions racing a compaction", () => {
 	it("skips a row removed between the snapshot and the publish, and the next compaction still runs", async () => {
 		const { state, dir, pageWrite } = await compactionInFlight();
-		state.accept({ type: "message_remove", messageId: "m2" });
+		await state.applyCold({ type: "message_remove", messageId: "m2" });
 		pageWrite.release();
 		await state.idle();
 
@@ -91,7 +91,7 @@ describe("compact content index: transitions racing a compaction", () => {
 
 	it("keeps a row re-created with new leaves during compaction and releases the replaced leaves", async () => {
 		const { state, dir, pageWrite } = await compactionInFlight();
-		state.accept({ type: "message_remove", messageId: "m2" });
+		await state.applyCold({ type: "message_remove", messageId: "m2" });
 		settle(state, "m2", "new2");
 		pageWrite.release();
 		await state.idle();

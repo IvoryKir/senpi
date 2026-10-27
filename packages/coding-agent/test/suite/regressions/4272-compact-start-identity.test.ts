@@ -7,9 +7,9 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
 	for (const close of cleanup.splice(0)) await close();
 });
-async function setup() {
+async function setup(compactAboveRows = 128) {
 	const root = await spoolRoot();
-	const state = new CompactSessionState({ dir: root.dir });
+	const state = new CompactSessionState({ dir: root.dir, compactAboveRows });
 	cleanup.push(async () => {
 		await state.retire();
 		await root.cleanup();
@@ -100,11 +100,14 @@ it("keeps precisely the last 64 retired epochs at the 65th retirement", async ()
 	);
 });
 
-it("rejects a reused settled identity even after its key is removed", async () => {
-	const state = await setup();
+it("rejects a reused settled identity after page-out and after its key is removed", async () => {
+	const state = await setup(1);
 	state.accept(start("A", 0));
 	state.accept({ type: "message_status", messageId: "A-0", persistence: "pending" });
-	state.accept({ type: "message_remove", messageId: "A-0" });
+	await state.idle();
+	expect(state.storageStatus().baseRows).toBe(1);
 	expect(() => state.accept(start("A", 0))).toThrow(expect.objectContaining({ reason: "duplicate_or_stale_start" }));
-	expect(state.accept(start("A", 1))).toBe(4);
+	await state.applyCold({ type: "message_remove", messageId: "A-0" });
+	expect(() => state.accept(start("A", 0))).toThrow(expect.objectContaining({ reason: "duplicate_or_stale_start" }));
+	expect(state.accept(start("A", 1))).toBe(3);
 });

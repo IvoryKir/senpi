@@ -1,30 +1,13 @@
 import { type ActiveBlock, type ActiveMessage, adjustBlock, appendBlock, deltaBlock } from "./compact-active-block.ts";
 import { CompactComponentRoots, type ComponentRoot } from "./compact-component-roots.ts";
-import { CompactContentIndex, type FrozenIndex } from "./compact-content-index.ts";
+import { CompactColdOperations, type CompactColdOperation } from "./compact-cold-operations.ts";
+import { CompactContentIndex } from "./compact-content-index.ts";
 import { CompactContentStore, type CompactContentStoreOptions } from "./compact-content-store.ts";
 import { CompactReadError, CompactReadLease } from "./compact-read-lease.ts";
 import { CompactStartIdentity } from "./compact-start-identity.ts";
-import { type CompactMessageView, type FrozenBlock, readCompactBlocks } from "./compact-text-view.ts";
-import {
-	type BlockAddress,
-	type CompactPersistence,
-	type CompactTransition,
-	CompactTransitionError,
-} from "./compact-transition.ts";
-import type { ValueRef } from "./compact-values.ts";
-
-interface MessageRoot {
-	readonly messageId: string;
-	readonly blocks: ValueRef | undefined;
-}
-interface SettledRow extends MessageRoot {
-	readonly persistence: CompactPersistence;
-}
-interface FrozenCompactState {
-	readonly sequence: number;
-	readonly active: ValueRef | undefined;
-	readonly settled: FrozenIndex;
-}
+import { type FrozenCompactState, type MessageRoot, type SettledRow, readCompactState } from "./compact-state-view.ts";
+import type { FrozenBlock } from "./compact-text-view.ts";
+import { type BlockAddress, type CompactTransition, CompactTransitionError } from "./compact-transition.ts";
 export interface CompactSessionStateOptions extends CompactContentStoreOptions {
 	readonly compactAboveRows?: number;
 }
@@ -33,6 +16,7 @@ export interface CompactSessionStateOptions extends CompactContentStoreOptions {
 export class CompactSessionState {
 	private readonly store: CompactContentStore;
 	private readonly settled: CompactContentIndex<SettledRow>;
+	private readonly cold: CompactColdOperations;
 	private readonly blockRoots: CompactComponentRoots<FrozenBlock>;
 	private readonly messageRoots: CompactComponentRoots<MessageRoot>;
 	private messages: ComponentRoot<MessageRoot> = { header: undefined, ref: undefined };
@@ -53,6 +37,7 @@ export class CompactSessionState {
 			(row) => [row.blocks?.owner ?? 0],
 			options.compactAboveRows ?? 128,
 		);
+		this.cold = new CompactColdOperations(this.settled);
 	}
 
 	get acceptedSequence(): number {
@@ -61,6 +46,8 @@ export class CompactSessionState {
 
 	accept(t: CompactTransition): number {
 		if (t.type !== "message_remove") this.store.assertReadable();
+		if ((t.type === "message_status" || t.type === "message_remove") && this.settled.has(t.messageId))
+			throw new CompactTransitionError("cold_operation_required", "use applyCold after acceptance");
 		switch (t.type) {
 			case "block_start":
 				this.start(t);
@@ -101,17 +88,18 @@ export class CompactSessionState {
 						blocks: message?.root.ref,
 					});
 					this.dropActive(t.messageId);
-				} else if (this.settled.has(t.messageId)) this.settled.patch(t.messageId, { persistence: t.persistence });
-				else throw new CompactTransitionError("unknown_message", t.messageId);
+				} else throw new CompactTransitionError("unknown_message", t.messageId);
 				break;
 			case "message_remove":
-				if (!this.active.has(t.messageId) && !this.settled.has(t.messageId))
-					throw new CompactTransitionError("unknown_message", t.messageId);
+				if (!this.active.has(t.messageId)) throw new CompactTransitionError("unknown_message", t.messageId);
 				this.dropActive(t.messageId);
-				if (this.settled.has(t.messageId)) this.settled.delete(t.messageId);
 				break;
 		}
 		return ++this.sequence;
+	}
+
+	applyCold(t: CompactColdOperation) {
+		return this.cold.run(t, this.sequence);
 	}
 
 	freeze(): FrozenCompactState {
@@ -137,36 +125,25 @@ export class CompactSessionState {
 	}
 
 	/** Whole-view compatibility assembly; persistent nodes and text ranges are read separately. */
-	async read(frozen: FrozenCompactState): Promise<{ sequence: number; messages: CompactMessageView[] }> {
+	async read(frozen: FrozenCompactState) {
 		const lease = this.cutLease(frozen);
 		const valid = () => {
 			lease.assert();
 			this.store.assertReadable();
 		};
 		valid();
-		return lease.run(async () => {
-			const messages: CompactMessageView[] = [];
-			for (const [messageId, row] of await this.settled.entries(frozen.settled))
-				messages.push({
-					messageId,
-					persistence: row.persistence,
-					blocks: await this.readBlocks(row.blocks, valid),
-				});
-			for await (const [, row] of this.messageRoots.entries(frozen.active, valid))
-				messages.push({
-					messageId: row.messageId,
-					persistence: undefined,
-					blocks: await this.readBlocks(row.blocks, valid),
-				});
-			valid();
-			return { sequence: frozen.sequence, messages };
-		});
-	}
-
-	private async readBlocks(ref: ValueRef | undefined, valid: () => void) {
-		const blocks: FrozenBlock[] = [];
-		for await (const [, block] of this.blockRoots.entries(ref, valid)) blocks.push(block);
-		return readCompactBlocks(this.store.text, blocks, valid);
+		return lease.run(() =>
+			readCompactState(
+				frozen,
+				{
+					store: this.store,
+					settled: this.settled,
+					blockRoots: this.blockRoots,
+					messageRoots: this.messageRoots,
+				},
+				valid,
+			),
+		);
 	}
 
 	private cutLease(frozen: FrozenCompactState): CompactReadLease {
@@ -189,12 +166,14 @@ export class CompactSessionState {
 		};
 	}
 
-	idle(): Promise<void> {
-		return this.store.idle();
+	async idle(): Promise<void> {
+		await this.cold.idle();
+		await this.store.idle();
 	}
 
-	retire(): Promise<void> {
-		return this.store.retire();
+	async retire(): Promise<void> {
+		await this.store.retire();
+		await this.cold.idle();
 	}
 
 	private start(t: Extract<CompactTransition, { type: "block_start" }>): void {

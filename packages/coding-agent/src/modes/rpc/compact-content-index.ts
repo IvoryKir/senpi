@@ -4,7 +4,7 @@ import { CompactIndexTree, type IndexNode } from "./compact-index-tree.ts";
 import { CompactReadError, CompactReadLease } from "./compact-read-lease.ts";
 import { CompactValues, type ValueRef } from "./compact-values.ts";
 import { CompactIndexCompactor } from "./compact-index-compactor.ts";
-import { readIndexEntries } from "./compact-index-traversal.ts";
+import { readIndexEntries, readIndexPage } from "./compact-index-traversal.ts";
 
 export interface IndexRow {
 	readonly key: ValueRef;
@@ -14,7 +14,7 @@ export interface IndexRow {
 export interface IndexPage {
 	readonly path: string;
 	readonly bytes: number;
-	readonly keys: readonly string[];
+	readonly count: number;
 	readonly owner: LeafId;
 	live: number;
 	pins: number;
@@ -138,66 +138,37 @@ export class CompactContentIndex<Row extends object> {
 		this.lease(cut).release();
 	}
 
+	/** Point descriptor read under a cut lease; never hydrates a message or its block collection. */
+	async lookup(cut: FrozenIndex, key: string): Promise<IndexRow | undefined> {
+		return this.lease(cut).run(async () => {
+			const change = this.overlays.get(cut.overrides, key);
+			if (change?.deleted) return undefined;
+			if (change?.row) return change.row;
+			const old = this.bases.get(cut.base, key);
+			if (!old) return undefined;
+			using held = await this.readPage(old.page);
+			return held.rows[old.offset];
+		});
+	}
+
 	/** Compatibility assembly only; recovery descriptors use page(), never this whole-row view. */
 	async entries(cut: FrozenIndex): Promise<Map<string, Row>> {
 		return this.lease(cut).run(() => readIndexEntries(this, cut));
 	}
 
 	async page(cut: FrozenIndex, cursor?: IndexCursor) {
-		return this.lease(cut).run(async () => {
-			if (cursor && cursor.cut !== cut) throw new CompactReadError("ownership");
-			const after = cursor?.after;
-			const rows: { row: IndexRow; patch: ValueRef | undefined }[] = [];
-			const base = this.bases.entries(cut.base, after);
-			const overlay = this.overlays.entries(cut.overrides, after);
-			let a = base.next(),
-				b = overlay.next(),
-				last: string | undefined;
-			let loaded: Awaited<ReturnType<typeof this.readPage>> | undefined;
-			let from: IndexPage | undefined;
-			try {
-				while ((!a.done || !b.done) && rows.length < 128) {
-					const key = a.done
-						? b.value?.[0]
-						: b.done
-							? a.value[0]
-							: a.value[0] < b.value[0]
-								? a.value[0]
-								: b.value[0];
-					if (key === undefined) break;
-					const old = !a.done && a.value[0] === key ? a.value[1] : undefined;
-					const change = !b.done && b.value[0] === key ? b.value[1] : undefined;
-					if (!change?.deleted) {
-						if (!change?.row && old && from !== old.page) {
-							loaded?.[Symbol.dispose]();
-							loaded = undefined;
-							from = old.page;
-							loaded = await this.readPage(from);
-						}
-						const row = change?.row ?? (old ? loaded?.rows[old.offset] : undefined);
-						if (row) rows.push({ row, patch: change?.patchValue });
-					}
-					last = key;
-					if (!a.done && a.value[0] === key) a = base.next();
-					if (!b.done && b.value[0] === key) b = overlay.next();
-				}
-			} finally {
-				loaded?.[Symbol.dispose]();
-			}
-			this.store.assertReadable();
-			if (Buffer.byteLength(JSON.stringify(rows)) > 65_536) throw new CompactReadError("size_limit");
-			return { rows, next: (a.done && b.done) || last === undefined ? undefined : { cut, after: last } };
-		});
+		return this.lease(cut).run(() => readIndexPage(this, cut, cursor));
 	}
 
 	async readPage(page: IndexPage) {
 		if (page.bytes > 65_536) throw new CompactReadError("size_limit");
-		if (page.keys.length > 128) throw new CompactReadError("count_limit");
+		if (page.count > 128) throw new CompactReadError("count_limit");
 		this.peakResidentPages = Math.max(this.peakResidentPages, ++this.residentPages);
 		try {
 			const data = await this.store.readFile(page.path, page.bytes, "page_read");
 			const rows: IndexRow[] = JSON.parse(data.toString("utf8"));
 			if (rows.length > 128) throw new CompactReadError("count_limit");
+			if (rows.length !== page.count) throw new CompactReadError("ownership");
 			return {
 				rows,
 				[Symbol.dispose]: () => {

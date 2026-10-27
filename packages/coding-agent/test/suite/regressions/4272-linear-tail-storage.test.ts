@@ -33,7 +33,7 @@ it("stores single-unit deltas with linear byte volume through the seal bound", a
 		for (const [index, cut] of cuts.entries())
 			expect((await state.read(cut)).messages[0].blocks[0].text).toBe("x".repeat(LEAF / 2 ** (3 - index)));
 		state.accept({ type: "message_status", messageId: "m", persistence: "pending" });
-		state.accept({ type: "message_remove", messageId: "m" });
+		await state.applyCold({ type: "message_remove", messageId: "m" });
 	} finally {
 		allocate.mockRestore();
 		for (const cut of cuts) state.release(cut);

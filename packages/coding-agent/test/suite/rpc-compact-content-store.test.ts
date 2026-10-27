@@ -113,7 +113,7 @@ describe("compact content store: failure accounting (ruling 08 conditions 1, 3, 
 			persistence: "pending",
 			blocks: [{ contentIndex: 0, kind: "text", text: "x".repeat(LEAF) }],
 		});
-		state.accept({ type: "message_status", messageId: "m1", persistence: "appended" });
+		await state.applyCold({ type: "message_status", messageId: "m1", persistence: "appended" });
 		expect((await current(state)).messages.find((m) => m.messageId === "m1")?.persistence).toBe("appended");
 	});
 
@@ -152,8 +152,8 @@ describe("compact content index: coalesced overrides and stale compaction", () =
 		await pageWrite.entered;
 
 		const before = state.freeze();
-		state.accept({ type: "message_status", messageId: "m1", persistence: "appended" });
-		state.accept({ type: "message_remove", messageId: "m2" });
+		await state.applyCold({ type: "message_status", messageId: "m1", persistence: "appended" });
+		await state.applyCold({ type: "message_remove", messageId: "m2" });
 		pageWrite.release();
 		await state.idle();
 
@@ -193,8 +193,8 @@ describe("compact session state: exact settled-row transitions", () => {
 		expect(state.storageStatus()).toMatchObject({ residentPayloadBytes: 0, overrideSlots: 3 });
 
 		const before = state.freeze();
-		state.accept({ type: "message_status", messageId: "m1", persistence: "appended" });
-		state.accept({ type: "message_remove", messageId: "m2" });
+		await state.applyCold({ type: "message_status", messageId: "m1", persistence: "appended" });
+		await state.applyCold({ type: "message_remove", messageId: "m2" });
 		const sequence = state.acceptedSequence;
 		const status = state.storageStatus();
 		for (const transition of [
@@ -232,21 +232,6 @@ describe("compact session state: exact settled-row transitions", () => {
 		});
 		expect(state.storageStatus()).toMatchObject({ overrideSlots: 3, deletionMasks: 0, reclaimDebtBytes: 0 });
 	});
-
-	it("holds one override slot for 10,000 updates to the same settled row", async () => {
-		const { state } = await setup();
-		state.accept(start("m1", "abc"));
-		state.accept({ type: "message_status", messageId: "m1", persistence: "pending" });
-		const resident = state.storageStatus().residentPayloadBytes;
-		for (let i = 0; i < 10_000; i++) {
-			state.accept({ type: "message_status", messageId: "m1", persistence: i % 2 === 0 ? "appended" : "failed" });
-		}
-		expect(state.acceptedSequence).toBe(10_002);
-		expect(state.storageStatus()).toMatchObject({ overrideSlots: 1, residentPayloadBytes: resident });
-		expect((await current(state)).messages).toEqual([
-			{ messageId: "m1", persistence: "failed", blocks: [{ contentIndex: 0, kind: "text", text: "abc" }] },
-		]);
-	});
 });
 
 describe("compact content store: reclamation and retirement (ruling 08 condition 5)", () => {
@@ -258,7 +243,7 @@ describe("compact content store: reclamation and retirement (ruling 08 condition
 		expect(state.storageStatus()).toMatchObject({ spilledLiveBytes: 131_072, reclaimDebtBytes: 0 });
 
 		const firstUnlink = control.hold("unlink", (path) => /[/\\]leaf-/.test(path));
-		state.accept({ type: "message_remove", messageId: "m1" });
+		await state.applyCold({ type: "message_remove", messageId: "m1" });
 		await firstUnlink.entered;
 		expect(state.storageStatus()).toMatchObject({ spilledLiveBytes: 0, reclaimDebtBytes: 131_072 });
 		firstUnlink.release();

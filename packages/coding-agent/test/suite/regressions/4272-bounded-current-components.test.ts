@@ -25,7 +25,7 @@ it("retains a large settled block collection across a cold status update", async
 		state.accept({ type: "message_status", messageId: "old", persistence: "pending" });
 		await state.idle();
 		const cut = state.freeze();
-		state.accept({ type: "message_status", messageId: "old", persistence: "appended" });
+		await state.applyCold({ type: "message_status", messageId: "old", persistence: "appended" });
 		await state.idle();
 		try {
 			const view = await state.read(cut);

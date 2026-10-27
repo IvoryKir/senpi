@@ -37,6 +37,7 @@ type CompactRejection =
 	| "invalid_coverage"
 	| "non_contiguous"
 	| "conflicting_overlap"
+	| "cold_operation_required"
 	| "unknown_message";
 
 export class CompactTransitionError extends Error {

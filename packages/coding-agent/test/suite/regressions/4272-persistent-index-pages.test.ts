@@ -120,7 +120,7 @@ it("publishes one changed page through bounded paths without copying the large b
 		await store.idle();
 		expect(index.bases.get(index.base, "00512"), "the base is compacted before the measured step").toBeDefined();
 		const old = index.freeze();
-		const touched = index.bases.get(index.base, "00512")?.page.keys.length ?? 0;
+		const touched = index.bases.get(index.base, "00512")?.page.count ?? 0;
 		const bound = 4 * touched * Math.ceil(Math.log2(count));
 		expect(touched).toBeGreaterThan(0);
 		expect(touched).toBeLessThanOrEqual(128);

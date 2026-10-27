@@ -68,7 +68,7 @@ export class CompactIndexCompactor {
 		const rows = new Map<string, IndexRow>();
 		const removed = new Set<string>();
 		const merged: number[] = [];
-		const written: IndexPage[] = [];
+		const written: { page: IndexPage; keys: string[] }[] = [];
 		const loaded: Awaited<ReturnType<Index["readPage"]>>[] = [];
 		const unowned = new Set<IndexPage>();
 		let draft = i.base;
@@ -76,7 +76,7 @@ export class CompactIndexCompactor {
 		try {
 			let small: IndexPage | undefined;
 			for (const page of i.pages) {
-				if (page.keys.length < 64 && page.bytes < 32_768) {
+				if (page.count < 64 && page.bytes < 32_768) {
 					small = page;
 					break;
 				}
@@ -85,9 +85,11 @@ export class CompactIndexCompactor {
 				if (!page) continue;
 				const data = await i.readPage(page);
 				loaded.push(data);
-				for (const [offset, key] of page.keys.entries()) {
+				for (const row of data.rows) {
+					const key = await i.values.read(row.key);
+					if (typeof key !== "string") throw new CompactReadError("ownership");
 					if (i.bases.get(cut.base, key)?.page === page) {
-						rows.set(key, data.rows[offset]);
+						rows.set(key, row);
 						removed.add(key);
 					}
 				}
@@ -114,14 +116,17 @@ export class CompactIndexCompactor {
 				const path = await i.store.writeFile(data, "page_write", data.byteLength);
 				if (path === undefined) return false;
 				written.push({
-					path,
-					bytes: data.byteLength,
+					page: {
+						path,
+						bytes: data.byteLength,
+						count: chunk.length,
+						owner: 0,
+						live: 0,
+						pins: 0,
+					},
 					keys: ordered.slice(offset, offset + chunk.length).map(([key]) => key),
-					owner: 0,
-					live: 0,
-					pins: 0,
 				});
-				unowned.add(written[written.length - 1]);
+				unowned.add(written[written.length - 1].page);
 				offset += chunk.length;
 			}
 			if (!i.store.spillAllowed) return false;
@@ -134,20 +139,22 @@ export class CompactIndexCompactor {
 				const kept: [string, number][] = [];
 				const refs: number[] = [];
 				for (const [offset, key] of candidate.keys.entries()) {
+					const row = rows.get(key);
+					if (!row) throw new CompactReadError("ownership");
+					// Even a concurrently removed row's on-disk key must survive page traversal.
+					refs.push(row.key.owner);
 					const folded = selected.get(key);
 					const current = i.overlays.get(i.overrides, key);
 					if (folded && current !== folded && (!current || current.deleted || current.row !== folded.row))
 						continue;
-					const row = rows.get(key);
-					if (!row) throw new CompactReadError("ownership");
-					refs.push(row.key.owner, row.value.owner, row.payload);
+					refs.push(row.value.owner, row.payload);
 					kept.push([key, offset]);
 				}
-				const page = { ...candidate, owner: i.store.text.own(refs) };
+				const page = { ...candidate.page, owner: i.store.text.own(refs) };
 				try {
 					for (const [key, offset] of kept) {
 						const next = i.bases.set(draft, key, { page, offset });
-						unowned.delete(candidate);
+						unowned.delete(candidate.page);
 						i.bases.adjust(draft, -1, 0);
 						draft = next;
 					}
