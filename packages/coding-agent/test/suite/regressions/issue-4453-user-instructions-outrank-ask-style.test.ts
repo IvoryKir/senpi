@@ -73,8 +73,9 @@ describe("user instruction files are ranked as the user's own, ahead of project 
 			skills: [],
 		});
 
-		expect(
-			parts.filter((part) => part.name === "project_context").map((part) => part.source),
-		).toEqual(["dynamic-prompt", "/fixture/AGENTS.md"]);
+		expect(parts.filter((part) => part.name === "project_context").map((part) => part.source)).toEqual([
+			"dynamic-prompt",
+			"/fixture/AGENTS.md",
+		]);
 	});
 });
