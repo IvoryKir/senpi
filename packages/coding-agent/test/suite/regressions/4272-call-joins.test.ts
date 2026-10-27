@@ -253,3 +253,75 @@ it("senpi#4278 a repeated nested id mints a fresh key and counts the reuse", asy
 		await rig.close();
 	}
 });
+
+it("senpi#4278 two overlapping calls with one reused id each end in creation order and no end is late", async () => {
+	const rig = await callsRig();
+	try {
+		rig.record({ type: "turn_start" });
+		const start = { type: "tool_execution_start", toolCallId: "n1", toolName: "read", args: {} };
+		const first = rig.record(start);
+		const second = rig.record(start);
+		const end = { type: "tool_execution_end", toolCallId: "n1", toolName: "read", isError: false };
+		expect(rig.record({ ...end, result: "a" })).toBeDefined();
+		const between = await rig.calls();
+		expect(rig.record({ ...end, result: "b" })).toBeDefined();
+		const ended = await rig.calls();
+		expect(rig.record({ ...end, result: "c" }), "a third end has no call left to close").toBeUndefined();
+		const again = await rig.calls();
+		const epoch = ended.root.sessionEpoch;
+		const shape = (entry: { runtimeItemKey: string; phase: string; result: unknown }) => [
+			entry.runtimeItemKey,
+			entry.phase,
+			entry.result,
+		];
+		expect(between.calls.map(shape)).toEqual([
+			[`${epoch}:${first?.sequence}.0`, "completed-awaiting-entry", "a"],
+			[`${epoch}:${second?.sequence}.0`, "executing", null],
+		]);
+		expect(ended.calls.map(shape)).toEqual([
+			[`${epoch}:${first?.sequence}.0`, "completed-awaiting-entry", "a"],
+			[`${epoch}:${second?.sequence}.0`, "completed-awaiting-entry", "b"],
+		]);
+		expect(ended.counters).toMatchObject({ reused: 1, ignored: { unknown: 0, late: 0 } });
+		expect(again.root.sequence).toBe(ended.root.sequence);
+		expect(again.counters.ignored).toEqual({ unknown: 0, late: 1 });
+		for (const cut of [between, ended, again]) rig.lane.release(cut.root);
+	} finally {
+		await rig.close();
+	}
+});
+
+it("RULING-13 an unannounced start has a null owning message and a parentKey resolved from parentToolCallId", async () => {
+	const rig = await callsRig();
+	try {
+		rig.record({ type: "turn_start" });
+		const parent = rig.record({ type: "tool_execution_start", toolCallId: "u1", toolName: "codemode", args: {} });
+		const child = { type: "tool_execution_start", toolName: "read", args: {} };
+		rig.record({ ...child, toolCallId: "u1/1", parentToolCallId: "u1" });
+		rig.record({ ...child, toolCallId: "o1", parentToolCallId: "ghost" });
+		const live = await rig.calls();
+		const parentKey = `${live.root.sessionEpoch}:${parent?.sequence}.0`;
+		expect(live.calls.map((entry) => [entry.toolCallId, entry.owningMessageId, entry.parentKey])).toEqual([
+			["u1", null, null],
+			["u1/1", null, parentKey],
+			["o1", null, null],
+		]);
+		const end = { type: "tool_execution_end", toolName: "read", result: "r", isError: false };
+		rig.record({ ...end, toolCallId: "u1/1" });
+		rig.record({ ...end, toolCallId: "u1" });
+		rig.toolResult("u1", "codemode", "r");
+		const settled = await rig.calls();
+		const row = (await rig.lane.readSettled(settled.root)).settledMessages.find((each) => each.role === "toolResult");
+		expect(row?.call).toMatchObject({
+			runtimeItemKey: parentKey,
+			owningMessageId: null,
+			parentKey: null,
+			nestedCalls: { calls: [{ toolCallId: "u1/1", owningMessageId: null, parentKey }], complete: true },
+		});
+		expect(settled.calls.map((entry) => entry.toolCallId)).toEqual(["o1"]);
+		rig.lane.release(live.root);
+		rig.lane.release(settled.root);
+	} finally {
+		await rig.close();
+	}
+});

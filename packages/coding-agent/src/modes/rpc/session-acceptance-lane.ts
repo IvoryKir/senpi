@@ -167,15 +167,16 @@ export class SessionAcceptanceLane {
 	accept(record: object, carrier: RecoveryCarrier | undefined, canonical?: CanonicalUnit): AcceptedRef | undefined {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
-		this.acceptCorrelation(record);
 		// The calls component folds first, at the sequence and turn this record would take: an ignored call-only record
-		// changes no component, takes no sequence, mints no turn and publishes no root (RULING-13 Q9), so the lane commits
-		// nothing before it decides.
+		// changes no component, takes no sequence, mints no turn, commits no correlation and publishes no root
+		// (RULING-13 Q9), so the lane commits nothing before it decides.
+		const correlation = this.correlationChange(record);
 		const mintsTurn = type === "turn_start" || (this.turnId === null && turnScoped(type, record));
 		const turnId = mintsTurn ? randomUUID() : this.turnId;
-		const next = this.sequence + 1;
+		const next = this.sequence + (correlation ? 2 : 1);
 		const call = CALL_RECORDS.has(type) ? this.current.foldCall(record, next, turnId) : undefined;
 		if (call && !call.changed && CALL_ONLY_RECORDS.has(type)) return undefined;
+		if (correlation) this.correlation = Object.freeze({ sequence: next - 1, ...correlation });
 		this.turnId = turnId;
 		this.sequence = next;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
@@ -284,13 +285,13 @@ export class SessionAcceptanceLane {
 	}
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
-	private acceptCorrelation(record: object): void {
+	private correlationChange(record: object): Omit<AcceptedCorrelation, "sequence"> | undefined {
 		// Within a turn, any identity-less correlated record other than turn_start (user input, an extension steer, a
 		// mid-turn session_abort, custom-role message_* records) keeps the standing correlation and gains no client identity
 		// of its own; only a new turn boundary ends it (ruling B).
 		const identified = "clientMessageId" in record || "clientTurnId" in record;
-		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
-		if (!identified && this.turnId !== null && field(record, "type") !== "turn_start") return;
+		if (!identified && (this.correlation === null || !correlatedRecord(record))) return undefined;
+		if (!identified && this.turnId !== null && field(record, "type") !== "turn_start") return undefined;
 		const next = {
 			clientMessageId: field(record, "clientMessageId"),
 			clientTurnId: field(record, "clientTurnId"),
@@ -314,8 +315,7 @@ export class SessionAcceptanceLane {
 							field(Object(identity), "clientTurnId") === field(Object(nextMessages[index]), "clientTurnId"),
 					)))
 		)
-			return;
-		this.sequence += 1;
-		this.correlation = Object.freeze({ sequence: this.sequence, ...next });
+			return undefined;
+		return next;
 	}
 }

@@ -189,8 +189,10 @@ export class CompactSessionCalls {
 		this.sequence = step.sequence;
 	}
 
+	/** An end closes the oldest call still open under its id (senpi#4278); with none open it may replace an abandoned one. */
 	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
-		const call = this.lookup(step.scope.turnId, toolCallId);
+		const turnId = step.scope.turnId;
+		const call = this.table.oldestById(toolCallId, turnId) ?? this.lookup(turnId, toolCallId);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call) && call.outcome?.kind !== "abandoned") return this.ignore("late");
 		const ended = this.table.replaceSlot(call, "result", result);

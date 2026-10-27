@@ -63,6 +63,20 @@ export class CompactCallTable {
 		return undefined;
 	}
 
+	/**
+	 * The oldest non-terminal call with this id, its own turn first (FIFO by creation, senpi#4278): when a reused id
+	 * overlaps a call still executing, each execution end closes the call it belongs to.
+	 */
+	oldestById(toolCallId: string, turnId: string | null): OutstandingCall | undefined {
+		const rank = (entry: Entry) => `${entry.call.turnId === turnId ? 0 : 1}${entry.order}`;
+		let oldest: Entry | undefined;
+		for (const key of this.byId.get(toolCallId) ?? []) {
+			const entry = this.entries.get(key);
+			if (entry && !terminal(entry.call) && (!oldest || rank(entry) < rank(oldest))) oldest = entry;
+		}
+		return oldest?.call;
+	}
+
 	*ofTurn(turnId: string): Iterable<OutstandingCall> {
 		for (const { call } of this.entries.values()) if (call.turnId === turnId) yield call;
 	}

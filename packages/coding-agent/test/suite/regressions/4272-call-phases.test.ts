@@ -211,6 +211,35 @@ it("Q9 an ignored execution end outside a turn mints no turn and leaves the lane
 	}
 });
 
+it("Q9 an ignored execution end carrying a new client identity commits no correlation and takes no sequence", async () => {
+	const rig = await callsRig();
+	try {
+		rig.record({ type: "turn_start", clientMessageId: "m1", clientTurnId: "A" });
+		rig.record({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: {} });
+		const before = rig.lane.freeze();
+		const end = { type: "tool_execution_end", toolName: "bash", result: "x", isError: false };
+		const identified = { ...end, clientMessageId: "m2", clientTurnId: "B" };
+		expect(rig.record({ ...identified, toolCallId: "ghost" })).toBeUndefined();
+		const after = rig.lane.freeze();
+		expect(before.correlation).toMatchObject({ clientMessageId: "m1", clientTurnId: "A" });
+		expect(after.sequence).toBe(before.sequence);
+		expect(after.correlation, "the ignored end committed no correlation").toBe(before.correlation);
+		const ended = rig.record({ ...identified, toolCallId: "c1" });
+		const committed = rig.lane.freeze();
+		expect(ended?.sequence, "the correlation change takes one sequence just before the real end").toBe(
+			before.sequence + 2,
+		);
+		expect(committed.correlation).toMatchObject({
+			sequence: before.sequence + 1,
+			clientMessageId: "m2",
+			clientTurnId: "B",
+		});
+		for (const root of [before, after, committed]) rig.lane.release(root);
+	} finally {
+		await rig.close();
+	}
+});
+
 it("C3.3 a duplicate execution end is late, changes nothing and takes no sequence", async () => {
 	const rig = await callsRig();
 	try {
