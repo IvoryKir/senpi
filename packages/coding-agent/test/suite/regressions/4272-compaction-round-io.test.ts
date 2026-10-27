@@ -55,7 +55,7 @@ it("packs each compaction round into one segment file and writes no node it repl
 		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
 		pause.mockRestore();
-		const before = { creates, deletes };
+		const before = { creates, deletes, allocated: index.bases.allocatedNodes };
 		store.subscribeCommitted((id) => {
 			if (current()?.built.has(id)) current().written.add(id);
 		});
@@ -87,6 +87,12 @@ it("packs each compaction round into one segment file and writes no node it repl
 		expect(peakResident, "peak resident structured bytes").toBeLessThanOrEqual(
 			(survivors + 3 * (height + 1)) * nodeBytes,
 		);
+		// RULING-47: a round builds each changed node once, so paged-node allocations stay within 1.5x the nodes
+		// that survive their round; the survivors themselves are at most the rows plus one rebuilt path per round.
+		const survived = rounds.reduce((sum, round) => sum + round.survivors, 0);
+		const allocated = index.bases.allocatedNodes - before.allocated;
+		expect(survived, "nodes surviving their round").toBeLessThanOrEqual(count + rounds.length * (height + 1));
+		expect(allocated, "paged-node allocations").toBeLessThanOrEqual(1.5 * survived);
 		const folded = { creates: creates - before.creates, deletes: deletes - before.deletes };
 		expect(folded.creates, "fold file creates").toBeLessThanOrEqual(3 * rounds.length);
 		expect(folded.deletes, "fold file deletes").toBeLessThanOrEqual(folded.creates);

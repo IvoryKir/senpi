@@ -1,4 +1,5 @@
 import type { LeafId } from "./compact-content-store.ts";
+import { CompactReadError } from "./compact-read-lease.ts";
 import { CompactSpoolStorage } from "./compact-spool-storage.ts";
 import type { CompactStorageOperation } from "./compact-storage-io.ts";
 
@@ -74,15 +75,35 @@ export abstract class CompactSegmentStorage extends CompactSpoolStorage {
 		}
 	}
 
-	/** Copies the live leaves into a new segment, then repoints their slots; the old file goes when unread. */
+	/**
+	 * Copies the live leaves into a new segment, then repoints their slots; the old file goes when unread.
+	 * Only live bytes are read (one range per adjacent run) and they count as I/O copy bytes until the end.
+	 */
 	private async rewrite(segment: CompactSegment): Promise<void> {
 		if (!this.spillAllowed || !segment.live.size) return;
 		segment.readers++;
 		let next: CompactSegment | undefined;
+		let copied = 0;
 		try {
-			const data = await this.readFile(segment.path, segment.bytes, "leaf_read");
-			const moving = [...segment.live];
-			const texts = moving.map(([, slot]) => data.toString("utf16le", slot.offset, slot.offset + slot.bytes));
+			const moving = [...segment.live].sort(([, a], [, b]) => a.offset - b.offset);
+			const texts: string[] = [];
+			for (let n = 0; n < moving.length;) {
+				const start = moving[n][1].offset;
+				let end = start;
+				const run: CompactSlot[] = [];
+				for (; n < moving.length && moving[n][1].offset === end; n++) {
+					run.push(moving[n][1]);
+					end += moving[n][1].bytes;
+				}
+				const data = await this.readFile(segment.path, end - start, "leaf_read", {
+					offset: start,
+					length: end - start,
+				});
+				this.pendingIoCopyBytes += data.byteLength;
+				copied += data.byteLength;
+				for (const slot of run)
+					texts.push(data.toString("utf16le", slot.offset - start, slot.offset - start + slot.bytes));
+			}
 			next = await this.writeSegment(texts, segment.operation);
 			let offset = 0;
 			for (const [id, slot] of moving) {
@@ -96,7 +117,11 @@ export abstract class CompactSegmentStorage extends CompactSpoolStorage {
 				}
 				offset += slot.bytes;
 			}
+		} catch (error) {
+			// Retirement during the copy is an orderly abort: the epoch directory goes with the store.
+			if (!(error instanceof CompactReadError && error.reason === "retired")) throw error;
 		} finally {
+			this.pendingIoCopyBytes -= copied;
 			segment.readers--;
 			this.settle(segment);
 			if (next) this.settle(next);
