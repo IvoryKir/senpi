@@ -72,6 +72,15 @@ def install(check, enforcing, refuse):
     urlsplit, parse_qs, unquote = capture(urlsplit), capture(parse_qs), capture(unquote)
     grants = {}
     modules = sys.modules
+    # The interpreter's own registries, never replaced: CPython's C-level import
+    # (PyImport_Import) reads the interpreter's module dict rather than the
+    # sys.modules attribute, so any substitute silently diverges from it and
+    # modules first imported afterwards become invisible to C importers.
+    # Captured here, before anything can reach a decision point, so every
+    # enforced decision can re-verify them.
+    meta_path, path_hooks = sys.meta_path, sys.path_hooks
+    registry_entries = tuple(modules.items())
+    meta_entries, path_entries = tuple(meta_path), tuple(path_hooks)
     internal = contextvars.ContextVar("senpi_operation_internal", default=False)
     engine_modules = frozenset(id(module) for module in sys.modules.values())
     import_codes = frozenset(
@@ -84,8 +93,28 @@ def install(check, enforcing, refuse):
     original_close = os.close
     original_open = builtins.open
 
-    def active():
+    def shielding():
         return False if internal.get() else enforcing()
+
+    def intact(registry, entries):
+        return len(registry) == len(entries) and all(item is entry for item, entry in zip(registry, entries))
+
+    def active():
+        # Each enforced decision re-verifies the registries: they must still be
+        # the interpreter's own objects holding their captured entries. Cells
+        # reach them only through the views below, which refuse; this also
+        # refuses the decision when a reference obtained past those views (a
+        # base descriptor such as types.ModuleType.__getattribute__) was used to
+        # tamper with one, so no checked operation proceeds on a changed registry.
+        if not shielding():
+            return False
+        if (module_getattribute(sys, "modules") is not modules
+                or module_getattribute(sys, "meta_path") is not meta_path
+                or module_getattribute(sys, "path_hooks") is not path_hooks
+                or not all(modules.get(name) is module for name, module in registry_entries)
+                or not intact(meta_path, meta_entries) or not intact(path_hooks, path_entries)):
+            refuse("import registry mutation")
+        return True
 
     def path_call(tool, path, *, dir_fd=None):
         if isinstance(path, int):
@@ -658,42 +687,16 @@ def install(check, enforcing, refuse):
         setattr(namespace, "Connection", Connection)
         setattr(namespace, "Cursor", Cursor)
 
-    def import_mutation():
-        # CPython/importlib writes its module cache while importing. Only those
-        # sealed engine code objects, never arbitrary user import hooks, may do so.
-        frame = getframe(2)
-        if frame.f_code in import_codes:
-            return
+    def registry_mutation():
+        # Import machinery writes the real registries directly, through the
+        # references it reads from an import frame. A cell only ever holds one of
+        # the views below, so reaching here means cell code is the writer.
         if active():
             refuse("import registry mutation")
-    class Modules(dict[str, object]):
-        def __setitem__(self, key, value):
-            import_mutation()
-            return super().__setitem__(key, value)
-        def __delitem__(self, key):
-            import_mutation()
-            return super().__delitem__(key)
-    class Hooks(list[object]):
-        pass
-    for name in ("clear", "pop", "popitem", "setdefault", "update", "__ior__"):
-        def mutation(original):
-            def wrapped(self, *args, **kwargs):
-                import_mutation()
-                return original(self, *args, **kwargs)
-            return wrapped
-        setattr(Modules, name, mutation(getattr(dict, name)))
-    for name in ("__setitem__", "__delitem__", "append", "extend", "insert", "pop", "remove", "clear",
-                 "reverse", "sort", "__iadd__", "__imul__"):
-        def mutation(original):
-            def wrapped(self, *args, **kwargs):
-                import_mutation()
-                return original(self, *args, **kwargs)
-            return wrapped
-        setattr(Hooks, name, mutation(getattr(list, name)))
     class Sys(types.ModuleType):
         def __getattribute__(self, name):
             value = module_getattribute(self, name)
-            if self is not sys or name not in ("modules", "meta_path", "path_hooks", "__dict__") or not active():
+            if self is not sys or name not in ("modules", "meta_path", "path_hooks", "__dict__") or not shielding():
                 return value
             # Import machinery owns the real registries. Cells get live views
             # which have no dict/list base descriptor capable of mutating them.
@@ -704,7 +707,7 @@ def install(check, enforcing, refuse):
                                       "meta_path": meta_view, "path_hooks": path_view})
             return {"modules": module_view, "meta_path": meta_view, "path_hooks": path_view}[name]
         def __setattr__(self, name, value):
-            if self is sys and name in ("modules", "meta_path", "path_hooks") and active():
+            if self is sys and name in ("modules", "meta_path", "path_hooks") and shielding():
                 refuse(f"sys.{name} replacement")
             return super().__setattr__(name, value)
     class ModuleView(MutableMapping[str, object]):
@@ -715,8 +718,10 @@ def install(check, enforcing, refuse):
         def __len__(self):
             return len(modules)
         def __setitem__(self, key, value):
+            registry_mutation()
             modules[key] = value
         def __delitem__(self, key):
+            registry_mutation()
             del modules[key]
         def copy(self):
             return dict(modules)
@@ -727,14 +732,14 @@ def install(check, enforcing, refuse):
             def __len__(self):
                 return len(hooks)
             def __setitem__(self, key, value):
+                registry_mutation()
                 hooks[key] = value
             def __delitem__(self, key):
+                registry_mutation()
                 del hooks[key]
             def insert(self, index, value):
+                registry_mutation()
                 hooks.insert(index, value)
         return HookView()
-    modules = Modules(sys.modules)
-    meta_hooks, path_hooks = Hooks(sys.meta_path), Hooks(sys.path_hooks)
-    module_view, meta_view, path_view = ModuleView(), hook_view(meta_hooks), hook_view(path_hooks)
-    sys.modules, sys.meta_path, sys.path_hooks = modules, meta_hooks, path_hooks
+    module_view, meta_view, path_view = ModuleView(), hook_view(meta_path), hook_view(path_hooks)
     setattr(sys, "__class__", Sys)
