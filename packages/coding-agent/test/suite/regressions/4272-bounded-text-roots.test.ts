@@ -38,9 +38,9 @@ it("reads exactly the size/count boundary and rejects either excess without read
 		spillTargetBytes: 0,
 		io: {
 			...control.io,
-			readFile: (path) => {
+			readFile: (path, range) => {
 				reads++;
-				return control.io.readFile(path);
+				return control.io.readFile(path, range);
 			},
 		},
 	});
@@ -119,7 +119,7 @@ it("keeps two owners across append, replacement and either release order without
 		const settled = state.freeze();
 		expect((await state.read(settled)).messages[0].blocks[0].text).toBe(body + "next");
 		state.release(settled);
-		state.accept({ type: "message_remove", messageId: "m" });
+		await state.applyCold({ type: "message_remove", messageId: "m" });
 		const [drop, keep] = reverse ? [second, first] : [first, second];
 		state.release(drop);
 		state.release(drop);

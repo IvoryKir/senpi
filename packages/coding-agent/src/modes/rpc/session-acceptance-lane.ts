@@ -41,6 +41,8 @@ export interface SessionBootstrap {
 	readonly epochSignal?: SharedArrayBuffer;
 }
 
+const RETIRED_SETTLED: SettledRoot = Object.freeze({ base: undefined, overrides: undefined });
+
 /** Recovery kinds take a sequence; responses and every other record keep FIFO order with none. */
 const SEQUENCED = new Set([
 	"agent_start",
@@ -174,8 +176,10 @@ export class SessionAcceptanceLane {
 			turnId: this.turnId,
 			correlation: this.correlation,
 			transcript: this.transcript.freeze(),
-			settled: this.settled.freeze(),
+			// A retired lane's paged settled store refuses new cuts; its root is never live or readable.
+			settled: this.retired ? RETIRED_SETTLED : this.settled.freeze(),
 		});
+		if (this.retired) return root;
 		this.rootOwners.set(root, this.settled);
 		this.live.add(root);
 		return root;

@@ -16,6 +16,8 @@ export type CompactTransition =
 			readonly type: "block_start";
 			readonly epoch: string;
 			readonly ordinal: number;
+			/** Producer-owned ordinal of this message's first block_start, stable across all its blocks. */
+			readonly firstOrdinal: number;
 			readonly kind: CompactBlockKind;
 			readonly seed: string;
 			/**
@@ -37,6 +39,7 @@ type CompactRejection =
 	| "invalid_coverage"
 	| "non_contiguous"
 	| "conflicting_overlap"
+	| "cold_operation_required"
 	| "unknown_message";
 
 export class CompactTransitionError extends Error {

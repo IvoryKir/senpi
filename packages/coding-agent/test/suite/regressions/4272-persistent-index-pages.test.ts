@@ -43,13 +43,13 @@ it("leases a page across cut release and compaction, and refuses foreign cursors
 		dir: root.dir,
 		io: {
 			...real,
-			async readFile(path) {
+			async readFile(path, range) {
 				if (hold && /[/\\]page-/.test(path)) {
 					hold = false;
 					entered.resolve(path);
 					await gate.promise;
 				}
-				return real.readFile(path);
+				return real.readFile(path, range);
 			},
 		},
 	});
@@ -118,9 +118,12 @@ it("publishes one changed page through bounded paths without copying the large b
 		pause.mockRestore();
 		index.maybeCompact();
 		await store.idle();
-		expect(index.bases.get(index.base, "00512"), "the base is compacted before the measured step").toBeDefined();
+		expect(
+			await index.bases.get(index.base, "00512"),
+			"the base is compacted before the measured step",
+		).toBeDefined();
 		const old = index.freeze();
-		const touched = index.bases.get(index.base, "00512")?.page.keys.length ?? 0;
+		const touched = (await index.bases.get(index.base, "00512"))?.page.count ?? 0;
 		const bound = 4 * touched * Math.ceil(Math.log2(count));
 		expect(touched).toBeGreaterThan(0);
 		expect(touched).toBeLessThanOrEqual(128);
@@ -132,7 +135,7 @@ it("publishes one changed page through bounded paths without copying the large b
 		// Negative control: a real full clone allocates more nodes than the permitted changed paths.
 		const clone = new CompactIndexTree<unknown>(() => undefined);
 		let copied: IndexNode<unknown> | undefined;
-		for (const [key, value] of index.bases.entries(old.base)) {
+		for await (const [key, value] of index.bases.entries(old.base)) {
 			const next = clone.set(copied, key, value);
 			clone.adjust(copied, -1, 0);
 			copied = next;
