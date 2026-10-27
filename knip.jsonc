@@ -133,8 +133,8 @@
       "packages/ai/scripts/model-shards.ts": ["providerIdOfShard"],
       // pre-existing at origin main aceb1cc1d9: unused exports anthropicRequestSkeleton
       "packages/ai/src/api/anthropic-request-shape-log.ts": ["anthropicRequestSkeleton"],
-      // pre-existing at origin main aceb1cc1d9: unused exports CHATGPT_USAGE_LIMIT_PREFIX, describeChatGptUsageLimit
-      "packages/ai/src/api/chatgpt-usage-limit.ts": ["CHATGPT_USAGE_LIMIT_PREFIX", "describeChatGptUsageLimit"],
+      // pre-existing at origin main aceb1cc1d9: unused exports CHATGPT_USAGE_LIMIT_PREFIX
+      "packages/ai/src/api/chatgpt-usage-limit.ts": ["CHATGPT_USAGE_LIMIT_PREFIX"],
       // pre-existing at origin main aceb1cc1d9: unused exports CONTEXT_SAFETY_TOKENS
       "packages/ai/src/api/context-room.ts": ["CONTEXT_SAFETY_TOKENS"],
       // pre-existing at origin main aceb1cc1d9: unused exports CURSOR_API_URL, CURSOR_CLIENT_VERSION, CURSOR_STREAM_HEALTH_FAIL_THRESHOLD_MS, CURSOR_STREAM_HEALTH_HEARTBEAT_ONLY_THRESHOLD_MS, CURSOR_TURN_END_DRAIN_TIMEOUT_MS, mapH2TransportError (+8 more)
