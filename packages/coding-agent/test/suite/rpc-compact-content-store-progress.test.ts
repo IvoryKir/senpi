@@ -76,7 +76,7 @@ describe("compact content store: failed writes and unlinks (L4, L5)", () => {
 		const { state, control, dir } = await setup();
 		settle(state, "m1", "u".repeat(LEAF));
 		await state.idle();
-		const first = control.hold("unlink");
+		const first = control.hold("unlink", (path) => /[/\\]leaf-/.test(path));
 		state.accept({ type: "message_remove", messageId: "m1" });
 		await first.entered;
 		first.fail(injected("EBUSY"));
@@ -100,10 +100,11 @@ describe("compact content store: failed writes and unlinks (L4, L5)", () => {
 		const { state } = await setup({ io });
 		settle(state, "m1", "d".repeat(17 * LEAF));
 		await state.idle();
+		const structured = state.storageStatus().structuredBytes.spilled;
 		failUnlink = true;
 		state.accept({ type: "message_remove", messageId: "m1" });
 		await state.idle();
-		expect(state.storageStatus()).toMatchObject({ reclaimDebtBytes: 17 * 65_536, spillHalted: true });
+		expect(state.storageStatus()).toMatchObject({ reclaimDebtBytes: 17 * 65_536 + structured, spillHalted: true });
 	});
 
 	it("labels a spill failure it cannot describe with its own operation and file, and reports the halt", async () => {

@@ -23,8 +23,10 @@ it("keeps a released cut's file until the held read unwinds and rejects the stal
 		io: {
 			...control.io,
 			async readFile(path) {
-				entered.resolve(path);
-				await gate.promise;
+				if (/[/\\]leaf-/.test(path)) {
+					entered.resolve(path);
+					await gate.promise;
+				}
 				return control.io.readFile(path);
 			},
 		},
