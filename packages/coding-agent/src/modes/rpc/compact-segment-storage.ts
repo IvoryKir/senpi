@@ -11,7 +11,7 @@ export interface CompactSlot {
 }
 
 /** Byte bound of every segment file, value batches and compaction-round node sets alike (RULING-54). */
-export const COMPACT_SEGMENT_BYTES = 65_536;
+const COMPACT_SEGMENT_BYTES = 65_536;
 
 /** Where one text of a flush batch landed: its segment file and its offset in it. */
 export type CompactPlacement = readonly [segment: CompactSegment, offset: number];
