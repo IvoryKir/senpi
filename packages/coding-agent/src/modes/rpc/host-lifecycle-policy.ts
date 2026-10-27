@@ -29,6 +29,7 @@ export interface HostLifecyclePolicy {
 	readonly idleExitMs: number;
 }
 
+/** @public Re-exported by the host-lifecycle.ts entry; knip ignores only this export (senpi#4421). */
 export function parseColdStart(value: string | undefined): HostColdStart | undefined {
 	return value === "transient" || value === "persistent" ? value : undefined;
 }

@@ -1386,8 +1386,6 @@
         "src/modes/rpc/host-idle-policy.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports OWNER_EXIT_GRACE_MS
         "src/modes/rpc/host-lifecycle-activity.ts": ["exports"],
-        // pre-existing at origin main aceb1cc1d9: unused export parseColdStart (entry, newly export-checked)
-        "src/modes/rpc/host-lifecycle-policy.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports CHILD_STOP_TIMEOUT_MS, childExited, waitForChildExit
         "src/modes/rpc/host-lifecycle-shutdown.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports HANDOFF_GRACE_MS_ENV, parseColdStart (entry, newly export-checked)
@@ -1628,8 +1626,6 @@
         "src/kernels/js/kernel-tools-schema.js": ["exports"],
           // pre-existing at origin main aceb1cc1d9: unused exports hostToolRefusal, hostDeniedError (run-by-path entry, newly export-checked)
           "src/kernels/js/kernel-tools-scope.d.ts": ["exports"],
-          // pre-existing at origin main aceb1cc1d9: unused export KERNEL_TOOLS_UNSUPPORTED (run-by-path entry, newly export-checked)
-          "src/kernels/js/kernel-tools-types.ts": ["exports"],
           // pre-existing at origin main aceb1cc1d9: unused export scanDrainText (run-by-path entry, newly export-checked)
           "src/kernels/js/process-drain-scan.d.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: unused exports isProcessAlive, signalProcess, readProcessTable, collectDescendants, ownedRoots

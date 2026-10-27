@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { main } from "knip";
 import { createOptions } from "knip/session";
+import { IssueCollector } from "../node_modules/knip/dist/IssueCollector.js";
 import { ProjectPrincipal } from "../node_modules/knip/dist/ProjectPrincipal.js";
 
 // The entry-export probe table, taken from knip's own resolved entries (senpi#4421).
@@ -15,12 +16,20 @@ import { ProjectPrincipal } from "../node_modules/knip/dist/ProjectPrincipal.js"
 //   "plugin"    a plugin convention whose exports knip never checks (test files, framework files)
 //   "default"   package.json entries, declaration files and plugin config files
 //   "graph"     a file found while walking imports (worker URLs, spawned fixtures, import globs)
-// The table is every "entry" and "resolved" file: knip must export-check each of them.
+// The table is every "entry" and "resolved" file: knip must export-check each of them. `exportsIgnored` is knip's own
+// IssueCollector#shouldIgnoreIssue(file, "exports") under the same config: a file-level baseline ignore hides every
+// export issue in that file, so a probe there cannot be reported.
 
 export async function knipEntryTable(cwd) {
 	const kinds = new Map();
 	const proto = ProjectPrincipal.prototype;
 	const original = { addEntryPath: proto.addEntryPath, addEntryPaths: proto.addEntryPaths, init: proto.init };
+	const originalSetIgnoreIssues = IssueCollector.prototype.setIgnoreIssues;
+	let collector;
+	IssueCollector.prototype.setIgnoreIssues = function (ignoreIssues) {
+		collector = this;
+		return originalSetIgnoreIssues.call(this, ignoreIssues);
+	};
 	let batch;
 	let phase = "resolved";
 	let principal;
@@ -50,11 +59,13 @@ export async function knipEntryTable(cwd) {
 		results = await main(await createOptions({ cwd, args: {} }));
 	} finally {
 		Object.assign(proto, original);
+		IssueCollector.prototype.setIgnoreIssues = originalSetIgnoreIssues;
 	}
 	const entries = [...kinds].map(([file, set]) => ({
 		file,
 		kinds: [...set].sort(),
 		exportsAnalyzed: !principal.skipExportsAnalysis.has(`${cwd}/${file}`),
+		exportsIgnored: collector.shouldIgnoreIssue(file, "exports"),
 	}));
 	const table = entries.filter(({ kinds }) => kinds.includes("entry") || kinds.includes("resolved"));
 	return { table: table.sort((a, b) => a.file.localeCompare(b.file)), entries, workspaceDirs: results.includedWorkspaceDirs.map((dir) => relative(cwd, dir) || ".") };
