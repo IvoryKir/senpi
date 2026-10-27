@@ -1,6 +1,7 @@
 import { AgentBusyError } from "../../core/agent-busy-error.ts";
 import type { AgentSession, PromptDisposition, PromptOptions } from "../../core/agent-session.ts";
 import { clientMessageIdentity } from "../../core/client-message-identity.ts";
+import { ModelNotReadyError } from "../../core/model-not-ready-error.ts";
 import { UNKNOWN_COMMAND_CONFIRM_HINT, UnknownCommandError } from "../../core/unknown-command.ts";
 import {
 	type ClientMessageAdmission,
@@ -147,6 +148,12 @@ export async function handleClientInput(
 					: String(error),
 			...(error instanceof ClientMessageIdConflict || error instanceof AgentBusyError
 				? { errorCode: error.code }
+				: {}),
+			...(error instanceof ModelNotReadyError
+				? {
+						errorCode: error.code,
+						...(error.provider === undefined ? {} : { errorData: { provider: error.provider } }),
+					}
 				: {}),
 			...(unknownCommand
 				? {
