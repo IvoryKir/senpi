@@ -83,11 +83,11 @@ export class CompactComponentRoots<T extends object> {
 		if (known) return known;
 		const left = node.left && this.project(node.left, created);
 		const right = node.right && this.project(node.right, created);
-		const key = this.values.own(node.key);
+		// Component keys are fixed-width ordinals; unchanged path keys need no new value owner.
+		const key: ValueRef = { node: 0, owner: 0, value: node.key };
 		const page = this.store.createLeaf(JSON.stringify({ key, value: node.value.ref, left, right }), true);
 		const owner = this.store.text.own([page, key.owner, node.value.owner, left?.owner ?? 0, right?.owner ?? 0]);
 		this.store.adjust(page, -1, 0);
-		this.store.adjust(key.owner, -1, 0);
 		const ref = { node: page, owner };
 		this.refs.set(node, ref);
 		created.push(ref);
