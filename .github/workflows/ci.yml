@@ -890,6 +890,21 @@ jobs:
             ' "$report"
           done
         working-directory: packages/coding-agent
+
+      # Whether the bundled CLI runs a .cmd BROWSER helper decides the Windows default sign-in method; a skipped
+      # test must fail the job, not pass it.
+      - name: Run Claude CLI BROWSER=<.cmd> sign-in test
+        shell: bash
+        run: |
+          node ../../scripts/run-tests.mjs vitest run test/anthropic-subscription-claude-cli-auth-windows.test.ts --reporter=default --reporter=json --outputFile=vitest-cli-auth.json
+          node -e '
+            const r = JSON.parse(require("fs").readFileSync("vitest-cli-auth.json", "utf8"));
+            const file = r.testResults.find((t) => t.name.replace(/\\/g, "/").endsWith("anthropic-subscription-claude-cli-auth-windows.test.ts"));
+            const passed = file ? file.assertionResults.filter((a) => a.status === "passed").length : 0;
+            console.log("claude cli BROWSER .cmd test passed=" + passed);
+            if (passed === 0) process.exit(1);
+          '
+        working-directory: packages/coding-agent
       - name: Check OS temp after tests
         if: always() && steps.test_temp_snapshot.outcome == 'success'
         shell: bash
