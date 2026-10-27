@@ -77,6 +77,7 @@ it.each([
 it.each([
 	{ rules: "external_directory:*=deny", nested: false, denied: false },
 	{ rules: "external_directory:*=deny", nested: true, denied: true },
+	// Deliberate no-deny controls: they pin that the cwd row never refuses without a rule; they cannot detect a cwd regression.
 	{ rules: "", nested: false, denied: false },
 	{ rules: "", nested: true, denied: false },
 ])(
@@ -233,7 +234,7 @@ it.each([
 	{ rules: "", next: "read:*=deny", preset: "full-access" },
 	{ rules: "read:*=deny", next: "", preset: "full-access" },
 	{ rules: "read:*=deny", next: "read:secret.txt=deny", preset: "full-access" },
-	{ rules: "", next: "bash:git *=allow", preset: "full-access" },
+	{ rules: "", next: "bash:git *=deny", preset: "full-access" },
 	{ rules: "", next: "", preset: "invalid" },
 ])("keeps retired state stable: $rules -> $next / $preset", async ({ rules, next, preset }) => {
 	const fx = await fixture(rules);
