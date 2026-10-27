@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
-import type { CellPermissionState } from "../../src/kernels/js/kernel-contract.ts";
+import type { CellDecider, CellPermissionState } from "../../src/kernels/js/kernel-contract.ts";
 
 const root = mkdtempSync(join(tmpdir(), "permission-module-surface-"));
 const failures: string[] = [];
@@ -16,8 +16,14 @@ const native = process.getBuiltinModule("node:worker_threads");
 const nativeKeys = Object.keys(native).sort().join(",");
 
 // isMainThread is read by type, not by value: a cell runs on a worker thread and this driver does not.
+// The constructor is proven native by behaviour, since only the engine's own Worker takes eval:true
+// and is an emitter with a numeric threadId; a typeof check passes for any stand-in.
 const surface = `const wt=require("node:worker_threads");
-return JSON.stringify([typeof wt.Worker, typeof wt.isMainThread, typeof wt.receiveMessageOnPort, Object.keys(wt).sort().join(",")]);`;
+const w=new wt.Worker("require('node:worker_threads').parentPort.postMessage(42)",{eval:true});
+const answer=await new Promise((resolve)=>w.once("message",resolve));
+const threadId=typeof w.threadId;
+await w.terminate();
+return JSON.stringify([answer, threadId, typeof wt.isMainThread, typeof wt.receiveMessageOnPort, Object.keys(wt).sort().join(",")]);`;
 const reduced = `const wt=require("node:worker_threads");
 return JSON.stringify([wt.Worker===undefined, wt.parentPort===undefined, wt.workerData===undefined, wt.MessageChannel===globalThis.MessageChannel]);`;
 const imported = `try{await import("node:worker_threads");return "loaded";}catch(error){return error?.code ?? error?.name ?? "none";}`;
@@ -31,7 +37,13 @@ const states: { readonly row: string; readonly state?: CellPermissionState }[] =
 	},
 ];
 
-async function run(state: CellPermissionState | undefined, code: string): Promise<string> {
+const writeDeny = { permission: "write", pattern: "*", layer: "user" } as const;
+
+async function run(
+	state: CellPermissionState | undefined,
+	code: string,
+	decide: CellDecider = () => ({ action: "pass" }),
+): Promise<string> {
 	const dir = mkdtempSync(join(root, "row-"));
 	const kernel = new JavaScriptKernel({
 		sessionId: crypto.randomUUID(),
@@ -42,7 +54,7 @@ async function run(state: CellPermissionState | undefined, code: string): Promis
 					permissions: {
 						checkDeadlineMs: 120_000,
 						state: () => state,
-						decide: () => ({ action: "pass" as const }),
+						decide,
 					},
 				}
 			: {}),
@@ -65,28 +77,49 @@ const expect = async (row: string, actual: Promise<string>, want: string) => {
 };
 
 // A cell's own worker reaches its own workerData and parentPort through this module (#4387), and the
-// constructor it finds there is the guarded one, so it cannot start a worker this kernel never
-// interposed. Enforcement is on for this row, because that is where both used to break.
+// constructor it finds there, by require and by import, is the guarded one: a grandchild it starts
+// is still refused a write the rule denies. Enforcement is on for this row, because that is where
+// these used to break. Deleting the constructor must not hand the raw one back either.
 async function userWorkerView(): Promise<string> {
 	const dir = mkdtempSync(join(root, "user-worker-"));
+	const denied = join(dir, "denied.txt");
+	const grandchild = join(dir, "grandchild.js");
+	writeFileSync(grandchild, `require("node:fs").writeFileSync(${JSON.stringify(denied)}, "x"); postMessage("wrote");`);
 	const child = join(dir, "child.mjs");
 	writeFileSync(
 		child,
 		`const wt = require("node:worker_threads");
-postMessage({ data: wt.workerData, guarded: wt.Worker === globalThis.Worker, port: wt.parentPort !== undefined });`,
+const ns = await import("node:worker_threads");
+let grandchild;
+try {
+	const w = new ns.Worker(${JSON.stringify(grandchild)});
+	grandchild = await new Promise((resolve) => { w.onmessage = (event) => resolve(event.data); w.onerror = (event) => resolve(event.message); });
+	w.terminate();
+} catch (error) { grandchild = error?.code ?? error?.name; }
+let deleted;
+try { deleted = delete wt.Worker; } catch { deleted = false; }
+postMessage({ data: ns.workerData, port: ns.parentPort !== undefined, required: wt.Worker === globalThis.Worker,
+	imported: ns.Worker === globalThis.Worker, grandchild, deleted, kept: require("node:worker_threads").Worker === globalThis.Worker });`,
 	);
+	const deny: CellDecider = (_token, call) =>
+		call.input.path === denied ? { action: "deny", rule: writeDeny } : { action: "pass" };
 	return await run(
 		{ epoch: 1, active: true, rules: [{ permission: "write", pattern: "*", layer: "user" }] },
 		`const child=new Worker(${JSON.stringify(pathToFileURL(child).href)},{workerData:"payload"});
 try{
 	const reply=await new Promise((resolve,reject)=>{child.onmessage=(event)=>resolve(event.data);child.onerror=(event)=>reject(new Error(event.message));});
-	return JSON.stringify([reply.data, reply.guarded, reply.port]);
+	return JSON.stringify([reply.data, reply.port, reply.required, reply.imported, reply.grandchild, reply.deleted, reply.kept]);
 }finally{child.terminate();}`,
+		deny,
 	);
 }
 
 try {
-	await expect("user worker/own view", userWorkerView(), JSON.stringify(["payload", true, true]));
+	await expect(
+		"user worker/own view",
+		userWorkerView(),
+		JSON.stringify(["payload", true, true, true, "cell_permission_denied", false, true]),
+	);
 	for (const { row, state } of states) {
 		const enforced = state?.active === true;
 		if (enforced) {
@@ -99,7 +132,7 @@ try {
 			await expect(
 				`${row}/require`,
 				run(state, surface),
-				JSON.stringify(["function", "boolean", "function", nativeKeys]),
+				JSON.stringify([42, "number", "boolean", "function", nativeKeys]),
 			);
 			await expect(`${row}/import`, run(state, imported), "loaded");
 		}
