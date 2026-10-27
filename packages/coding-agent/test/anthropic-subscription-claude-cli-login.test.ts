@@ -77,9 +77,9 @@ describe("claude auth login through the CLI (fixture 2.1.306 shapes)", () => {
 		const login = startClaudeCliLogin(
 			options({
 				onManualUrl: () => {
-					expect(
-						login.submitCode("https://platform.claude.com/oauth/code/callback?code=abc123&state=st456"),
-					).toBe(true);
+					expect(login.submitCode("https://platform.claude.com/oauth/code/callback?code=abc123&state=st456")).toBe(
+						true,
+					);
 				},
 			}),
 		);
