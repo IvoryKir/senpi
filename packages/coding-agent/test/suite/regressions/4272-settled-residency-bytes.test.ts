@@ -34,7 +34,6 @@ it("item 9 residency: each settled message keeps two id keys of constant size, s
 			}),
 		);
 		expect([...perMessage], "id code units resident per settled message (one byte each, ASCII)").toEqual([66]);
-		expect([10_000, 100_000].map((count) => count * 66)).toEqual([660_000, 6_600_000]);
 	} finally {
 		await rig.close();
 	}

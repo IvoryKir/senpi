@@ -76,8 +76,9 @@ async function views(client: RawClient, sessionId: string, lane: SessionAcceptan
 
 // senpi#4272 RULING-48 (2): edit_user_message and edit_assistant_message append an edited copy compact state never
 // installs (it has no recovery owner). After a crash and a reopen from the transcript, the edited copies are still what
-// the session shows, and compact state holds no message the user does not see (no pre-edit original), so not
-// reinstalling the copies hides nothing.
+// the session shows. Before the crash compact state holds only messages the session shows (no pre-edit original).
+// After recovery the fresh host's compact state starts empty for its new epoch (nothing is reinstalled), so what the
+// user sees comes from the transcript alone and compact state cannot hide or contradict any of it.
 it("RULING-48 (2) edited user and assistant copies survive crash recovery from the transcript; compact state hides none", async () => {
 	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
 	await using recovered = await statusHost();
@@ -144,10 +145,10 @@ it("RULING-48 (2) edited user and assistant copies survive crash recovery from t
 	);
 	expect(after.path.indexOf(editedAssistant)).toBeLessThan(after.path.indexOf(editedUser));
 	expect(after.path.slice(0, before.path.length), "recovery only extends the pre-crash path").toEqual(before.path);
-	for (const message of after.compact)
-		expect(after.shown.map(said), "recovered compact state hides or contradicts nothing shown").toContain(
-			said(message),
-		);
 	for (const text of ["a-one", "u-three"])
-		expect(holds(after.compact, text), `no pre-edit original in compact state: ${text}`).toBe(false);
+		expect(holds(before.compact, text), `no pre-edit original in compact state: ${text}`).toBe(false);
+	expect(
+		after.compact,
+		"the recovered epoch's compact state starts empty: nothing reinstalled, nothing hidden",
+	).toEqual([]);
 }, 120_000);
