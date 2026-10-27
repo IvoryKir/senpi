@@ -39,6 +39,7 @@ export class KernelPermissionHost {
 	readonly #runs = new Map<string, CellAuthorityToken>();
 	readonly #invocations = new Map<string, CellAuthorityToken>();
 	readonly #invokerBindings = new Map<string, number>();
+	readonly #retained = new Map<string, Set<CellAuthorityToken>>();
 	readonly #pools = new Set<SharedArrayBuffer>();
 	readonly #ports = new Set<MessagePort>();
 	readonly #children = new Map<Worker, Promise<void>>();
@@ -149,6 +150,7 @@ export class KernelPermissionHost {
 				if (message.type === "interrupt") this.#release(token);
 				else this.#kill(token);
 			}
+			if (message.type === "close") this.#endRetained();
 			for (const pool of this.#pools) interruptPermissionSlots(pool);
 		}
 		return token ? { ...message, authority: this.wireToken(token) } : message;
@@ -166,14 +168,46 @@ export class KernelPermissionHost {
 		// Settled no-deny work keeps its async resources; the kernel word still revokes them. A live inactive
 		// token also keeps its invoker binding, so that session's revocation reaches the work until the worker retires.
 		const word = Atomics.load(new Int32Array(token.authority), 0);
-		if (word & 2 && !(word & 1)) return;
+		if (word & 2 && !(word & 1)) {
+			if (this.#invokerBindings.has(token.sessionId)) {
+				const held = this.#retained.get(token.sessionId) ?? new Set<CellAuthorityToken>();
+				held.add(token);
+				this.#retained.set(token.sessionId, held);
+			}
+			this.#sweepRetained(token.sessionId);
+			return;
+		}
 		this.#kill(token);
-		const count = this.#invokerBindings.get(token.sessionId);
+		this.#unbind(token.sessionId);
+	}
+
+	/** A retained continuation holds its own binding, and gives it back as soon as that token is dead. */
+	#sweepRetained(sessionId: string): void {
+		const held = this.#retained.get(sessionId);
+		if (!held) return;
+		for (const token of held) {
+			if (Atomics.load(new Int32Array(token.authority), 0) & 2) continue;
+			held.delete(token);
+			this.#unbind(sessionId);
+		}
+		if (held.size === 0) this.#retained.delete(sessionId);
+	}
+
+	/** Closing the kernel ends every continuation it was still holding open for an invoker. */
+	#endRetained(): void {
+		for (const [sessionId, held] of this.#retained) {
+			for (const token of held) this.#kill(token);
+			this.#sweepRetained(sessionId);
+		}
+	}
+
+	#unbind(sessionId: string): void {
+		const count = this.#invokerBindings.get(sessionId);
 		if (count === undefined) return;
-		if (count > 1) this.#invokerBindings.set(token.sessionId, count - 1);
+		if (count > 1) this.#invokerBindings.set(sessionId, count - 1);
 		else {
-			this.#invokerBindings.delete(token.sessionId);
-			unregisterPermissionKernel(token.sessionId, this);
+			this.#invokerBindings.delete(sessionId);
+			unregisterPermissionKernel(sessionId, this);
 		}
 	}
 
@@ -181,6 +215,7 @@ export class KernelPermissionHost {
 	#unbindInvokers(): void {
 		for (const sessionId of this.#invokerBindings.keys()) unregisterPermissionKernel(sessionId, this);
 		this.#invokerBindings.clear();
+		this.#retained.clear();
 	}
 
 	#kill(token: CellAuthorityToken): void {
