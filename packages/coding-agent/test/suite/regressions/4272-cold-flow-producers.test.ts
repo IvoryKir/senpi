@@ -10,9 +10,9 @@ afterEach(() => {
 });
 
 // senpi#4272 RULING-33 condition 2 (S03b-3b): the four cold flows come from the session manager's own committed
-// transcript changes, in order after acceptance: a context edit replaces, a removing context edit deletes, a compaction
+// transcript changes, in order after acceptance: a context edit replaces, a context edit with no replacement removes (context_edit_removal), a compaction
 // removes everything before its first kept entry, and a leaf move removes what left the path and reinstalls what joined it.
-it("RULING-33 cond. 2 real producers drive edit, user delete, compaction removal and branch into compact state", async () => {
+it("RULING-33 cond. 2 real producers drive edit, context-edit removal, compaction removal and branch into compact state", async () => {
 	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
 	await using host = await statusHost();
 	const admissions = vi.spyOn(RpcSessionRegistry.prototype, "getForCommand");

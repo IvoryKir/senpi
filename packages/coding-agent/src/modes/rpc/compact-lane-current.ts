@@ -35,7 +35,7 @@ export class CompactLaneCurrent {
 
 	/**
 	 * The cold work of one accepted transcript transition: an owned append makes its message appended, and the flow a
-	 * real producer committed (edit, user delete, compaction, branch) maps through this epoch's settled joins.
+	 * real producer committed (edit, context-edit removal, compaction, branch) maps through this epoch's settled joins.
 	 */
 	transcript(transition: TranscriptTransition, settled: CompactSettledMessages, epoch: string): void {
 		if (transition.kind === "append" && transition.owningMessageId && transition.recoveryEpoch === epoch)

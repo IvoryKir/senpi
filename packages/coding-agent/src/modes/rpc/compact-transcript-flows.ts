@@ -15,12 +15,12 @@ export async function compactColdFlow(
 		(await messagesOf(entryIds)).filter((messageId) => messageId !== undefined);
 	switch (flow.kind) {
 		case "edit":
-		case "delete": {
+		case "context_edit_removal": {
 			const [messageId] = await messagesOf([flow.targetId]);
 			if (messageId === undefined) return undefined;
 			return flow.kind === "edit"
 				? { type: "edit", messageId, message: flow.message }
-				: { type: "user_delete", messageId };
+				: { type: "context_edit_removal", messageId };
 		}
 		case "compaction":
 			return { type: "compaction", removed: await known(flow.removedIds) };

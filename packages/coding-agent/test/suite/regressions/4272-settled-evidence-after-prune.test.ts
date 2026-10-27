@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { RecoveryCarrier } from "../../../src/core/session-recovery-identity.ts";
+import { type RecoveryCarrier, recoveryCarrier } from "../../../src/core/session-recovery-identity.ts";
 import { settledRig } from "./4272-settled-support.ts";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -73,6 +73,36 @@ it("a second owned append after settle is a conflicting_owner and never rewrites
 		const cut = await rig.cut();
 		expect(cut.owners).toEqual([settled.owner]);
 		expect(await rig.lane.readSettled(cut.root)).toEqual({ settledMessages: [], owners: [settled.owner] });
+	} finally {
+		await rig.close();
+	}
+});
+
+// senpi#4460 delta LOW-2: a message joined by its owned append before its end must not settle on an end that names
+// another durable entry; the mismatch is a conflicting_owner, not a silent settle against the first entry.
+it("a message_end naming another entry than the message's owned append is a conflicting_owner and never settles", async () => {
+	vi.stubEnv("SENPI_ENGINE_SOCKET_COMPACT_UPDATES", "1");
+	const rig = await settledRig();
+	try {
+		const record = endOf("first");
+		rig.producer.observe(record);
+		const carrier = recoveryCarrier(record);
+		if (!carrier) throw new Error("producer failed to mint");
+		rig.manager.appendOwnedMessage({ role: "user", content: "first", timestamp: 1 }, { recoveryOwner: carrier });
+		const [append] = rig.manager.drainTranscript();
+		if (append?.kind !== "append") throw new Error("no owned append");
+		rig.lane.applyTranscript([append]);
+		rig.lane.accept(record, { ...carrier, durableEntryId: "another-entry" });
+		expect(rig.diagnostics).toEqual(["conflicting_owner"]);
+		rig.lane.accept(record, { ...carrier, durableEntryId: append.id });
+		expect(rig.diagnostics, "the rejected end did not settle it, so its real end does").toEqual([
+			"conflicting_owner",
+		]);
+		rig.lane.accept(record, carrier);
+		expect(rig.diagnostics).toEqual(["conflicting_owner", "duplicate_end"]);
+		const cut = await rig.cut();
+		expect(cut.owners).toEqual([{ kind: "owner", messageId: carrier.messageId, entryId: append.id }]);
+		expect(cut.settledMessages).toEqual([]);
 	} finally {
 		await rig.close();
 	}

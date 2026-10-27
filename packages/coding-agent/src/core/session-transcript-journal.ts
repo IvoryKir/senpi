@@ -35,7 +35,7 @@ export interface TranscriptPersistence {
  */
 export type TranscriptFlow =
 	| { readonly kind: "edit"; readonly targetId: string; readonly message: AgentMessage }
-	| { readonly kind: "delete"; readonly targetId: string }
+	| { readonly kind: "context_edit_removal"; readonly targetId: string }
 	| { readonly kind: "compaction"; readonly removedIds: readonly string[] }
 	| {
 			readonly kind: "branch";

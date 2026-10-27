@@ -45,7 +45,9 @@ export class CompactSettledMessages {
 	 * Resident membership: one state key per message (`end:` ended but unjoined, `owner:` -> entry id joined before its
 	 * end, `settled:` -> entry id both), `terminal:` per pending terminal row and `entry:` per joined entry. Settling a
 	 * message folds its end marker into its join and drops its terminal row, so what a settled message keeps resident is
-	 * exactly the two id-sized facts the duplicate-end and conflicting-owner checks need (carried item 9, senpi#4460).
+	 * exactly the two id-sized facts the duplicate-end and conflicting-owner checks need (carried item 9, senpi#4460):
+	 * residency is O(settled messages) per epoch, two id keys per message, payloads zero. Bounding it independently of
+	 * message count needs a paged synchronous membership filter, carried to S08/S11 (RULING-48 item 9).
 	 */
 	private readonly keys = new Map<string, string>();
 	private readonly epoch: string;
@@ -67,8 +69,11 @@ export class CompactSettledMessages {
 		if (!this.valid(carrier)) return this.reject("unknown_message");
 		const id = carrier.messageId;
 		if (this.keys.has(`end:${id}`) || this.keys.has(`settled:${id}`)) return this.reject("duplicate_end");
+		const owned = this.keys.get(`owner:${id}`);
+		if (carrier.durableEntryId && owned !== undefined && owned !== carrier.durableEntryId)
+			return this.reject("conflicting_owner");
 		let joined = false;
-		if (carrier.durableEntryId && !this.keys.has(`owner:${id}`)) {
+		if (carrier.durableEntryId && owned === undefined) {
 			if (this.keys.has(`entry:${carrier.durableEntryId}`)) return this.reject("conflicting_owner");
 			this.join(id, carrier.durableEntryId);
 			joined = true;
