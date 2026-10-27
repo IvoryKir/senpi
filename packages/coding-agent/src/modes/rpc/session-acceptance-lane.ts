@@ -78,6 +78,7 @@ export class SessionAcceptanceLane {
 	private correlation: AcceptedCorrelation | null = null;
 	private readonly live = new Set<FrozenAcceptedRoot>();
 	private retiredAs: "close" | "worker_failed" | undefined;
+	private storageRetired = false;
 	private nonce: string = randomUUID();
 	private settled!: CompactSettledMessages;
 	private readonly rootOwners = new WeakMap<FrozenAcceptedRoot, CompactSettledMessages>();
@@ -221,31 +222,37 @@ export class SessionAcceptanceLane {
 		if (!this.live.delete(root)) return;
 		this.rootOwners.get(root)?.release(root.settled);
 		this.current.release(root.current);
+		if (this.retired) this.retireStorage();
+	}
+
+	/** True while `root` is readable: published by this lane and not released, by its holder or a retirement. */
+	holds(root: FrozenAcceptedRoot): boolean {
+		return this.live.has(root);
 	}
 
 	readCurrent(root: FrozenAcceptedRoot) {
-		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		if (!this.live.has(root)) throw new Error("accepted root released");
 		return this.current.read(root.current);
 	}
 
 	readCurrentComponents(root: FrozenAcceptedRoot) {
-		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		if (!this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readComponents(root.current);
 	}
 
 	readCurrentActive(root: FrozenAcceptedRoot) {
-		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		if (!this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readActive(root.current);
 	}
 
 	readCurrentCalls(root: FrozenAcceptedRoot) {
-		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		if (!this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readCalls(root.current);
 	}
 
 	readSettled(root: FrozenAcceptedRoot) {
 		const owner = this.rootOwners.get(root);
-		if (this.retired || !owner || !this.live.has(root)) throw new Error("accepted root released");
+		if (!owner || !this.live.has(root)) throw new Error("accepted root released");
 		return owner.read(root.settled);
 	}
 
@@ -267,9 +274,20 @@ export class SessionAcceptanceLane {
 		void this.cleanup.catch(() => this.diagnose("retired_owner"));
 	}
 
-	/** No record is accepted after retirement, and every root this lane published is released. */
-	retire(reason: "close" | "worker_failed"): void {
+	/**
+	 * No record is accepted after retirement, and every root this lane published is released except those in `keep`:
+	 * a legacy view still queued at a seal reads its root to the end (RULING-51 Q2=A), and the lane's storage retires
+	 * with the last such release. A root never published by this lane is not kept.
+	 */
+	retire(reason: "close" | "worker_failed", keep: ReadonlySet<FrozenAcceptedRoot> = new Set()): void {
 		this.retiredAs ??= reason;
+		for (const root of this.live) if (!keep.has(root)) this.release(root);
+		this.retireStorage();
+	}
+
+	private retireStorage(): void {
+		if (this.storageRetired || this.live.size > 0) return;
+		this.storageRetired = true;
 		if (this.settled) this.retireSettled();
 		this.current.retire();
 	}

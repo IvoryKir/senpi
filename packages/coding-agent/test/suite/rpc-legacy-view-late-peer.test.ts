@@ -2,10 +2,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SessionAcceptanceLane } from "../../src/modes/rpc/session-acceptance-lane.ts";
 import { SessionEventWriter } from "../../src/modes/rpc/session-event-writer.ts";
 import { EVENT_RESYNC_CAPABILITY } from "../../src/modes/rpc/socket-peer-recovery.ts";
+import { LaneProducer } from "./regressions/4272-legacy-view-support.ts";
 
 // Part of #4272 (S07a, RULING-51 Q2=A Q3=A): a seal never cancels a queued attach baseline, and nothing of the sealed
 // session follows its session_closed; a session attached after a shed gets its own baseline behind the recovery
-// barrier, byte for byte the baseline a fresh peer gets for the same state.
+// barrier, byte for byte the baseline a fresh peer gets for the same state. A lane-owned session's baseline is read
+// from its frozen compact view (S07b), so the seal keeps that root readable until the queued view is delivered.
 
 afterEach(() => {
 	vi.unstubAllEnvs();
@@ -75,17 +77,30 @@ it.each([
 		const peer = heldPeer(writer, "peer");
 		writer.attachConnectionToSession("peer", "other");
 		// Given: the transport is held on an earlier record, so the attach baseline of `s` is still queued at the seal.
+		// A lane-owned session's records reach its lane first, as the binding feeds them; its frozen view rebuilds the
+		// open text block as its start plus the prefix. Without a lane the writer retains today's records.
 		writer.enqueue("other", { type: "message_start", message: { role: "assistant", content: [] } });
-		writer.enqueue("s", { type: "message_start", message: { role: "assistant", content: [] } });
-		writer.enqueue("s", delta("one"));
+		const producer = new LaneProducer(writer, lane, "s");
+		const message = { role: "assistant", content: [] };
+		if (withLane) {
+			producer.assistant({ type: "message_start", message }, { type: "message_start", message });
+			producer.blockStart("text", 0);
+			producer.blockDelta("text", 0, "one", 0);
+		} else {
+			writer.enqueue("s", { type: "message_start", message });
+			writer.enqueue("s", delta("one"));
+		}
 		writer.attachConnectionToSession("peer", "s");
-		writer.enqueue("s", delta("two"));
+		if (withLane) producer.blockDelta("text", 0, "two", 3);
+		else writer.enqueue("s", delta("two"));
 		expect(writer.openLegacyViews, "the queued baseline").toBe(1);
 		expect(lane.liveRoots, "the attach pinned the root only when a lane is registered").toBe(withLane ? 1 : 0);
 		// When: another client closes the session before a byte of the baseline is written; then the session keeps producing.
 		writer.withConnection("closer", () =>
 			writer.closeSession("s", { type: "response", command: "close_session", success: true }, "client_close"),
 		);
+		expect(lane.retired, "the seal retired the lane").toBe(withLane);
+		expect(lane.liveRoots, "the queued view keeps its root past the seal").toBe(withLane ? 1 : 0);
 		expect(writer.enqueue("s", delta("late")), "a late record of the sealed session").toBe(false);
 		writer.publishLoadedSurfacesChanged("s", undefined, "digest");
 		writer.enqueue("other", delta("sibling"));
@@ -95,6 +110,7 @@ it.each([
 		expect(shape(peer.lines)).toEqual([
 			"other:message_start",
 			"s:message_start",
+			...(withLane ? ["s:message_update"] : []),
 			"s:one",
 			"s:two",
 			"s:session_closed",
@@ -108,6 +124,8 @@ it.each([
 		expect(writer.openLegacyViews, "open views after the delivery").toBe(0);
 		writer.unregisterConnection("peer");
 		writer.unregisterConnection("closer");
+		lane.retire("close");
+		await lane.idle();
 	},
 );
 
