@@ -64,7 +64,10 @@ export class CompactSessionCalls {
 		return this.table.get(key);
 	}
 
-	/** `toolcall_start`: a bridge-started call joins by id; an owned slot with the same id is a collision. */
+	/**
+	 * `toolcall_start`: a bridge-started call joins by id and, like a fresh one, reads its raw prefix through the active
+	 * block until its end (C3 cond. 3); an owned slot with the same id is a collision.
+	 */
 	toolStart(step: CallStep, block: AnnouncedBlock): void {
 		const turnId = step.scope.turnId;
 		if (turnId === null) return;
@@ -75,6 +78,7 @@ export class CompactSessionCalls {
 			owningMessageId: block.messageId,
 			contentIndex: block.contentIndex,
 			seed: block.arguments,
+			raw,
 			...(block.correlation ? { correlation: block.correlation } : {}),
 		};
 		if (existing && existing.owningMessageId === null) {
@@ -88,7 +92,6 @@ export class CompactSessionCalls {
 			phase: "streaming",
 			requestedName: block.name || null,
 			resolvedName: block.resolvedName ?? null,
-			raw,
 			...fields,
 		});
 	}

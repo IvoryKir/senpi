@@ -168,13 +168,15 @@ export class SessionAcceptanceLane {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
 		this.acceptCorrelation(record);
-		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
-		const turnId = this.turnId;
-		// The calls component folds first, at the sequence this record would take: an ignored call-only record changes no
-		// component, takes no sequence and publishes no root (RULING-13 Q9), so the lane commits nothing before it decides.
+		// The calls component folds first, at the sequence and turn this record would take: an ignored call-only record
+		// changes no component, takes no sequence, mints no turn and publishes no root (RULING-13 Q9), so the lane commits
+		// nothing before it decides.
+		const mintsTurn = type === "turn_start" || (this.turnId === null && turnScoped(type, record));
+		const turnId = mintsTurn ? randomUUID() : this.turnId;
 		const next = this.sequence + 1;
 		const call = CALL_RECORDS.has(type) ? this.current.foldCall(record, next, turnId) : undefined;
 		if (call && !call.changed && CALL_ONLY_RECORDS.has(type)) return undefined;
+		this.turnId = turnId;
 		this.sequence = next;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
