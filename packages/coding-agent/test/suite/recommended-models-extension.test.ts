@@ -218,6 +218,21 @@ describe("recommended-models builtin", () => {
 		expect(RECOMMENDED_DEFAULT_MODELS.map(([modelId]) => modelId)).not.toContain("kimi-k3");
 	});
 
+	it("#given a recommendedModels override naming kimi code k3 #when a session starts #then the k3 alias and the -ultrafast suffix still canonicalize to kimi-k3", async () => {
+		const k3 = model("k3", "kimi-coding");
+		const harness = createHarness({
+			active: model("off-list"),
+			available: [k3],
+			settings: { recommendedModels: ["k3"] },
+		});
+
+		await harness.start("first-available");
+
+		expect(harness.getActiveModel()).toBe(k3);
+		expect(canonicalModelId("kimi-k3-ultrafast")).toBe("kimi-k3");
+		expect(canonicalModelId("k3")).toBe("kimi-k3");
+	});
+
 	it("#given cli or scoped provenance #when an off-list model starts #then it never switches or persists", async () => {
 		for (const provenance of ["cli", "scoped"] as const) {
 			const harness = createHarness({ active: model("off-list"), available: [model("k3.1-pro", "kimi-coding")] });
