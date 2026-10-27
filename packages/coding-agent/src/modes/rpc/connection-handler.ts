@@ -2023,13 +2023,17 @@ export function createRpcConnectionHandler(
 				const modelRegistry = session.modelRegistry;
 				const oauthInfos = buildLoginProviderInfos(modelRegistry, "oauth");
 				const apiKeyInfos = buildLoginProviderInfos(modelRegistry, "api_key");
-				const providers: RpcAuthProvider[] = [...oauthInfos, ...apiKeyInfos].map((info) => ({
-					id: info.id,
-					name: info.name,
-					authType: info.authType,
-					status: authMethodStatus(modelRegistry, info),
-					...storedKeyHint(modelRegistry, info),
-				}));
+				const providers: RpcAuthProvider[] = [...oauthInfos, ...apiKeyInfos].map((info) => {
+					const origin = modelRegistry.getProviderOrigin(info.id);
+					return {
+						id: info.id,
+						name: info.name,
+						authType: info.authType,
+						status: authMethodStatus(modelRegistry, info),
+						...storedKeyHint(modelRegistry, info),
+						...(origin === undefined ? {} : { origin }),
+					};
+				});
 				return success(id, "get_auth_providers", { providers });
 			}
 
