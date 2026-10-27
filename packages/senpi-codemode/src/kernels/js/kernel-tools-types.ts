@@ -51,7 +51,6 @@ export type KernelToolsCapability = {
 	invoke: ExtensionKernelTools["invoke"];
 };
 
-/** @public Re-exported by the package entry src/index.ts; knip ignores only this export (senpi#4421). */
 export const KERNEL_TOOLS_UNSUPPORTED = {
 	code: "tools_unavailable" as const,
 	message: "Kernel tools require a live JavaScript worker context",
