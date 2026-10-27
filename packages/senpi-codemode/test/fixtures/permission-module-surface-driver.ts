@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -76,52 +76,92 @@ const expect = async (row: string, actual: Promise<string>, want: string) => {
 	}
 };
 
+// The cell starts a worker, says "go", and returns the worker's first reply as JSON.
+async function startUserWorker(
+	state: CellPermissionState | undefined,
+	script: string,
+	decide?: CellDecider,
+): Promise<string> {
+	const child = join(mkdtempSync(join(root, "user-worker-")), "child.mjs");
+	writeFileSync(child, script);
+	return await run(
+		state,
+		`const child=new Worker(${JSON.stringify(pathToFileURL(child).href)},{workerData:"payload"});
+try{
+	const reply=new Promise((resolve,reject)=>{child.onmessage=(event)=>resolve(event.data);child.onerror=(event)=>reject(new Error(event.message));});
+	child.postMessage("go");
+	return JSON.stringify(await reply);
+}finally{child.terminate();}`,
+		decide,
+	);
+}
+
 // A cell's own worker reaches its own workerData and parentPort through this module (#4387), and the
-// constructor it finds there, by require and by import, is the guarded one: a grandchild it starts
-// is still refused a write the rule denies. Enforcement is on for this row, because that is where
-// these used to break. Deleting the constructor must not hand the raw one back either.
+// constructor it finds there, by require and by import, is the guarded one. Two routes prove it.
+// At module top level no cell token is bound, so the guarded constructor refuses before any thread
+// starts. Inside a message handler the worker's token is bound, the grandchild does start, and the
+// write the rule denies is refused inside it. Deleting the constructor must not hand back the raw one.
 async function userWorkerView(): Promise<string> {
-	const dir = mkdtempSync(join(root, "user-worker-"));
+	const dir = mkdtempSync(join(root, "user-worker-view-"));
 	const denied = join(dir, "denied.txt");
 	const grandchild = join(dir, "grandchild.js");
-	writeFileSync(grandchild, `require("node:fs").writeFileSync(${JSON.stringify(denied)}, "x"); postMessage("wrote");`);
-	const child = join(dir, "child.mjs");
 	writeFileSync(
-		child,
-		`const wt = require("node:worker_threads");
-const ns = await import("node:worker_threads");
-let grandchild;
-try {
-	const w = new ns.Worker(${JSON.stringify(grandchild)});
-	grandchild = await new Promise((resolve) => { w.onmessage = (event) => resolve(event.data); w.onerror = (event) => resolve(event.message); });
-	w.terminate();
-} catch (error) { grandchild = error?.code ?? error?.name; }
-let deleted;
-try { deleted = delete wt.Worker; } catch { deleted = false; }
-postMessage({ data: ns.workerData, port: ns.parentPort !== undefined, required: wt.Worker === globalThis.Worker,
-	imported: ns.Worker === globalThis.Worker, grandchild, deleted, kept: require("node:worker_threads").Worker === globalThis.Worker });`,
+		grandchild,
+		`try { require("node:fs").writeFileSync(${JSON.stringify(denied)}, "x"); postMessage("wrote"); }
+catch (error) { postMessage(error?.code ?? error?.name); }`,
 	);
 	const deny: CellDecider = (_token, call) =>
 		call.input.path === denied ? { action: "deny", rule: writeDeny } : { action: "pass" };
-	return await run(
-		{ epoch: 1, active: true, rules: [{ permission: "write", pattern: "*", layer: "user" }] },
-		`const child=new Worker(${JSON.stringify(pathToFileURL(child).href)},{workerData:"payload"});
-try{
-	const reply=await new Promise((resolve,reject)=>{child.onmessage=(event)=>resolve(event.data);child.onerror=(event)=>reject(new Error(event.message));});
-	return JSON.stringify([reply.data, reply.port, reply.required, reply.imported, reply.grandchild, reply.deleted, reply.kept]);
-}finally{child.terminate();}`,
+	const reply = await startUserWorker(
+		{ epoch: 1, active: true, rules: [writeDeny] },
+		`const wt = require("node:worker_threads");
+const ns = await import("node:worker_threads");
+const startGrandchild = async () => {
+	try {
+		const w = new ns.Worker(${JSON.stringify(grandchild)});
+		const answer = await new Promise((resolve) => { w.onmessage = (event) => resolve(event.data); w.onerror = (event) => resolve(event.message); });
+		w.terminate();
+		return answer;
+	} catch (error) { return "refused:" + (error?.code ?? error?.name); }
+};
+const topLevel = await startGrandchild();
+onmessage = async () => {
+	const fromHandler = await startGrandchild();
+	let deleted;
+	try { deleted = delete wt.Worker; } catch { deleted = false; }
+	postMessage([ns.workerData, ns.parentPort !== undefined, wt.Worker === globalThis.Worker, ns.Worker === globalThis.Worker,
+		topLevel, fromHandler, deleted, require("node:worker_threads").Worker === globalThis.Worker]);
+};`,
 		deny,
 	);
+	return `${reply} written=${existsSync(denied)}`;
 }
+
+// A worker started while nothing is enforced keeps the engine's own Worker on the module, by require
+// and by import: it runs eval code, is an emitter, has a numeric threadId, and is not the guarded global.
+const nativeUserWorker = `const wt = require("node:worker_threads");
+const ns = await import("node:worker_threads");
+const w = new wt.Worker("require('node:worker_threads').parentPort.postMessage(7)", { eval: true });
+const answer = await new Promise((resolve) => w.once("message", resolve));
+const threadId = typeof w.threadId;
+await w.terminate();
+postMessage([answer, threadId, wt.Worker === globalThis.Worker, ns.Worker === wt.Worker]);`;
 
 try {
 	await expect(
 		"user worker/own view",
 		userWorkerView(),
-		JSON.stringify(["payload", true, true, true, "cell_permission_denied", false, true]),
+		`${JSON.stringify(["payload", true, true, true, "refused:cell_permission_denied", "cell_permission_denied", false, true])} written=false`,
 	);
 	for (const { row, state } of states) {
 		const enforced = state?.active === true;
+		if (!enforced) {
+			await expect(
+				`${row}/user worker`,
+				startUserWorker(state, nativeUserWorker),
+				JSON.stringify([7, "number", false, true]),
+			);
+		}
 		if (enforced) {
 			// Enforcement is on: the escaping bindings are gone and only the port primitives the cell
 			// already owns as globals remain.
