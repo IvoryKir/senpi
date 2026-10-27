@@ -185,6 +185,47 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
   between runs, a refresh while the last end is still bound may set or update that run's stop.
   Goal guards are captured during their bound end's own processing, never inherited from
   another run. Provider errors and policy rejections carry no `lastStop`, even if a deadline fired.
+- Optional `activity` is present only while `state` is `running` and a live activity is known:
+  `{ kind: "tool", toolName, toolCallId, since, outstanding }` represents the oldest outstanding
+  top-level tool operation, including preparation, approval and dependency waits. Nested calls
+  do not count. `{ kind: "model", since }` covers only an assistant stream from its start to its
+  message end, not the first-token wait or prepared messages. `since` is the time the session
+  observed the start boundary, not a timestamp carried by the core event, so it approximates the
+  real start; it stays stable while selected. Compaction, retry waits, queued work and other
+  unknown intervals omit activity.
+- Optional `activityRevision: { instanceId, revision }` orders activity separately from durable
+  lifecycle state. New writers include it even when activity is absent. The engine owner allocates
+  a fresh opaque `instanceId` on reconstruction or rebinding; delivery and reconnect do not change it.
+  An activity-only change keeps lifecycle `seq`, increments `revision`, and appends no durable record,
+  also while a failed custody write leaves `persisted` false.
+  An independently required lifecycle write retains append-before-publish and resets revision to zero
+  at its new `seq`, carrying the current activity once. Token deltas and tool progress change neither
+  ordering number. Both activity fields are wire-only and ignored on restoration; restored activity
+  is absent under a fresh instance with revision zero. `persisted` still describes durable lifecycle
+  state, not activity persistence.
+
+The activity ordering key is `(session, instanceId, lifecycle seq, revision)`. Separate durable
+lifecycle equivalence (including `lastStop`) from complete activity-projection equivalence: absence,
+kind, tool identity, `since`, and `outstanding`. Thus `start(A), start(B), end(B)` delivers counts
+`1, 2, 1` under three distinct activity ordering keys without advancing lifecycle `seq`.
+
+Clients keep ordinary state and completion effects ordered by session and lifecycle `seq`.
+An equal lifecycle `seq` may refresh receipt information and, under the activity ordering rule, the
+activity projection. It never re-runs ordinary state or completion effects. Activity revisions and
+`observedAt` never authorize replacing ordinary lifecycle content at an equal or older lifecycle `seq`.
+Establish the activity owner only from an authoritative initial/open/get_state snapshot or directly
+bound TUI snapshot, fenced by the current binding/resync generation. An arbitrary event or cached
+replay cannot switch owners; an unfamiliar event instance requires authoritative synchronization,
+without dropping an independently newer ordinary lifecycle update while synchronizing.
+
+Within the authorized instance, compare `(seq, revision)` lexicographically. Higher revision at equal
+`seq` replaces only activity and its ordering metadata, including explicit absence as a clear.
+An equal activity key is a replay; lower revisions and older lifecycle sequences cannot replace activity.
+On reconnect to the same instance retain the high-water mark. A different authoritative instance
+invalidates old activity and establishes a baseline only if its lifecycle `seq` is not older than
+retained state. Retired instances and late responses cannot switch it back. Never reset lifecycle or
+completion high-water marks or sort instance identifiers. Legacy snapshots without `activityRevision`
+follow lifecycle-sequence ordering; at equal `seq` they cannot overwrite versioned activity or clear it.
 
 Clients must not notify or settle while `restoring` is true or `persisted` is false.
 Use `completionId` to deduplicate root completion/failure, not `agent_settled` or

@@ -3471,6 +3471,7 @@ export class AgentSession {
 			// Freeze before async delivery or a queued run can replace the dispatched selection.
 			if (this._requestSelectedModel) this._endSelectedModels.set(event, this._requestSelectedModel);
 		}
+		this._lifecycleBinding.controller.observeActivity(event);
 		if (event.type === "message_start") {
 			try {
 				const entryId = this._lifecycleBinding.consume(event.message);
