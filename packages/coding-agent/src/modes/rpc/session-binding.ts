@@ -1,5 +1,6 @@
 import { bindToProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/provider-scope";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+import { recoveryCarrier } from "../../core/session-recovery-identity.ts";
 import {
 	createRpcConnectionHandler,
 	type RpcConnectionHandler,
@@ -39,8 +40,14 @@ export async function createRpcSessionBinding(
 	// session is inside is what the loop-lag watchdog blames for a stall. The record
 	// stream already carries that transition; no extra subscription is needed.
 	const toolSpans = createToolAttributionSpans(sessionId);
+	const lane = entry.acceptance;
+	if (lane) writer.registerAcceptance(sessionId, lane);
 	const enqueueRecord = (record: object): void => {
 		toolSpans.observe(record);
+		// Accepted before the writer serializes or routes it; a replacement is the next incarnation's bootstrap.
+		if (lane && "type" in record && record.type === "session_replaced")
+			lane.bootstrap({ leafId: entry.runtime?.session.sessionManager.getLeafId() ?? null });
+		else lane?.accept(record, recoveryCarrier(record));
 		writer.enqueue(sessionId, record);
 	};
 	// Attachments share one entry, so resolve the host from the live runtime. In
