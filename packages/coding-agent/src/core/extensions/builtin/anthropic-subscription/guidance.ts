@@ -155,9 +155,9 @@ export function sdkErrorGuidance(kind: SdkErrorKind): string | undefined {
 		case "billing":
 			return "The selected Claude account has a billing problem. Check the plan at claude.com or switch accounts with /claude-account pin <name>.";
 		case "auth_error":
-			return `The account's OAuth token was rejected. Re-run /login ${PROVIDER} to refresh it, or remove the account with /claude-account remove <name>.`;
+			return `The account's OAuth token was rejected. Sign in to ${PROVIDER} again to refresh it, or remove the account with /claude-account remove <name>.`;
 		case "entitlement":
-			return "This model needs usage credits on the selected Claude account (it is not included in the subscription). Switch models with /model, enable usage credits at claude.com, or pick another account with /claude-account pin <name>.";
+			return "This model needs usage credits on the selected Claude account (it is not included in the subscription). Choose another model, enable usage credits at claude.com, or pick another account with /claude-account pin <name>.";
 		default:
 			return undefined;
 	}

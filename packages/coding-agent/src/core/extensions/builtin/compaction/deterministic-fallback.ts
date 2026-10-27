@@ -125,15 +125,15 @@ export function formatRequiredCompactionFallbackRejection(
 			: undefined;
 	const recovery: Record<DeterministicFallbackRejectionReason, string> = {
 		"retained-token-budget-exceeded":
-			"The retained turn exceeds the usable context. Use set_model to select a larger-context model, then compact (or /model and /compact).",
+			"The retained turn exceeds the usable context. Select a larger-context model, then compact again.",
 		"atomic-tool-chain-cut":
 			"The retained tool calls and results do not form complete pairs. Finish the pending tool operation, then use compact to retry explicitly.",
 		"unsafe-retained-content":
 			"The retained message cannot be replayed safely. Inspect the identified entry with get_messages; use compact after correcting the context or selecting a larger-context model.",
 		"missing-preparation-boundary":
-			"The prepared boundary is absent from the branch. Reload the session and run /compact.",
+			"The prepared boundary is absent from the branch. Reload the session and compact again.",
 		"context-reconstruction-failed":
-			"The retained context could not be reconstructed. Reload the session and run /compact.",
+			"The retained context could not be reconstructed. Reload the session and compact again.",
 	};
 	const diagnostic = {
 		rejectionReason: reason,

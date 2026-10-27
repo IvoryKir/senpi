@@ -51,7 +51,7 @@ import { CursorCliAbortError, type CursorCliTransportHandle, spawnCursorCli } fr
 export { CURSOR_CLI_OAUTH_PROVIDER_ID } from "./oauth-login.ts";
 
 const DISABLED_MESSAGE = "disabled by settings";
-const NO_ACCOUNTS_MESSAGE = "no accounts: run /login cursor-cli-oauth";
+const NO_ACCOUNTS_MESSAGE = "no accounts: sign in to Cursor CLI OAuth (cursor-cli-oauth)";
 const RECENT_EXCHANGE_LIMIT = 12;
 
 /** Injectable seams so tests stay hermetic; every default is re-resolved per turn. */

@@ -37,7 +37,7 @@ import {
 export const CURSOR_CLI_OAUTH_PROVIDER_ID = "cursor-cli-oauth";
 export const CURSOR_CLI_OAUTH_NAME = "Cursor CLI (OAuth)";
 
-const NO_ACCOUNTS_MESSAGE = "no accounts: run /login cursor-cli-oauth";
+const NO_ACCOUNTS_MESSAGE = "no accounts: sign in to Cursor CLI OAuth (cursor-cli-oauth)";
 const DISABLED_MESSAGE = "disabled by settings";
 const FILE_STORE_LANE = "file-store" as const;
 const DEFAULT_IMPORTED_EXPIRY_MS = 60 * 60 * 1000;

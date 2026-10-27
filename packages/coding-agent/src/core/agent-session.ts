@@ -108,6 +108,7 @@ import { AgentRunContinuations } from "./agent-run-continuation.ts";
 import { AgentSettledDelivery, type DeferredAgentSettledAction, DeferredTurnClaim } from "./agent-settled-delivery.ts";
 import { resolveAssistantUsageScope } from "./assistant-usage-scope.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import { formatCompactionFailure } from "./compaction-failure-text.ts";
 import type { CredentialReplacement } from "./auth-storage.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { envValue } from "./brand.ts";
@@ -2047,7 +2048,7 @@ export class AgentSession {
 			throw new Error(
 				`Authentication failed for "${model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Run '/login ${model.provider}' to re-authenticate.`,
+					`Sign in to ${model.provider} again.`,
 			);
 		}
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
@@ -9871,7 +9872,7 @@ export class AgentSession {
 			const error = new Error(
 				lastEntry?.type === "compaction" ? "Already compacted" : "Nothing to compact (session too small)",
 			);
-			const errorMessage = `Compaction failed: ${error.message}`;
+			const errorMessage = formatCompactionFailure("compaction", error.message);
 			this._emit({ type: "compaction_start", reason: "manual", requestId });
 			this._emit({
 				type: "compaction_end",
@@ -9930,7 +9931,9 @@ export class AgentSession {
 			}
 			const message = error instanceof Error ? error.message : String(error);
 			const aborted = isCompactionExecutionAborted(error);
-			const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
+			const errorMessage = aborted
+				? undefined
+				: formatCompactionFailure("compaction", message, { model: this._compactionFailureModel() });
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -10021,7 +10024,9 @@ export class AgentSession {
 				aborted,
 				willRetry: false,
 				requestId,
-				errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
+				errorMessage: aborted
+					? undefined
+					: formatCompactionFailure("compaction", message, { model: this._compactionFailureModel() }),
 			});
 			return { applied: false, reason: "rejected" };
 		} finally {
@@ -10550,7 +10555,7 @@ export class AgentSession {
 			throw new ModelNotReadyError(
 				`Authentication failed for "${this.model.provider}". ` +
 					`Credentials may have expired or network is unavailable. ` +
-					`Run '/login ${this.model.provider}' to re-authenticate.`,
+					`Sign in to ${this.model.provider} again.`,
 			);
 		}
 		throw new ModelNotReadyError(formatNoApiKeyFoundMessage(this.model.provider));
@@ -11424,9 +11429,9 @@ export class AgentSession {
 			const aborted = isCompactionExecutionAborted(error);
 			const formattedErrorMessage = aborted
 				? undefined
-				: reason === "overflow"
-					? `Context overflow recovery failed: ${errorMessage}`
-					: `Auto-compaction failed: ${errorMessage}`;
+				: formatCompactionFailure(reason === "overflow" ? "overflow-recovery" : "auto-compaction", errorMessage, {
+						model: this._compactionFailureModel(),
+					});
 			this._emit({
 				type: "compaction_end",
 				reason,
@@ -11919,7 +11924,9 @@ export class AgentSession {
 								aborted,
 								willRetry: false,
 								requestId,
-								errorMessage: aborted ? undefined : `Compaction failed: ${message}`,
+								errorMessage: aborted
+									? undefined
+									: formatCompactionFailure("compaction", message, { model: this._compactionFailureModel() }),
 							});
 							const err = error instanceof Error ? error : new Error(String(error));
 							options?.onError?.(err);
@@ -12697,6 +12704,10 @@ export class AgentSession {
 	 * senpi#1628). Anything else keeps its error verbatim, minus the internal
 	 * replay marker.
 	 */
+	private _compactionFailureModel(): string | undefined {
+		return this.model ? `${this.model.provider}/${this.model.id}` : undefined;
+	}
+
 	private _terminalFailureText(message: AssistantMessage, attempts: number): string | undefined {
 		const model = this.model ? `${this.model.provider}/${this.model.id}` : undefined;
 		return (

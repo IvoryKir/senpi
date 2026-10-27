@@ -531,7 +531,7 @@ describe("cursor-cli-oauth stream mapping", () => {
 		const events = await collect(runTurn(deps, "hello", "stream-noaccounts"));
 		const failure = errorEvent(events);
 
-		expect(failure.error.errorMessage ?? "").toContain("no accounts: run /login cursor-cli-oauth");
+		expect(failure.error.errorMessage ?? "").toMatch(/^no accounts: /);
 		expect(existsSync(fixture.dump)).toBe(false);
 	});
 

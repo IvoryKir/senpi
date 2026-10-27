@@ -41,7 +41,7 @@ Generated: 2026-08-17
 - The CLI executes its own tools autonomously: `--force` requires the explicit `noApprovalAcknowledgedAt` acknowledgement, and provider tool frames never enter assistant text or bridge onto senpi tools.
 - Chats are private to each account's HOME; cross-account failover always starts a fresh chat with a notice and never transfers context.
 - Process lifecycle: children spawn detached in their own process group and are killed by tracked pid only - never by name matching (senpi #823). Deferred continuations are fenced per extension generation (senpi #866).
-- Provider registration never blocks on the executable; `check` reports one of `configured (file-store, <n> accounts)`, `disabled by settings` (kill switch or a flagless lane with no stored accounts), `cursor-agent not installed: <guidance>`, or `no accounts: run /login cursor-cli-oauth`.
+- Provider registration never blocks on the executable; `check` reports one of `configured (file-store, <n> accounts)`, `disabled by settings` (kill switch or a flagless lane with no stored accounts), `cursor-agent not installed: <guidance>`, or `no accounts: sign in to Cursor CLI OAuth (cursor-cli-oauth)`.
 - No cursor-agent spawn unless the lane is `configured`: the startup catalog probe, the turn path, and `check` share `assessConfiguration`, and every spawn (turn, `models`, `--version`) uses `cursorAgentEnvironment` - an inherited `process.env` never reaches the CLI (senpi#1722).
 - Every behavior change adds a `changes.md` section with expected conflict zones.
 

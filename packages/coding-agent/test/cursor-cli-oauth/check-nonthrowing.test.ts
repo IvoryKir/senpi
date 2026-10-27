@@ -136,7 +136,7 @@ describe("cursor-cli-oauth check stays non-throwing", () => {
 
 		await expect(
 			resolveCursorCliOauthLane(dependencies({ readCurrent: async () => emptyCredential() })),
-		).rejects.toThrow("no accounts: run /login cursor-cli-oauth");
+		).rejects.toThrow(/^no accounts: /);
 	});
 });
 

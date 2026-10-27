@@ -52,8 +52,8 @@ function planName(provider: string): string {
 export function providerAuthRecoveryHint(block: ProviderAuthBlock): string {
 	const fix =
 		block.httpStatus === 401
-			? `Run /login ${block.provider} to sign in again, or check the API key or token for ${block.provider}`
-			: `Run /login ${block.provider} to refresh the account, or check that ${block.model} is enabled for ${planName(block.provider)}`;
+			? `Sign in to ${block.provider} again, or check the API key or token for ${block.provider}`
+			: `Sign in to ${block.provider} again to refresh the account, or check that ${block.model} is enabled for ${planName(block.provider)}`;
 	return [
 		`Goal continuation blocked: ${providerAuthBlockedReason(block)}.`,
 		"Retrying would get the same rejection, so the goal stopped instead of retrying.",

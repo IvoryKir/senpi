@@ -12,9 +12,8 @@ import type {
 } from "../../../src/core/extensions/builtin/anthropic-subscription/sdk-boundary.ts";
 import type { AnthropicSubscriptionTokenInjection } from "../../../src/core/extensions/builtin/anthropic-subscription/settings.ts";
 
-const EXPECTED_ERROR =
-	"authentication_failed: No Anthropic Subscription accounts configured for the managed lane; " +
-	"run /login anthropic-subscription or set CLAUDE_CODE_OAUTH_TOKEN";
+// The classifier keys the auth failure on this prefix; the rest is reader guidance.
+const EXPECTED_ERROR = /^authentication_failed: /;
 
 async function consume(messages: AsyncGenerator<SDKMessage>): Promise<void> {
 	for await (const _message of messages) void _message;

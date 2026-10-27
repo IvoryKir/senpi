@@ -99,7 +99,7 @@ function unusedLoginNotices(data: AuthStorageData): AuthNotice[] {
 				// Slot names, never key material: a new unused login gets a new id and is shown again.
 				id: `${provider}:${kind}:${names.join(",")}`,
 				provider,
-				message: `${provider}: an ${KIND_LABEL[kind]} saved earlier is stored next to your ${inUse} but is never used; the ${inUse} stays in use. It is still in auth.json (${slots.map((slot) => slot.name).join(", ")}); to switch to it, save it again with /login (the ${inUse} is backed up first).`,
+				message: `${provider}: an ${KIND_LABEL[kind]} saved earlier is stored next to your ${inUse} but is never used; the ${inUse} stays in use. It is still in auth.json (${slots.map((slot) => slot.name).join(", ")}); to switch to it, sign in or add the key again for ${provider} (the ${inUse} is backed up first).`,
 			});
 		}
 	}
@@ -542,7 +542,7 @@ export class AuthStorage implements CredentialStore {
 			this.reportedMigrationSkips.add(moved.skipped);
 			this.recordError(
 				new Error(
-					`The Anthropic Claude subscription login in auth.json was not moved to Anthropic Subscription because ${moved.skipped}. It was left unchanged; sign in again with /login and choose "Anthropic Subscription (Claude Pro/Max)".`,
+					`The Anthropic Claude subscription login in auth.json was not moved to Anthropic Subscription because ${moved.skipped}. It was left unchanged; sign in to "Anthropic Subscription (Claude Pro/Max)" again.`,
 				),
 			);
 		}

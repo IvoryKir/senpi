@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import * as errors from "../src/core/extensions/builtin/anthropic-subscription/errors.ts";
+import { sdkErrorGuidance } from "../src/core/extensions/builtin/anthropic-subscription/guidance.ts";
 import { withAuthGuidance } from "../src/core/extensions/builtin/anthropic-subscription/stream-guidance.ts";
 
 const fableUsageCredits =
 	"Claude Code returned an error result: Fable 5 requires usage credits. Run /usage-credits to continue or switch models with /model.";
-const entitlementGuidance =
-	"This model needs usage credits on the selected Claude account (it is not included in the subscription). Switch models with /model, enable usage credits at claude.com, or pick another account with /claude-account pin <name>.";
+const entitlementGuidance = sdkErrorGuidance("entitlement") ?? "";
 
 const versionFloor = {
 	type: "result",
