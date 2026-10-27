@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore, type LeafId } from "../../../src/modes/rpc/compact-content-store.ts";
 import type { PagedRoot } from "../../../src/modes/rpc/compact-paged-tree.ts";
-import { spoolRoot } from "../compact-storage-support.ts";
+import { spreadSpoolRoot } from "./4272-spread-round-support.ts";
 
 interface Round {
 	readonly start: number;
@@ -18,7 +18,7 @@ const PAGE_BYTES = 65_536;
 // senpi#4272 / RULING-47 as amended by RULING-54: a round writes its surviving nodes as node files of at most
 // 64 KiB, ceil(round node bytes / 64 KiB) of them, plus its page and owner marker; it writes no node it replaced.
 it("packs each compaction round into bounded node files and writes no node it replaced", async () => {
-	const root = await spoolRoot();
+	const root = await spreadSpoolRoot();
 	const files = new Map<string, Buffer>();
 	const writes: { readonly name: string; readonly bytes: number; readonly job: string | undefined }[] = [];
 	let deletes = 0;

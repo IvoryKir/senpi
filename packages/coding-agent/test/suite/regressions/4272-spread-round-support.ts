@@ -1,7 +1,8 @@
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore } from "../../../src/modes/rpc/compact-content-store.ts";
 import type { CompactStorageIo, CompactStorageOperation } from "../../../src/modes/rpc/compact-storage-io.ts";
+import { spoolRoot } from "../compact-storage-support.ts";
 
 /** One spool file create, attributed to the storage job that made it. */
 export interface RoundWrite {
@@ -11,6 +12,26 @@ export interface RoundWrite {
 }
 
 export const SPREAD_KEYS = 128;
+
+/** JSON length of every spread rig's epoch directory path. */
+export const SPREAD_DIR_JSON_LENGTH = 192;
+
+/**
+ * A spool root whose epoch directory path has the fixed JSON length `SPREAD_DIR_JSON_LENGTH`. Each paged row
+ * node embeds its page's absolute path, so with a plain temp dir the round bytes, and the node file count, depend
+ * on the host's TMPDIR length (a 1,024-row round packed 7 node files under one TMPDIR and 6 under a shorter one).
+ * Padding the directory name makes every rig file size identical on every host and run.
+ */
+export async function spreadSpoolRoot(): Promise<{ dir: string; cleanup(): Promise<void> }> {
+	const root = await spoolRoot();
+	const stem = join(dirname(root.dir), "epoch-");
+	const fill = SPREAD_DIR_JSON_LENGTH - JSON.stringify(stem).length;
+	if (fill < 1) {
+		await root.cleanup();
+		throw new Error(`temp dir too long for a ${SPREAD_DIR_JSON_LENGTH}-char spread spool path: ${stem}`);
+	}
+	return { dir: `${stem}${"0".repeat(fill)}`, cleanup: root.cleanup };
+}
 
 export function memoryIo(files = new Map<string, Buffer>()): CompactStorageIo {
 	return {
@@ -33,6 +54,7 @@ export function memoryIo(files = new Map<string, Buffer>()): CompactStorageIo {
  * across the key space (one per `count / 128` existing rows), which copies a distinct root path per key.
  */
 export function spreadRoundRig(count: number, dir: string, io: CompactStorageIo) {
+	if (JSON.stringify(dir).length !== SPREAD_DIR_JSON_LENGTH) throw new Error(`not a spreadSpoolRoot dir: ${dir}`);
 	const writes: RoundWrite[] = [];
 	let job: CompactStorageOperation | undefined;
 	const store = new CompactContentStore({

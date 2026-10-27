@@ -2,10 +2,12 @@ import { basename } from "node:path";
 import { expect, it } from "vitest";
 import type { FrozenIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import type { CompactStorageIo } from "../../../src/modes/rpc/compact-storage-io.ts";
-import { controlledIo, type IoHold, spoolRoot } from "../compact-storage-support.ts";
-import { SPREAD_KEYS, spreadRoundRig } from "./4272-spread-round-support.ts";
+import { controlledIo, type IoHold } from "../compact-storage-support.ts";
+import { SPREAD_KEYS, spreadRoundRig, spreadSpoolRoot } from "./4272-spread-round-support.ts";
 
 const ROWS = 1_024;
+/** Node files of the deterministic 1,024-row spread round (533,538 node bytes); RULING-55 asks for at least 7. */
+const ROUND_NODE_FILES = 9;
 const isNodeFile = (path: string) => basename(path).startsWith("node-");
 
 interface HeldView {
@@ -21,7 +23,7 @@ interface HeldView {
 // senpi#4545 / RULING-55 condition 2: while a multi-file compaction round is being written, a concurrent reader
 // sees the whole previous state; once the round is published it sees the whole new round, never a mix.
 it("serves concurrent readers the whole previous state until a multi-file round publishes, then the whole new round", async () => {
-	const root = await spoolRoot();
+	const root = await spreadSpoolRoot();
 	const controlled = controlledIo();
 	const reads: string[] = [];
 	const io: CompactStorageIo = {
@@ -74,7 +76,7 @@ it("serves concurrent readers the whole previous state until a multi-file round 
 		const roundFiles = new Set((await round).map((file) => file.name));
 		const nodes = [...roundFiles].filter((name) => name.startsWith("node-"));
 		const during = views.filter((view) => roundFiles.has(view.file));
-		expect(nodes.length, "node files in the round").toBeGreaterThanOrEqual(7);
+		expect(nodes.length, "node files in the round").toBe(ROUND_NODE_FILES);
 		expect(
 			during.map((view) => view.file),
 			"a reader ran while each node file was held",

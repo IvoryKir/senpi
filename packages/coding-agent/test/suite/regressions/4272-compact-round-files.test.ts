@@ -1,15 +1,19 @@
 import { expect, it } from "vitest";
-import { spoolRoot } from "../compact-storage-support.ts";
-import { memoryIo, SPREAD_KEYS, spreadRoundRig } from "./4272-spread-round-support.ts";
+import { memoryIo, SPREAD_KEYS, spreadRoundRig, spreadSpoolRoot } from "./4272-spread-round-support.ts";
 
 const PAGE_BYTES = 65_536;
 
 // senpi#4539 / RULING-54 (part of #4272): a compaction round's node set is written as `node-` files of at
 // most 64 KiB, ceil(round bytes / 64 KiB) of them, next to the round's one page; no file ever exceeds the bound.
-it.each([1_024, 8_192, 65_536])(
-	"writes a spread-key round over %i rows as node files of at most 64 KiB, ceil(bytes / 64 KiB) of them",
-	async (count) => {
-		const root = await spoolRoot();
+// The spread rig is deterministic, so each size packs the same node files on every host and run.
+it.each([
+	[1_024, 9],
+	[8_192, 14],
+	[65_536, 20],
+])(
+	"writes a spread-key round over %i rows as %i node files of at most 64 KiB, ceil(bytes / 64 KiB) of them",
+	async (count, nodeFiles) => {
+		const root = await spreadSpoolRoot();
 		const rig = spreadRoundRig(count, root.dir, memoryIo());
 		try {
 			await rig.settle();
@@ -26,7 +30,7 @@ it.each([1_024, 8_192, 65_536])(
 				nodes.every((file) => file.name.startsWith("node-")),
 				"round node files carry the node- prefix",
 			).toBe(true);
-			expect(nodes.length, "node files").toBeGreaterThan(1);
+			expect(nodes.length, "node files").toBe(nodeFiles);
 			expect(nodes.length, `node files for ${nodeBytes} round bytes`).toBe(Math.ceil(nodeBytes / PAGE_BYTES));
 			expect(round.length, "round file creates").toBe(nodes.length + pages.length);
 			const cut = rig.index.freeze();
@@ -49,7 +53,7 @@ it.each([1_024, 8_192, 65_536])(
 // RULING-54 condition 2: a reader of the committed round holds at most one 64 KiB page per file read and
 // never a whole round, during point lookups and a complete traversal alike.
 it("reads a multi-file round one bounded page at a time, never a whole round", async () => {
-	const root = await spoolRoot();
+	const root = await spreadSpoolRoot();
 	const files = new Map<string, Buffer>();
 	const io = memoryIo(files);
 	const reads: { readonly bytes: number; readonly file: number; readonly inFlight: number }[] = [];
@@ -70,7 +74,7 @@ it("reads a multi-file round one bounded page at a time, never a whole round", a
 	try {
 		await rig.settle();
 		const round = await rig.round();
-		expect(round.filter((file) => !file.name.startsWith("page-")).length).toBeGreaterThan(1);
+		expect(round.filter((file) => !file.name.startsWith("page-")).length).toBe(9);
 		reads.length = 0;
 		const cut = rig.index.freeze();
 		try {

@@ -2,8 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { expect, it } from "vitest";
 import { nodeCompactStorageIo } from "../../../src/modes/rpc/compact-storage-io.ts";
-import { spoolRoot } from "../compact-storage-support.ts";
-import { SPREAD_KEYS, spreadRoundRig } from "./4272-spread-round-support.ts";
+import { SPREAD_KEYS, spreadRoundRig, spreadSpoolRoot } from "./4272-spread-round-support.ts";
 
 const ROWS = 1_024;
 const isRoundFile = (name: string) => /^node-/.test(name);
@@ -41,7 +40,7 @@ async function failedRound(dir: string, failAfter: number) {
 // after every file is durable; with an injected write failure after ANY of its files, the previous state stays
 // fully readable and the live process reclaims every stray file.
 it("keeps the previous state readable and reclaims every stray file after an injected write failure at each file", async () => {
-	const probe = await spoolRoot();
+	const probe = await spreadSpoolRoot();
 	let roundFiles = 0;
 	const whole = spreadRoundRig(ROWS, probe.dir, nodeCompactStorageIo);
 	try {
@@ -51,9 +50,9 @@ it("keeps the previous state readable and reclaims every stray file after an inj
 		await whole.store.retire();
 		await probe.cleanup();
 	}
-	expect(roundFiles, "node files in one spread round").toBeGreaterThan(1);
+	expect(roundFiles, "node files in one spread round").toBe(9);
 	for (let failAfter = 1; failAfter <= roundFiles; failAfter++) {
-		const root = await spoolRoot();
+		const root = await spreadSpoolRoot();
 		const { rig, before, written } = await failedRound(root.dir, failAfter);
 		const at = `injected write failure after file ${failAfter} of ${roundFiles}`;
 		try {
@@ -89,7 +88,7 @@ it("keeps the previous state readable and reclaims every stray file after an inj
 // transcript. (In production each lane bootstrap picks a fresh `senpi-settled-<uuid>` directory, so a reopen
 // never even names the orphan; nothing sweeps it, the OS temp cleaner does.)
 it("refuses a crashed epoch directory holding partial round files and rebuilds the rows from the transcript", async () => {
-	const root = await spoolRoot();
+	const root = await spreadSpoolRoot();
 	const cutAfter = 3;
 	let armed = false;
 	let written = 0;
