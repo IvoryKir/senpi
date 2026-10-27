@@ -34,15 +34,19 @@ export interface OwnerRow {
 	readonly entryId: string;
 }
 
-type Row = TerminalRow | OwnerRow | { readonly kind: "ended" };
+type Row = TerminalRow | OwnerRow;
 export type SettledRoot = FrozenIndex;
 
 /** One spillable collection owns payloads, end markers and both directions of the durable join. */
 export class CompactSettledMessages {
 	private readonly store: CompactContentStore;
 	private readonly rows: CompactContentIndex<Row>;
-	/** Resident membership of the paged rows, the synchronous check acceptance needs (pruning: carried item 9). */
-	private readonly keys = new Set<string>();
+	/**
+	 * Resident membership for messages that are not settled yet: ended but not joined (`end:`, `terminal:`), or joined
+	 * before their end (`owner:` -> entry id, `entry:`). A message both ended and joined is settled and leaves it, so
+	 * the set is bounded by unjoined terminals plus the in-flight window, never by session length (carried item 9).
+	 */
+	private readonly keys = new Map<string, string>();
 	private readonly epoch: string;
 	private readonly diagnose: (reason: SettledDiagnostic) => void;
 
@@ -65,8 +69,8 @@ export class CompactSettledMessages {
 			if (this.keys.has(`entry:${carrier.durableEntryId}`)) return this.diagnose("conflicting_owner");
 			this.join(id, carrier.durableEntryId);
 		}
-		this.put(`end:${id}`, { kind: "ended" });
-		if (this.keys.has(`owner:${id}`)) return;
+		if (this.keys.has(`owner:${id}`)) return this.settle(id);
+		this.keys.set(`end:${id}`, "");
 		const message: unknown = Reflect.get(record, "message");
 		const role = String(Reflect.get(Object(message), "role"));
 		const payload: LeafId[] = [];
@@ -117,11 +121,36 @@ export class CompactSettledMessages {
 		this.put(`entry:${entryId}`, owner);
 		this.rows.delete(`terminal:${messageId}`);
 		this.keys.delete(`terminal:${messageId}`);
+		this.keys.set(`owner:${messageId}`, entryId);
+		if (this.keys.has(`end:${messageId}`)) this.settle(messageId);
+	}
+
+	/** Ended and joined: its rows stay paged, its resident keys go. */
+	private settle(messageId: string): void {
+		this.keys.delete(`entry:${this.keys.get(`owner:${messageId}`)}`);
+		this.keys.delete(`owner:${messageId}`);
+		this.keys.delete(`end:${messageId}`);
 	}
 
 	private put(key: string, row: Row): void {
 		this.rows.set(key, row);
-		this.keys.add(key);
+		this.keys.set(key, "");
+	}
+
+	/** The message each entry joined in this epoch, read in order from one cut of the paged rows; undefined for none. */
+	async messagesOf(entryIds: readonly string[]): Promise<(string | undefined)[]> {
+		const cut = this.rows.freeze();
+		try {
+			const ids: (string | undefined)[] = [];
+			for (const entryId of entryIds) {
+				const row = await this.rows.lookup(cut, `entry:${entryId}`);
+				const owner: unknown = row && (await this.rows.values.read(row.value));
+				ids.push(owner ? String(Reflect.get(Object(owner), "messageId")) : undefined);
+			}
+			return ids;
+		} finally {
+			this.rows.release(cut);
+		}
 	}
 
 	freeze(): SettledRoot {
@@ -148,7 +177,7 @@ export class CompactSettledMessages {
 	}
 
 	storageStatus() {
-		return { ...this.store.status(), ...this.rows.status() };
+		return { ...this.store.status(), ...this.rows.status(), residentSettledKeys: this.keys.size };
 	}
 
 	idle(): Promise<void> {

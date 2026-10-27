@@ -4676,8 +4676,11 @@ export class AgentSession {
 	 * block controls at their position. Attach before a turn's first provider push; a stream already pushing keeps
 	 * its decision and yields no capture.
 	 */
-	subscribeStructured(listener: (record: AgentSessionStructuredRecord) => void): () => void {
-		return this._structuredLane.subscribe(listener);
+	subscribeStructured(
+		listener: (record: AgentSessionStructuredRecord) => void,
+		failed?: (cause: unknown) => void,
+	): () => void {
+		return this._structuredLane.subscribe(listener, failed);
 	}
 
 	/**

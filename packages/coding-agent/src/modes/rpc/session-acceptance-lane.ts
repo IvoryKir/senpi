@@ -5,6 +5,7 @@ import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 import { correlatedRecord } from "./client-message-events.ts";
+import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import { CompactLaneCurrent } from "./compact-lane-current.ts";
 import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
@@ -63,6 +64,7 @@ const SEQUENCED = new Set([
 	"entry_appended",
 	"session_abort",
 	"transcript_write_failed",
+	...COMPONENT_RECORDS,
 ]);
 
 function field(record: object, key: string): unknown {
@@ -154,6 +156,7 @@ export class SessionAcceptanceLane {
 			this.sequence += 1;
 			this.transcript.apply(transition);
 			if (transition.kind === "append" && this.transcript.available) this.settled.append(transition);
+			this.current.transcript(transition, this.settled, this.nonce);
 		}
 	}
 
@@ -164,6 +167,7 @@ export class SessionAcceptanceLane {
 		this.acceptCorrelation(record);
 		this.sequence += 1;
 		if (canonical) this.current.fold(canonical, this.sequence);
+		if (COMPONENT_RECORDS.has(type)) this.current.foldComponent(record, this.sequence);
 		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
 		const turnId = this.turnId;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
@@ -171,6 +175,10 @@ export class SessionAcceptanceLane {
 		if (type === "message_start") this.activeMessageId = messageId;
 		if (type === "message_end") this.settled.end(record, carrier, this.sequence, turnId);
 		if (type === "transcript_write_failed") this.settled.fail(carrier, String(field(record, "errorMessage")));
+		// A failed write, or a terminal whose entry was committed before it, settles its compact persistence too.
+		const persisted = type === "message_end" && carrier?.durableEntryId ? "appended" : undefined;
+		const status = type === "transcript_write_failed" ? "failed" : persisted;
+		if (status && this.settled.valid(carrier)) this.current.status(carrier.messageId, status);
 		if (type === "message_end" && this.activeMessageId === messageId) this.activeMessageId = null;
 		return {
 			sessionEpoch: this.epoch,
@@ -221,6 +229,11 @@ export class SessionAcceptanceLane {
 	readCurrent(root: FrozenAcceptedRoot) {
 		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
 		return this.current.read(root.current);
+	}
+
+	readCurrentComponents(root: FrozenAcceptedRoot) {
+		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		return this.current.readComponents(root.current);
 	}
 
 	readSettled(root: FrozenAcceptedRoot) {
