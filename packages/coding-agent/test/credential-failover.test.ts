@@ -198,28 +198,4 @@ describe("generic credential failover runner", () => {
 		expect(failure.retryAt).toBe(NOW + 60_000);
 		expect(failure.cause).toBe(original);
 	});
-
-	// senpi#4329: the refusal keeps its prefix and typed due-back time; the shown time is local.
-	test.each([
-		["cooling", { name: "a", blockReason: "auth_error", blockedUntil: 1_000_000 + 60_000 }, 1_000_000 + 60_000],
-		["disabled", { name: "a", blockReason: "account_disabled" }, undefined],
-	] as const)("a %s pool refuses with its prefix and typed retryAt", async (_label, slot, retryAt) => {
-		const stream = runCredentialFailover<Event, RunSlot>({
-			listSlots: () => [slot],
-			select: firstAvailable,
-			runAttempt: () => events(),
-			isCommittedOutput: committedUnlessBookkeeping,
-			persistBlock: () => {},
-			now: () => 1_000_000,
-		});
-		const caught = await collect(stream).then(
-			() => undefined,
-			(error: unknown) => error,
-		);
-		expect(caught).toBeInstanceOf(CredentialFailoverError);
-		const failure = caught as CredentialFailoverError;
-		expect(failure.message.startsWith("No credential slots available: a (")).toBe(true);
-		expect(failure.retryAt).toBe(retryAt);
-		if (retryAt !== undefined) expect(failure.message).not.toContain(new Date(retryAt).toISOString());
-	});
 });

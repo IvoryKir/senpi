@@ -107,7 +107,14 @@ function coolingProbe<TSlot extends RunSlot>(slots: readonly TSlot[], attempted:
 	return soonest === undefined ? [] : [soonest];
 }
 
-/** A slot's due-back time in the host's local zone, as the reader's clock shows it (senpi#4329). */
+/**
+ * A slot's due-back time as the reader's local clock shows it, followed by the ISO instant that the goal
+ * provider-retry scan (`providerRetryAt`) and turn-end liveness read from this text (senpi#4329).
+ */
+function dueBack(epochMs: number): string {
+	return `${localTime(epochMs)} (${new Date(epochMs).toISOString()})`;
+}
+
 function localTime(epochMs: number): string {
 	return new Date(epochMs).toLocaleString("en-US", {
 		year: "numeric",
@@ -129,17 +136,17 @@ function noSlotsMessage(slots: readonly RunSlot[], now: number): string {
 	const blocked = slots.map((slot) => {
 		const reason = slot.blockReason ?? "blocked";
 		if (slot.blockedUntil !== undefined && slot.blockedUntil > now) {
-			return `${slot.name} (${reason} until ${localTime(slot.blockedUntil)})`;
+			return `${slot.name} (${reason} until ${dueBack(slot.blockedUntil)})`;
 		}
 		return reason === "account_disabled"
 			? `${slot.name} (account_disabled until re-login)`
 			: `${slot.name} (${reason})`;
 	});
-	const dueBack = soonestRetryAt(slots, now);
+	const firstBack = soonestRetryAt(slots, now);
 	const step =
-		dueBack === undefined
+		firstBack === undefined
 			? "Sign in again or add a new API key for this provider, or choose another model."
-			: `Wait until ${localTime(dueBack)}, or choose another model.`;
+			: `Wait until ${localTime(firstBack)}, or choose another model.`;
 	return blocked.length === 0
 		? `No credential slots available. ${step}`
 		: `No credential slots available: ${blocked.join(", ")}. ${step}`;
