@@ -56,11 +56,18 @@ describe("regression senpi#4449: a large skill catalog is listed one line per sk
 	// clause alone is longer than the line) instead of the leading what-it-does text.
 	const LEAD =
 		"Operates the deployment toolchain across every environment, including staging rollouts, canary promotion, rollback drills, secret rotation and the post-deploy probes.";
-	const shapes: ReadonlyArray<{ readonly shape: string; readonly description: string; readonly clause: string }> = [
+	const shapes: ReadonlyArray<{
+		readonly shape: string;
+		readonly description: string;
+		readonly clause: string;
+		readonly startsWith?: string;
+	}> = [
 		{
 			shape: "what it does, then Use when",
 			description: `${LEAD} Use when the user asks to deploy or roll back a service.`,
 			clause: "Use when the user asks to deploy or roll back a service.",
+			// A short trigger leaves room, which goes to the leading what-it-does text.
+			startsWith: "Operates the deployment toolchain",
 		},
 		{
 			shape: "Use for after a long lead",
@@ -114,7 +121,7 @@ describe("regression senpi#4449: a large skill catalog is listed one line per sk
 		},
 	];
 
-	it.each(shapes)("keeps the when-to-use clause: $shape", ({ description, clause }) => {
+	it.each(shapes)("keeps the when-to-use clause: $shape", ({ description, clause, startsWith }) => {
 		const catalog = [
 			...Array.from({ length: 101 }, (_, index) => skill("/home/u/.agents/skills", `skill-${index}`)),
 			{ ...skill("/home/u/.agents/skills", "deploy"), description },
@@ -126,5 +133,6 @@ describe("regression senpi#4449: a large skill catalog is listed one line per sk
 
 		expect(text.length).toBeLessThanOrEqual(160);
 		expect(text).toContain(clause);
+		if (startsWith !== undefined) expect(text.slice(0, startsWith.length)).toBe(startsWith);
 	});
 });
