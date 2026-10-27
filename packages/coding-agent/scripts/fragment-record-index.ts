@@ -29,4 +29,3 @@ export function buildFragmentFixtureIndex(cases: readonly { caseId: string; kind
 		cases: cases.map((fixture) => ({ caseId: fixture.caseId, file: `${fixture.caseId}.json`, kind: fixture.kind })),
 	};
 }
-
