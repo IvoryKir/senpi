@@ -1,9 +1,11 @@
 import type { BrowserEngine } from "../../core/browser-engine.ts";
 import type { McpFormInput, McpFormOutcome } from "../../core/mcp-form-types.ts";
+import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { PromptSurface } from "../../core/dynamic-prompt/types.ts";
 import type { MirroredLimits } from "../../core/subscription-limits/limit-store.ts";
 import type { CliRuntimeConfiguration } from "../../main.ts";
 import type { RpcSessionState } from "./rpc-types.ts";
+import type { SessionBootstrap } from "./session-acceptance-lane.ts";
 import type { RpcSessionLaunchProfile } from "./session-registry.ts";
 import { RpcSessionRegistryError } from "./session-registry-types.ts";
 
@@ -46,7 +48,8 @@ export type HostToSessionWorker =
 			/** The host's subscription limit records when the isolate starts (senpi#3695). */
 			subscriptionLimits: readonly MirroredLimits[];
 	  }
-	| { type: "commit"; request: number }
+	/** `acceptance`: the host owns an acceptance lane, so the isolate sends a bootstrap and ordered output frames. */
+	| { type: "commit"; request: number; acceptance?: true }
 	| {
 			type: "bind";
 			request: number;
@@ -84,14 +87,19 @@ export type SessionWorkerToHost =
 			input: Omit<McpFormInput, "operationSignal" | "operationCurrent" | "presentationSignal">;
 	  }
 	| { type: "prepared"; request: number; sessionPath: string }
-	| { type: "ready"; request: number; snapshot: WorkerSnapshot }
+	| { type: "ready"; request: number; snapshot: WorkerSnapshot; bootstrap?: SessionBootstrap }
 	| { type: "result"; request: number; error?: string }
 	| { type: "reserve"; path: string; signal: SharedArrayBuffer }
 	| { type: "snapshot"; snapshot: WorkerSnapshot; signal: SharedArrayBuffer; settled?: boolean }
 	| { type: "control_done"; control: "cancel_ui" }
 	| {
 			type: "output";
+			/** One per output frame of this worker incarnation, from 0; continuity only, never the accepted sequence. */
+			ordinal?: number;
 			record: object;
+			recovery?: RecoveryCarrier;
+			/** The next incarnation's baseline, on the `session_replaced` record that starts it. */
+			bootstrap?: SessionBootstrap;
 			connection?: string;
 			signal: SharedArrayBuffer;
 			activity: Pick<WorkerSnapshot, "busy" | "handoffBusy" | "streaming">;
