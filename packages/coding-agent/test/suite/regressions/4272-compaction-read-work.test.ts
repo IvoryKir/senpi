@@ -48,14 +48,10 @@ it.each(
 		await store.idle();
 		pause.mockRestore();
 		const reads = vi.spyOn(store, "readLeaf");
-		const started = performance.now();
 		index.maybeCompact();
 		await store.idle();
 		const hydrations = reads.mock.calls.length;
 		reads.mockRestore();
-		console.info(
-			`compaction count=${count} mode=${mode} leafReads=${hydrations} pointDescents=${points.mock.calls.length} durationMs=${performance.now() - started}`,
-		);
 		// New nodes stay decoded; each 128-row append round rehydrates only its upper path.
 		const bound = Math.ceil(count / 128) * Math.ceil(Math.log2(count));
 		if (mode === "cache-disabled") expect(hydrations).toBeGreaterThan(bound);

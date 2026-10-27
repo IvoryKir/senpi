@@ -20,7 +20,6 @@ export class CompactPagedTree<T> {
 	private readonly values: CompactValues;
 	private readonly leavesOf: (value: T) => readonly LeafId[];
 	private dirty: LeafId[] = [];
-	private dirtyBytes = 0;
 	private cache: Map<LeafId, { node: Node<T>; name: string; bytes: number }> | undefined;
 	private cacheBytes = 0;
 	allocatedNodes = 0;
@@ -154,8 +153,6 @@ export class CompactPagedTree<T> {
 	}
 
 	private async make(node: Node<T>): Promise<PagedRoot> {
-		// Intermediate changed paths can die before their first write; bound the draft buffer, not each update.
-		if (this.dirtyBytes >= 32_768) await this.flush();
 		const text = JSON.stringify(node);
 		// Decode before allocating: a failed key read must not strand a new leaf.
 		const name = this.cache ? await this.values.read(node.key) : undefined;
@@ -169,7 +166,6 @@ export class CompactPagedTree<T> {
 		]);
 		this.store.adjust(leaf, -1, 0);
 		this.dirty.push(leaf);
-		this.dirtyBytes += text.length * 2;
 		this.allocatedNodes++;
 		if (this.cache && typeof name === "string") this.remember(leaf, node, name, text.length);
 		return {
@@ -179,10 +175,13 @@ export class CompactPagedTree<T> {
 		};
 	}
 
+	/**
+	 * Commits a round: nodes replaced within it were released and are skipped, so only survivors are written.
+	 * Until then a round's built nodes stay resident, at most 384 keys x 3 nodes per level x (height + 1).
+	 */
 	async flush(): Promise<void> {
 		const dirty = this.dirty;
 		this.dirty = [];
-		this.dirtyBytes = 0;
 		for (const leaf of dirty) await this.store.flushLeaf(leaf);
 	}
 

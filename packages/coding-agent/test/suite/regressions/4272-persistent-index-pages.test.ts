@@ -116,14 +116,8 @@ it("publishes one changed page through bounded paths without copying the large b
 		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
 		pause.mockRestore();
-		const reads = vi.spyOn(store, "readLeaf");
-		const started = performance.now();
 		index.maybeCompact();
 		await store.idle();
-		console.info(
-			`compaction count=${count} leafReads=${reads.mock.calls.length} durationMs=${performance.now() - started}`,
-		);
-		reads.mockRestore();
 		expect(
 			await index.bases.get(index.base, "00512"),
 			"the base is compacted before the measured step",
