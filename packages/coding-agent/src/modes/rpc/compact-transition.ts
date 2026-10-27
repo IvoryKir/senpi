@@ -69,6 +69,7 @@ type CompactRejection =
 	| "cold_operation_required"
 	| "unknown_message"
 	| "invalid_parse_frontier"
+	| "invalid_seed_frontier"
 	| "invalid_phase"
 	| "wrong_kind"
 	| "wrong_epoch"

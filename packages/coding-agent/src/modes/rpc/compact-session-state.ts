@@ -32,7 +32,10 @@ export class CompactSessionState extends CompactActiveMessages {
 				if (!Number.isSafeInteger(address.contentIndex) || address.contentIndex < 0)
 					throw new CompactTransitionError("unknown_block", String(address.contentIndex));
 				const starting =
-					"seed" in t.event || (t.event.type === "message_block_state" && t.event.phase === "insert" && !old);
+					"seed" in t.event ||
+					(t.event.type === "message_block_state" &&
+						t.event.phase === "insert" &&
+						(!old || old.seeded?.phase === "initial"));
 				if (starting) this.identity.validate(t);
 				using draft = new CompactSeededDraft(this.store);
 				const fields = updateFields(draft, this.active.get(t.messageId)?.fields, t);
@@ -188,7 +191,6 @@ export class CompactSessionState extends CompactActiveMessages {
 		this.publish(t, block);
 		adjustBlock(this.store, block, -1);
 		this.identity.commit(t);
-		this.cold.activate(t.messageId);
 	}
 
 	/** A start installs initial slots once; a terminal wins whole, and the outer end settles it as pending. */
@@ -204,11 +206,7 @@ export class CompactSessionState extends CompactActiveMessages {
 		const next = seedMessage(draft, message, terminal, live?.blocks, t);
 		const correlation = live ? live.correlation : t.correlation && draft.fields(t.correlation);
 		this.install(t.messageId, { fields: next.fields, correlation, epoch: t.epoch }, next.blocks);
-		if (!live) {
-			this.identity.commit(t);
-			// Same activation as every start path, so a queued cold op cannot land on this new incarnation.
-			this.cold.activate(t.messageId);
-		}
+		if (!live) this.identity.commit(t);
 		if (t.record.type === "message_end") this.settle(t.messageId, "pending");
 	}
 }

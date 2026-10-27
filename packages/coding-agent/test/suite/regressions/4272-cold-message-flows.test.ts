@@ -169,3 +169,48 @@ it("T6 runs a large flow as one ordered unit holding a single capacity slot", as
 		await root.cleanup();
 	}
 });
+
+it.each(["start_then_end", "end_only"] as const)(
+	"T6 a seeded_message incarnation (%s) voids cold work queued while its key was settled",
+	async (shape) => {
+		const root = await spoolRoot();
+		const io = controlledIo();
+		const state = new CompactSessionState({ dir: root.dir, io: io.io, compactAboveRows: 1 });
+		const user = (content: string) => ({ role: "user" as const, content, timestamp: 1 });
+		const seeded = (
+			record: { type: "message_start" | "message_end"; message: ReturnType<typeof user> },
+			id = startIdentity(),
+		) => state.accept({ type: "seeded_message", ...id, messageId: "target", record });
+		try {
+			state.accept(startBlock("blocker", "body"));
+			state.accept({ type: "message_status", messageId: "blocker", persistence: "pending" });
+			seeded({ type: "message_end", message: user("old") });
+			await state.idle();
+			const hold = io.hold("read", (path) => path.includes("/page-"));
+			const blocker = state.applyCold({ type: "message_status", messageId: "blocker", persistence: "appended" });
+			await hold.entered;
+			const sequence = state.acceptedSequence;
+			const stale = state.applyCold({ type: "message_status", messageId: "target", persistence: "failed" });
+			if (shape === "start_then_end") {
+				const id = startIdentity();
+				seeded({ type: "message_start", message: user("new") }, id);
+				seeded({ type: "message_end", message: user("new") }, startIdentity(id.firstOrdinal));
+			} else seeded({ type: "message_end", message: user("new") });
+			hold.release();
+			expect(await blocker).toMatchObject({ kind: "applied" });
+			expect(await stale).toEqual({ kind: "rejected", reason: "active_message", afterSequence: sequence });
+			const cut = state.freeze();
+			try {
+				expect((await state.read(cut)).messages.find((message) => message.messageId === "target")).toMatchObject({
+					persistence: "pending",
+					message: { content: "new" },
+				});
+			} finally {
+				state.release(cut);
+			}
+		} finally {
+			await state.retire();
+			await root.cleanup();
+		}
+	},
+);

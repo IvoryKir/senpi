@@ -31,7 +31,9 @@ it.each([-1, 0.5, 1, 3, NaN, Infinity, undefined])(
 		partial.content.push({ type: "text", text: "Hé" });
 		const event = owner.project({ type: "text_start", contentIndex: 0, partial });
 		if (event.type !== "text_start") throw new Error("missing text seed");
-		expect(() => owner.malformed({ ...event, seed: { ...event.seed, nextOffset } })).toThrow();
+		expect(() => owner.malformed({ ...event, seed: { ...event.seed, nextOffset } })).toThrow(
+			expect.objectContaining({ reason: "invalid_seed_frontier" }),
+		);
 		expect(state.acceptedSequence).toBe(0);
 		expect((await owner.view()).messages).toEqual([]);
 		owner.accept(event);

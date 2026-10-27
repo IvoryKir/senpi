@@ -98,6 +98,8 @@ export class CompactActiveMessages extends CompactStateStorage {
 
 	private publishRow(messageId: string, message: ActiveMessage): void {
 		this.messages = this.messageRoots.set(this.messages, message.order, rowOf(messageId, message));
+		// The only entry into `active`, so every start path voids cold work queued while the key was settled.
+		if (!this.active.has(messageId)) this.cold.activate(messageId);
 		this.active.set(messageId, message);
 	}
 
