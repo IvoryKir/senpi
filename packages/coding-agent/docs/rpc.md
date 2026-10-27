@@ -1958,9 +1958,10 @@ process was started with in `SENPI_RPC_CALLER_ENV_NAMES` (comma-separated; a ses
 as `PI_SESSION_ID` is never accepted). A name outside that set, a non-string value, a name that is not `[A-Z_][A-Z0-9_]*`,
 more than 16 entries, a value over 4096 characters or one containing NUL is refused with `invalid_session_env: <detail>`
 naming the offender (a name longer than 64 characters is cut to its first 64 plus `...`) and the passable set; values
-are never echoed. A task child (`open_session.spawnedBy` naming, by `durableSessionId` or `sessionId`, a parent session
-this host currently holds) inherits its parent's entries, and its own `env` entries win over them; a `spawnedBy`
-naming a parent that is closed or not on this host inherits nothing. Inheritance follows the same trust boundary as
+are never echoed. A task child (`open_session.spawnedBy` naming, by `durableSessionId` or `sessionId`, a parent this
+host holds open and bound, the same rule attach uses) inherits its parent's entries, and its own `env` entries win
+over them; a `spawnedBy` naming a parent that is opening, closing, quarantined, closed or not on this host inherits
+nothing. Inheritance follows the same trust boundary as
 attach: the host does not tie the opening connection to the parent, so any client on the host that could attach to
 the parent (and run its tools there) can open a child that inherits the parent's entries, which grants it nothing
 attach does not. Applied when the open

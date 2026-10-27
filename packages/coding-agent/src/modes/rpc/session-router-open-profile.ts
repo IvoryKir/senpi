@@ -127,12 +127,15 @@ export function validatedOpenProfile(
  * The caller env of a task child's parent, when THIS host currently holds that parent (senpi#4381): a lane
  * identity follows the task tree without every opener repeating it. A closed parent or one elsewhere
  * contributes nothing. The opening connection is not tied to the parent: this is the attach trust boundary,
- * since any client that names an open session can already attach to it and run its tools.
+ * since any client that names an open session can already attach to it and run its tools. A parent counts
+ * exactly when attach would accept it (open and bound); a closing or quarantined one contributes nothing.
  */
 function parentSessionEnv(host: RouterContext, parentSessionId: string | undefined): SessionEnv | undefined {
 	if (parentSessionId === undefined) return undefined;
 	const parent = host.registry
 		.list()
 		.find((row) => row.durableSessionId === parentSessionId || row.sessionId === parentSessionId);
-	return parent === undefined ? undefined : host.registry.peek(parent.sessionId)?.profile.sessionEnv;
+	if (parent === undefined) return undefined;
+	const entry = host.registry.peek(parent.sessionId);
+	return entry?.state === "open" && host.bindings.has(parent.sessionId) ? entry.profile.sessionEnv : undefined;
 }
