@@ -93,6 +93,7 @@ import type {
 	OffloadOptions,
 	ProjectTrustContext,
 	ProjectTrustEvent,
+	ProviderLoginStartEvent,
 	ProjectTrustEventResult,
 	ProviderConfig,
 	ProviderRequestPreparation,
@@ -624,6 +625,7 @@ export class ExtensionRunner {
 		this.extensions = extensions;
 		registerRunnerExtensions(this, extensions);
 		this.runtime = runtime;
+		runtime.emitProviderLoginStart = (event) => this.emitProviderLoginStart(event);
 		this.uiContext = noOpUIContext;
 		this.cwd = cwd;
 		this.sessionManager = sessionManager;
@@ -2561,6 +2563,17 @@ export class ExtensionRunner {
 		}
 
 		return { skillPaths, promptPaths, themePaths, hookPaths };
+	}
+
+	/** Awaits every `provider_login_start` handler in order; a failing handler is reported and the login goes on. */
+	async emitProviderLoginStart(event: ProviderLoginStartEvent): Promise<void> {
+		for (const { path, handler } of flattenHandlers(this.extensions, event.type)) {
+			try {
+				await handler(event, this.createContext(path));
+			} catch (err) {
+				this.reportHandlerFailure(path, event.type, err);
+			}
+		}
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
