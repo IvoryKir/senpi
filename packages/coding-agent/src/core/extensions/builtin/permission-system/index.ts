@@ -348,6 +348,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 				permission: permissionRequest.permission,
 				patterns: permissionRequest.patterns,
 				always: permissionRequest.always,
+				...(permissionRequest.originalPaths ? { originalPaths: permissionRequest.originalPaths } : {}),
 				...(permissionRequest.widerAlways ? { widerAlways: permissionRequest.widerAlways } : {}),
 				metadata: createRequestMetadata(event.toolName, event.input),
 				tool: {

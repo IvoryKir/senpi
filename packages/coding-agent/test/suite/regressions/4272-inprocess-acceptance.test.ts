@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { ProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/provider-scope";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.ts";
@@ -11,7 +10,8 @@ import { SessionAcceptanceLane } from "../../../src/modes/rpc/session-acceptance
 import { createRpcSessionBinding } from "../../../src/modes/rpc/session-binding.ts";
 import { SessionEventWriter } from "../../../src/modes/rpc/session-event-writer.ts";
 import type { RpcSessionEntry } from "../../../src/modes/rpc/session-registry.ts";
-import { createHarness } from "../harness.ts";
+import { createStructuredHarness } from "../structured-lane-sdk-harness.ts";
+import { scriptProvider, textReply } from "../structured-lane-support.ts";
 import { createInProcessRig } from "../rpc-inprocess-host-support.ts";
 
 const FLAG = "SENPI_ENGINE_SOCKET_COMPACT_UPDATES";
@@ -40,7 +40,7 @@ function field(record: object, key: string): unknown {
 it("T5 sequences in-process records in producer order, correlation before its content, with legacy bytes unchanged", async () => {
 	vi.stubEnv(FLAG, "1");
 	const scope = new ProviderScope();
-	const harness = await runWithProviderScope(scope, () => createHarness());
+	const harness = await runWithProviderScope(scope, () => createStructuredHarness());
 	const runtime = new AgentSessionRuntime(
 		harness.session,
 		{
@@ -101,7 +101,7 @@ it("T5 sequences in-process records in producer order, correlation before its co
 	writer.attachConnectionToSession("client", "session");
 	const binding = await createRpcSessionBinding("session", entry, writer, () => {});
 	try {
-		harness.setResponses([fauxAssistantMessage("answer", { timestamp: 1 })]);
+		scriptProvider(harness, [textReply("answer")]);
 		await writer.withConnection("client", () =>
 			binding.handle({ type: "prompt", id: "p1", message: "question", clientMessageId: "c-1" }),
 		);
@@ -124,7 +124,13 @@ it("T5 sequences in-process records in producer order, correlation before its co
 		);
 		const userStart = seen.findIndex((record) => record.type === "message_start" && record.role === "user");
 		expect(userStart).toBeGreaterThan(firstCorrelated);
-		expect(seen[userStart]?.sequence).toBe((correlated?.sequence ?? 0) + 1);
+		expect(seen[firstCorrelated + 1]?.sequence, "the turn's first content follows its correlation").toBe(
+			(correlated?.sequence ?? 0) + 1,
+		);
+		const turnPrefix = seen.slice(firstCorrelated, userStart + 1);
+		expect(turnPrefix.every((record) => record.clientMessageId === "c-1")).toBe(true);
+		for (const [index, record] of turnPrefix.entries())
+			if (index > 0) expect(record.sequence).toBe((turnPrefix[index - 1]?.sequence ?? 0) + 1);
 
 		const assistant = sequenced.filter(
 			(record) =>

@@ -71,6 +71,9 @@ import { SessionWriteFence } from "./session-write-fence.ts";
 import {
 	discardFailedFirstFlush,
 	discardFailedFirstFlushAsync,
+	type SessionRecovery,
+	type SessionRecoveryCause,
+	sessionRecoveryCause,
 	truncateToLastCompleteLine,
 } from "./session-write-recovery.ts";
 import {
@@ -83,6 +86,7 @@ import { isVirtualModel } from "./virtual-models.ts";
 
 export type { SessionListProgress } from "./session-discovery.ts";
 export { loadEntriesFromFile, loadEntriesFromFileAsync } from "./session-entry-file.ts";
+export type { SessionRecovery, SessionRecoveryCause } from "./session-write-recovery.ts";
 
 // Fork change: inlined UUIDv7 (upstream uses the `uuid` npm package). Keeps this
 // package self-contained so consumers don't need a transitive `uuid` install.
@@ -1182,6 +1186,10 @@ export class SessionManager {
 	private ownedHeaderFile: string | undefined;
 	// Set when an append to the flushed file failed and may have left a partial last line.
 	private tailMayBeTorn = false;
+	/** Why the tail may be torn, for the notice the person gets when it is set aside. */
+	private tornTailCause: SessionRecoveryCause = "unknown";
+	private readonly pendingRecoveries: SessionRecovery[] = [];
+	private recoveryListener: ((recovery: SessionRecovery) => void) | undefined;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	// Runtime-only identity tracking lets AgentSession compare messages to a
@@ -1379,12 +1387,20 @@ export class SessionManager {
 			reserveSessionWrite(resolvedFile);
 			this.writeFence.opened(resolvedFile);
 		}
+		const recoveryCause = this.sessionFile === resolvedFile && this.tailMayBeTorn ? this.tornTailCause : "unknown";
+		this.tailMayBeTorn = false;
+		this.tornTailCause = "unknown";
 		this.sessionFile = resolvedFile;
 		this.transcriptFile.reset();
 		this.mirrorTrimmed = false;
 		this.trimmedIds.clear();
 		this.residentStore.clear();
-		if (existsSync(resolvedFile)) return resolvedFile;
+		if (existsSync(resolvedFile)) {
+			// This process opens the session for append; a final line torn by an interrupted write is set aside now
+			// (senpi#4295: every open path, `-c` included), never from read-only loadEntriesFromFile callers.
+			if (this.persist) this._settleFinalLine(resolvedFile, recoveryCause);
+			return resolvedFile;
+		}
 		// Same here: the explicit path from --session stays the only granted one.
 		// The file does not exist yet, so this open CREATES the session: a caller-supplied
 		// id is the session's identity from here on. An EXISTING file never reaches this
@@ -1825,6 +1841,32 @@ export class SessionManager {
 	}
 
 	/**
+	 * Receives each repair of this session's file once (senpi#4295): a torn tail set aside on open, or the fragment of a
+	 * failed append set aside before the next one. Repairs made before a listener exists are delivered on registration.
+	 */
+	onRecovery(listener: (recovery: SessionRecovery) => void): () => void {
+		this.recoveryListener = listener;
+		for (const recovery of this.pendingRecoveries.splice(0)) listener(recovery);
+		return () => {
+			if (this.recoveryListener === listener) this.recoveryListener = undefined;
+		};
+	}
+
+	private _reportRecovery(recovery: SessionRecovery): void {
+		if (this.recoveryListener === undefined) this.pendingRecoveries.push(recovery);
+		else this.recoveryListener(recovery);
+	}
+
+	private _settleFinalLine(sessionFile: string, cause: SessionRecoveryCause): void {
+		const repair = terminateFinalSessionLine(sessionFile, cause);
+		if (repair?.kind === "set_aside") this._reportRecovery(repair.recovery);
+		if (repair?.kind === "deferred") {
+			this.tailMayBeTorn = true;
+			this.tornTailCause = cause;
+		}
+	}
+
+	/**
 	 * Writes `entry`, which is not in `fileEntries` yet, before memory commits it. A throw means the
 	 * file did not take the entry, so the caller commits nothing and no later entry can chain onto it.
 	 */
@@ -1836,14 +1878,16 @@ export class SessionManager {
 
 		if (this.flushed) {
 			if (this.tailMayBeTorn) {
-				truncateToLastCompleteLine(this.sessionFile);
+				const recovery = truncateToLastCompleteLine(this.sessionFile, this.tornTailCause);
 				this.tailMayBeTorn = false;
+				if (recovery !== undefined) this._reportRecovery(recovery);
 			}
 			const bytes = this._transcriptEntryBytes(entry);
 			try {
 				appendFileSync(this.sessionFile, `${bytes}\n`);
 			} catch (error) {
 				this.tailMayBeTorn = true;
+				this.tornTailCause = sessionRecoveryCause(error);
 				throw error;
 			}
 			return bytes;
@@ -3114,9 +3158,6 @@ export class SessionManager {
 		const preloadedFileEntries = discovery.needsFullLoad
 			? loadEntriesFromFile(resolvedPath, compactUpdatesEnabled())
 			: undefined;
-		// This process opens the session for append; normalize a final unterminated
-		// JSONL entry here, never from read-only loadEntriesFromFile callers.
-		terminateFinalSessionLine(resolvedPath);
 		const header = discovery.header ?? headerOf(preloadedFileEntries);
 		const { cwd, dir } = openLocation(resolvedPath, sessionDir, cwdOverride, header);
 		return new SessionManager(cwd, dir, resolvedPath, true, options, preloadedFileEntries);
@@ -3140,7 +3181,6 @@ export class SessionManager {
 		const preloadedFileEntries = discovery.needsFullLoad
 			? await loadEntriesFromFileAsync(resolvedPath, slicer, compactUpdatesEnabled())
 			: undefined;
-		terminateFinalSessionLine(resolvedPath);
 		const header = discovery.header ?? headerOf(preloadedFileEntries);
 		const { cwd, dir } = openLocation(resolvedPath, sessionDir, cwdOverride, header);
 		const manager = new SessionManager(cwd, dir, resolvedPath, true, options, DEFERRED_FILE_LOAD);
