@@ -3,6 +3,7 @@ import { checkPath, replaceMethod } from "./interpose-paths.js";
 const { constants } = process.getBuiltinModule("node:fs");
 
 export function openModes(flags = "r") {
+	flags ??= "r";
 	if (typeof flags === "number") {
 		const access = flags & (constants.O_RDONLY | constants.O_WRONLY | constants.O_RDWR);
 		if (access === constants.O_WRONLY) return ["write"];

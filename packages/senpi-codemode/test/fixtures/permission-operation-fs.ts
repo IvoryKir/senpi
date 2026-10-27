@@ -19,6 +19,8 @@ const operations = [
 	["symlink", "q,p", "write", "missing", "undefined"],
 	["chmod", "p,0o600", "write", undefined, "undefined"],
 	["chown", "p,process.getuid(),process.getgid()", "write", undefined, "undefined"],
+	["lchown", "p,process.getuid(),process.getgid()", "write", "link", "undefined"],
+	...(process.platform === "darwin" ? [["lchmod", "p,0o600", "write", "link", "undefined"] as const] : []),
 	["utimes", "p,1,1", "write", undefined, "undefined"],
 	["lutimes", "p,1,1", "write", "link", "undefined"],
 	["rename", "p,q", "write", undefined, "undefined"],
@@ -32,6 +34,18 @@ const operations = [
 ] as const;
 
 export const fsOperations: readonly OperationRow[] = [
+	// Bun exposes only the promise stub outside macOS; preserve its native error.
+	...(process.platform !== "darwin"
+		? [
+				{
+					api: "fs.promises.lchmod unsupported",
+					tool: "write" as const,
+					seed: "link" as const,
+					shape: "string",
+					code: "let result;try {await fs.promises.lchmod(p,0o600);} catch(error) {if(error.code!=='ERR_METHOD_NOT_IMPLEMENTED')throw error;result=error.code;}if(result!=='ERR_METHOD_NOT_IMPLEMENTED')throw new Error('expected native unsupported result');",
+				},
+			]
+		: []),
 	...operations.flatMap(([name, args, tool, seed, shape]) =>
 		[
 			{ api: `fs.${name}Sync`, code: `const result=fs.${name}Sync(${args});` },
@@ -117,6 +131,28 @@ export const fsOperations: readonly OperationRow[] = [
 					: form === "Promise"
 						? `const h=await fs.promises.open(p,'${flags}');const result=h.fd;await h.close();`
 						: `const result=await new Promise((resolve,reject)=>fs.open(p,'${flags}',(e,fd)=>e?reject(e):resolve(fd)));fs.closeSync(result);`,
+		})),
+	),
+	...[
+		["omitted flags", ""],
+		["undefined flags", "undefined,"],
+		["null flags", "null,"],
+		["flags and mode", "'r',0o600,"],
+	].map(([name, args]): OperationRow => ({
+		api: `fs.open(${name})`,
+		tool: "read",
+		shape: "string",
+		code: `const fd=await new Promise((resolve,reject)=>fs.open(p,${args}(e,fd)=>e?reject(e):resolve(fd)));try {const result=fs.readFileSync(fd,'utf8');if(result!=='{}')throw new Error('wrong file');} finally {fs.closeSync(fd)} const result='{}';`,
+	})),
+	...["", "undefined", "null"].flatMap((flags) =>
+		["Sync", "Promise"].map((form): OperationRow => ({
+			api: `fs.open(${form},${flags || "omitted"})`,
+			tool: "read",
+			shape: "number",
+			code:
+				form === "Sync"
+					? `const result=fs.openSync(p${flags ? `,${flags}` : ""});fs.closeSync(result);`
+					: `const h=await fs.promises.open(p${flags ? `,${flags}` : ""});const result=h.fd;await h.close();`,
 		})),
 	),
 	{ api: "prelude.read", tool: "read", shape: "string", code: "const result=await read(p);" },

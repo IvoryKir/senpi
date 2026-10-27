@@ -13,16 +13,30 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
-import { bunOperations } from "./permission-operation-bun.ts";
+import { blobControls, bunOperations } from "./permission-operation-bun.ts";
 import { fsOperations } from "./permission-operation-fs.ts";
 import { processOperations } from "./permission-operation-process.ts";
 
 const root = mkdtempSync(join(tmpdir(), "permission-operations-"));
 const failures: string[] = [];
 let passed = 0;
+let uploads = 0;
+const server = createServer(async (request, response) => {
+	uploads++;
+	for await (const chunk of request) response.write(chunk);
+	response.end();
+});
+await new Promise<void>((resolve, reject) => {
+	server.once("error", reject);
+	server.listen(0, "127.0.0.1", resolve);
+});
+const address = server.address();
+assert.ok(address && typeof address === "object");
+const endpoint = `http://127.0.0.1:${address.port}/`;
 function snapshot(path: string): unknown {
 	if (!existsSync(path)) return null;
 	const stat = lstatSync(path);
@@ -42,6 +56,7 @@ try {
 	for (const mode of ["worker", "inline"]) {
 		for (const active of [true, false]) {
 			const denied = new Set<string>();
+			let readOnlyDeny = false;
 			const seen: { tool: string; path?: string }[] = [];
 			const kernel = new JavaScriptKernel({
 				sessionId: crypto.randomUUID(),
@@ -52,7 +67,8 @@ try {
 					state: () => ({ epoch: 1, active, rules: [{ permission: "read", pattern: "target", layer: "user" }] }),
 					decide: (_token, call) => {
 						seen.push({ tool: call.tool, ...(call.input.path ? { path: call.input.path } : {}) });
-						return [...denied].some((p) => call.input.path === p || call.input.command?.includes(p))
+						return (!readOnlyDeny || ["read"].includes(call.tool)) &&
+							[...denied].some((p) => call.input.path === p || call.input.command?.includes(p))
 							? { action: "deny", rule: { permission: call.tool, pattern: "target", layer: "user" } }
 							: { action: "pass" };
 					},
@@ -94,7 +110,8 @@ try {
 						if (deny) denied.add(p);
 						seen.length = 0;
 						const before = snapshot(dir);
-						const code = `const p=${JSON.stringify(p)},q=${JSON.stringify(q)}; const fs=require('node:fs'),cp=require('node:child_process');
+						const uploadsBefore = uploads;
+						const code = `const p=${JSON.stringify(p)},q=${JSON.stringify(q)},endpoint=${JSON.stringify(endpoint)}; const fs=require('node:fs'),cp=require('node:child_process');
 							${row.code}
 							return Array.isArray(result)?'array':Buffer.isBuffer(result)?'buffer':result instanceof Uint8Array?'uint8array':result instanceof ArrayBuffer?'arraybuffer':typeof result;`;
 						const result = await kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 8000 });
@@ -104,6 +121,7 @@ try {
 								assert.equal(result.error?.code, "cell_permission_denied", JSON.stringify(result));
 								assert.equal(result.error?.permissionRule?.pattern, "target");
 								assert.deepEqual(snapshot(dir), before, "denied operation changed filesystem");
+								assert.equal(uploads, uploadsBefore, "denied file reached the HTTP server");
 							} else {
 								assert.equal(result.ok, true, JSON.stringify(result));
 								assert.equal(result.valueRepr, JSON.stringify(row.shape));
@@ -124,12 +142,33 @@ try {
 						rmSync(dir, { recursive: true, force: true });
 					}
 				}
+				readOnlyDeny = true;
+				for (const row of blobControls) {
+					const p = join(root, "read-denied");
+					const q = join(root, "memory-output");
+					writeFileSync(p, "{}");
+					denied.clear();
+					denied.add(p);
+					const result = await kernel.run({
+						cellId: crypto.randomUUID(),
+						code: `const p=${JSON.stringify(p)},q=${JSON.stringify(q)};const fs=require('node:fs');${row.code}`,
+						timeoutMs: 8000,
+					});
+					try {
+						assert.equal(result.ok, true, JSON.stringify(result));
+						assert.equal(result.valueRepr, JSON.stringify(row.expected));
+						passed++;
+					} catch (error) {
+						failures.push(`${mode}/${active ? "active" : "inactive"}/${row.api}: ${String(error)}`);
+					}
+				}
 			} finally {
 				await kernel.close();
 			}
 		}
 	}
 } finally {
+	await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 	rmSync(root, { recursive: true, force: true });
 }
 console.log(JSON.stringify({ passed, failures }));

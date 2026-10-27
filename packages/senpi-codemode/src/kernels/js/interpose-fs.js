@@ -3,7 +3,7 @@ import { createResourceTable } from "./interpose-resources.js";
 
 export const FS_PERMISSION_PATHS = new Set([
 	"writeFile", "appendFile", "truncate", "mkdir", "mkdtemp", "rm", "rmdir", "unlink",
-	"symlink", "chmod", "chown", "utimes", "lutimes", "rename", "link", "copyFile", "cp",
+	"symlink", "chmod", "chown", "lchmod", "lchown", "utimes", "lutimes", "rename", "link", "copyFile", "cp",
 	"readFile", "readlink", "realpath", "readdir", "opendir", "open", "openAsBlob",
 	"createReadStream", "createWriteStream",
 ]);
@@ -16,6 +16,7 @@ export function installFilesystemPermissions(check) {
 		writeFile: [[0, "write"]], appendFile: [[0, "write"]], truncate: [[0, "write"]],
 		mkdir: [[0, "write"]], mkdtemp: [[0, "write"]], rm: [[0, "write"]], rmdir: [[0, "write"]],
 		unlink: [[0, "write"]], symlink: [[1, "write"]], chmod: [[0, "write"]], chown: [[0, "write"]],
+		lchmod: [[0, "write"]], lchown: [[0, "write"]],
 		utimes: [[0, "write"]], lutimes: [[0, "write"]], rename: [[0, "write"], [1, "write"]],
 		link: [[0, "write"], [1, "write"]], copyFile: [[0, "read"], [1, "write"]], cp: [[0, "read"], [1, "write"]],
 		readFile: [[0, "read"]], readlink: [[0, "read"]], realpath: [[0, "read"]],
@@ -57,6 +58,7 @@ export function installFilesystemPermissions(check) {
 		return resources.record(original.call(this, executionPath(file), flags, ...args), file, modes);
 	});
 	replaceMethod(fs, "open", (original) => function (file, flags, ...args) {
+		if (typeof flags === "function") { args = [flags]; flags = undefined; }
 		const modes = resources.open(file, flags);
 		const callback = args.at(-1);
 		if (typeof callback !== "function") return original.call(this, executionPath(file), flags, ...args);

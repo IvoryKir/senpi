@@ -5,6 +5,8 @@ export function installBunPermissions(check, resources) {
 	const files = new WeakMap();
 	const filePath = (file) => files.get(file);
 	const decide = (file, mode) => {
+		// BunFile and memory-backed Blob share a prototype; only tracked files do I/O.
+		if (!files.has(file)) return;
 		const target = filePath(file);
 		if (typeof target === "number") resources.use(target, mode);
 		else checkPath(check, mode, target);
@@ -26,11 +28,13 @@ export function installBunPermissions(check, resources) {
 		for (const name of ["write", "delete", "unlink"]) {
 			replaceMethod(proto, name, (original) => function (...args) {
 				decide(this, "write");
+				if (name === "write") decide(args[0], "read");
 				return original.apply(this, args);
 			});
 		}
 		replaceMethod(proto, "slice", (original) => function (...args) {
-			return remember(original.apply(this, args), filePath(this));
+			const result = original.apply(this, args);
+			return files.has(this) ? remember(result, filePath(this)) : result;
 		});
 		replaceMethod(proto, "writer", (original) => function (...args) {
 			decide(this, "write");
@@ -49,7 +53,36 @@ export function installBunPermissions(check, resources) {
 			if (files.has(target)) decide(target, "write");
 			else if (typeof target === "number") resources.use(target, "write");
 			else checkPath(check, "write", target);
+			decide(args[0], "read");
 			return original.call(this, executionPath(target), ...args);
+		});
+		// Native consumers do not call Blob's JS methods. Authorize a file when it
+		// enters a body/container, just like openAsBlob acquires its read grant.
+		// Rules cannot change within that grant's lifetime without kernel retirement.
+		const buffer = process.getBuiltinModule("node:buffer");
+		for (const name of ["Blob", "File", "Response", "Request"]) {
+			const original = globalThis[name];
+			const guarded = new Proxy(original, {
+				construct(target, args, newTarget) {
+					if (name === "Blob" || name === "File") {
+						if (Array.isArray(args[0])) {
+							args[0] = args[0].map((part) => { decide(part, "read"); return part; });
+						}
+					} else {
+						decide(name === "Response" ? args[0] : args[1]?.body, "read");
+					}
+					return Reflect.construct(target, args, newTarget);
+				},
+			});
+			globalThis[name] = guarded;
+			if (buffer[name] === original) buffer[name] = guarded;
+			if (original.prototype.constructor === original) {
+				Object.defineProperty(original.prototype, "constructor", { value: guarded });
+			}
+		}
+		for (const name of ["append", "set"]) replaceMethod(FormData.prototype, name, (original) => function (key, value, ...args) {
+			decide(value, "read");
+			return original.call(this, key, value, ...args);
 		});
 	}
 	if (bun?.Glob) {
@@ -67,6 +100,7 @@ export function installBunPermissions(check, resources) {
 	replaceMethod(globalThis, "fetch", (original) => function (input, ...args) {
 		const href = input instanceof Request ? input.url : String(input);
 		if (href.startsWith("file:")) checkPath(check, "read", new URL(href));
+		decide(args[0]?.body, "read");
 		return original.call(this, input, ...args);
 	});
 }

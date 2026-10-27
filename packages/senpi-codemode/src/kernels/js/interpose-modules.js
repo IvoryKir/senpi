@@ -7,16 +7,12 @@ export function installModulePermissions(check) {
 	const module = process.getBuiltinModule("node:module");
 	const nativeRequire = module.createRequire(import.meta.url);
 	const resolveSync = globalThis.Bun?.resolveSync;
-	const engineModules = new Set();
 	let sealed = false;
 	const forbidden = /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
 	const pathLike = (name) => name.startsWith(".") || isAbsolute(name) || name.startsWith("file:");
 	const guard = (source, importer) => {
 		const specifier = String(source);
-		if (!sealed) {
-			engineModules.add(importer);
-			return;
-		}
+		if (!sealed) return;
 		if (forbidden.test(specifier) || specifier.endsWith(".node")) check(() => ({ unsupported: true }));
 		if (!pathLike(specifier)) return;
 		const parent = importer?.startsWith("file:") ? fileURLToPath(importer) : importer;
@@ -67,5 +63,5 @@ export function installModulePermissions(check) {
 		return getBuiltin.call(this, name);
 	};
 	Object.defineProperty(globalThis, Symbol.for("senpi.kernel.permissionImport"), { value: guard });
-	return () => { sealed = true; Object.freeze(engineModules); };
+	return () => { sealed = true; };
 }
