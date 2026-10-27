@@ -9,8 +9,9 @@
   ],
   // Findings marked "pre-existing at origin main aceb1cc1d9" were already present when this check was added. Each
   // ignore is scoped to one file or one dependency, so new dead code anywhere else still fails the check. Remove an
-  // entry when its finding is fixed. Unused exports are never ignored file-wide on our own files: each is listed by
-  // name under preprocessorOptions.preExistingExports below, so a new unused export in the same file still fails.
+  // entry when its finding is fixed. Unused exports are ignored file-wide only on generated files (and on a vendored file
+  // only when its bytes are pinned and it is not edited here; none today). Every other file's are listed by name under
+  // preprocessorOptions.preExistingExports below, so a new unused export in the same file still fails.
   // Root-workspace file ignores (knip reads the root workspace's ignoreIssues only at the top level).
   "ignoreIssues": {
       // pre-existing at origin main aceb1cc1d9: imports of undeclared packages yaml
@@ -1366,6 +1367,8 @@
       "packages/senpi-codemode/src/kernels/js/worker-startup.ts": ["PROCESS_STARTUP_DEADLINE_MS", "ProcessKernelStartupTimeoutError"],
       // pre-existing at origin main aceb1cc1d9: unused exports PythonKernelStartupError
       "packages/senpi-codemode/src/kernels/py/startup.ts": ["PythonKernelStartupError"],
+      // vendored from earendil-works/pi v1.0.1 with senpi changes; pre-existing exports at origin main aceb1cc1d9: unused exports MAX_STORE_VALUE_CHARS, MAX_STORE_TOTAL_CHARS
+      "packages/senpi-codemode/src/kernels/sandbox/vendor/pi-codemode/runtime/prelude-source.ts": ["MAX_STORE_TOTAL_CHARS", "MAX_STORE_VALUE_CHARS"],
       // pre-existing at origin main aceb1cc1d9: unused exports isBunFfi
       "packages/senpi-codemode/src/kernels/shared/bun-ffi.ts": ["isBunFfi"],
       // pre-existing at origin main aceb1cc1d9: unused exports EVAL_KERNEL_UNAVAILABLE
@@ -1731,9 +1734,6 @@
       "ignoreIssues": {
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages @babel/types
         "src/kernels/js/rewrite-imports.ts": ["unlisted"],
-        // File-wide on purpose: vendored pi-codemode runtime (sandbox/vendor), synced from upstream and not edited here.
-        // pre-existing at origin main aceb1cc1d9: unused exports MAX_STORE_VALUE_CHARS, MAX_STORE_TOTAL_CHARS
-        "src/kernels/sandbox/vendor/pi-codemode/runtime/prelude-source.ts": ["exports"],
         // pre-existing at origin main aceb1cc1d9: duplicate exports MAX_DISPLAY_TEXT_BYTES|MAX_DISPLAY_JSON_BYTES
         "src/tool/display-json-size.ts": ["duplicates"],
         // pre-existing at origin main aceb1cc1d9: imports of undeclared packages only-managed, both-roots, broken, counted
