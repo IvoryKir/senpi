@@ -394,6 +394,21 @@ export function drainPendingProviderRegistrations(runtime: ExtensionRuntime): Pe
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
+/**
+ * The session a handler's host context belongs to. A stale context (session replacement still reports
+ * `session_extensions_removed` on the invalidated runner) has none: its handler runs with no ambient
+ * invoker, and its own guarded getters, kernelTools included, still refuse it.
+ */
+function handlerSessionId(context: ExtensionContext | ProjectTrustContext | undefined): string | undefined {
+	if (!context || !("sessionManager" in context)) return undefined;
+	try {
+		return context.sessionManager?.getSessionId();
+	} catch (error) {
+		if (error instanceof StaleExtensionContextError) return undefined;
+		throw error;
+	}
+}
+
 function createExtensionAPI(
 	extension: Extension,
 	runtime: ExtensionRuntime,
@@ -436,11 +451,10 @@ function createExtensionAPI(
 			const registeredHandler: HandlerFn = ownedBy(extension, (...args: unknown[]) => {
 				// A child event can run inside its parent's task-tool async scope.
 				// Bind the host context here, preserving registered-handler metadata.
-				const context = args[1] as ExtensionContext | ProjectTrustContext | undefined;
-				const manager = context && "sessionManager" in context ? context.sessionManager : undefined;
+				const sessionId = handlerSessionId(args[1] as ExtensionContext | ProjectTrustContext | undefined);
 				const invoke = () => handler(...args);
-				return manager
-					? kernelToolInvokerStorage.run({ sessionId: manager.getSessionId() }, invoke)
+				return sessionId
+					? kernelToolInvokerStorage.run({ sessionId }, invoke)
 					: kernelToolInvokerStorage.exit(invoke);
 			});
 			const list = extension.handlers.get(event) ?? [];

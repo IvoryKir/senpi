@@ -115,6 +115,46 @@ describe("registered event invoker context", () => {
 		},
 	];
 
+	// Session replacement reports removed extensions on the old, already invalidated runner.
+	it("runs a stale runner's handler without borrowing the emitting scope's invoker", async () => {
+		const owner = SessionManager.inMemory();
+		const runtime = createExtensionRuntime();
+		const observed: Array<{ invoker: unknown; kernelTools: string }> = [];
+		const extension = await loadExtensionFromFactory(
+			(pi) => {
+				pi.on("session_extensions_removed", (_event, context) => {
+					let kernelTools = "readable";
+					try {
+						void context.kernelTools;
+					} catch (error) {
+						kernelTools = error instanceof Error ? error.name : String(error);
+					}
+					observed.push({ invoker: kernelToolInvokerStorage.getStore(), kernelTools });
+				});
+			},
+			process.cwd(),
+			createEventBus(),
+			runtime,
+			"removed-invoker.ts",
+		);
+		const runner = new ExtensionRunner(
+			[extension],
+			runtime,
+			process.cwd(),
+			SessionManager.inMemory(),
+			ModelRegistry.inMemory(AuthStorage.inMemory()),
+		);
+		runner.invalidate();
+		await kernelToolInvokerStorage.run({ sessionId: owner.getSessionId() }, () =>
+			runner.emit({
+				type: "session_extensions_removed",
+				reason: "new",
+				removed: [{ path: "removed-invoker.ts", resolvedPath: "removed-invoker.ts" }],
+			}),
+		);
+		expect(observed).toEqual([{ invoker: undefined, kernelTools: "StaleExtensionContextError" }]);
+	});
+
 	it.each(emissions)("uses the handler's session for $name", async ({ emit }) => {
 		const owner = SessionManager.inMemory();
 		const child = SessionManager.inMemory();
