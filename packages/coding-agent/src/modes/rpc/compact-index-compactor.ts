@@ -71,12 +71,17 @@ export class CompactIndexCompactor {
 		i.bases.adjust(draft, 1, 0);
 		try {
 			const entries = i.overlays.entries(cut.overrides);
-			while (selected.size < 128) {
+			let exhausted = false;
+			while (selected.size < 128 && !exhausted) {
+				// Only committed candidates are located: a pending key's path is never read for nothing.
 				const batch: (readonly [string, IndexOverride])[] = [];
-				for (let n = 0; n < 128; n++) {
+				while (batch.length < 128) {
 					const next = entries.next();
-					if (next.done) break;
-					batch.push(next.value);
+					if (next.done) {
+						exhausted = true;
+						break;
+					}
+					if (!i.pending.has(next.value[0])) batch.push(next.value);
 				}
 				if (!batch.length) break;
 				const locations = await i.bases.getMany(
@@ -85,7 +90,7 @@ export class CompactIndexCompactor {
 				);
 				for (const [key, value] of batch) {
 					const page = locations.get(key)?.page;
-					if (!i.pending.has(key) && (!page || !touched || page.path === touched.path)) {
+					if (!page || !touched || page.path === touched.path) {
 						selected.set(key, value);
 						touched ??= page;
 					}
