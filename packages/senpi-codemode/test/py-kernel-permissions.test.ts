@@ -516,6 +516,8 @@ describe("Python permission interposition", () => {
 			for (const code of [
 				"import _json; _json.__spec__.loader.create_module(_json.__spec__)",
 				"import _json; _json.__spec__.loader.exec_module(_json)",
+				// `_json` is an extension on some builds and a builtin on others; `sys` is always a builtin.
+				"import sys; sys.__spec__.loader.create_module(sys.__spec__)",
 				"import ctypes",
 				"import importlib, os; importlib.reload(os)",
 				"import sys; sys.modules['permission_test'] = object()",
