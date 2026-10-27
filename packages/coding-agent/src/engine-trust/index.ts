@@ -1,3 +1,9 @@
+export {
+	type EngineTrustAction,
+	type EngineTrustActionId,
+	type EngineTrustActionReason,
+	engineTrustAction,
+} from "./actions.ts";
 export { adoptedEngineTrust, engineTrustHandOffEnvironment, recordAdoptedEngineTrust } from "./adopted.ts";
 export {
 	applyEngineTrustRestore,
