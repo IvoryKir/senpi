@@ -111,6 +111,8 @@ import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth
 import type { CredentialReplacement } from "./auth-storage.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { envValue } from "./brand.ts";
+import { compactUpdatesEnabled } from "./engine-socket-flag.ts";
+import { carryRecovery, SessionRecoveryIdentity } from "./session-recovery-identity.ts";
 import type { BrowserEngine } from "./browser-engine.ts";
 import {
 	type ClientMessageIdentity,
@@ -1530,6 +1532,7 @@ export class AgentSession {
 	// prompt-owned run's prompt throws the first one once the queue settles; any other run reports it
 	// as a continuation error when it happens.
 	private readonly _transcriptWriteFailures = new TranscriptWriteFailures();
+	private readonly _recoveryIdentity = compactUpdatesEnabled() ? new SessionRecoveryIdentity() : undefined;
 	private _promptOwnsRun = false;
 	// Preserve provenance across agent-core's conversion of our admission error
 	// into an assistant error message. Matching provider text alone is not proof
@@ -2889,6 +2892,8 @@ export class AgentSession {
 	}
 
 	private _emit(event: AgentSessionEvent, captureSource: object = event): void {
+		this._recoveryIdentity?.observe(event);
+		const produced = event;
 		if (
 			event.type === "session_paused" ||
 			event.type === "session_resumed" ||
@@ -2934,6 +2939,7 @@ export class AgentSession {
 						}
 					: { ...event, message };
 		}
+		carryRecovery(produced, event);
 		for (const l of [...this._eventListeners]) {
 			l(event);
 		}
@@ -3454,6 +3460,7 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent, signal: AbortSignal): void => {
+		this._recoveryIdentity?.observe(event);
 		if (event.type === "agent_start") {
 			this._lifecycleBinding.startRun();
 			this._requestSelectedModel = undefined;
@@ -3949,7 +3956,7 @@ export class AgentSession {
 				: event.type === "message_update"
 					? withResolvedToolName(event, (name) => this.resolveToolCallName(name))
 					: event;
-		this._emit(sessionEvent, event);
+		this._emit(carryRecovery(event, sessionEvent), event);
 		if (event.type === "agent_end") {
 			if (this._abortProvenance.takeLateUserJoin()) await this._emitSessionAbort();
 		}
@@ -12227,6 +12234,7 @@ export class AgentSession {
 					// (senpi#3566 todo 9), while truncation and rendering stay on the server.
 					bash: {
 						commandPrefix: shellCommandPrefix,
+						redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 						shellPath,
 						operations: this._toolDispatcher.bashOperations({ shellPath }),
 					},
@@ -13395,6 +13403,7 @@ export class AgentSession {
 						return callbackResult;
 					},
 					signal: abortController.signal,
+					redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 				},
 			);
 
