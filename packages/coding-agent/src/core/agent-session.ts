@@ -3471,6 +3471,7 @@ export class AgentSession {
 			// Freeze before async delivery or a queued run can replace the dispatched selection.
 			if (this._requestSelectedModel) this._endSelectedModels.set(event, this._requestSelectedModel);
 		}
+		this._lifecycleBinding.controller.observeActivity(event);
 		if (event.type === "message_start") {
 			try {
 				const entryId = this._lifecycleBinding.consume(event.message);
@@ -12247,6 +12248,7 @@ export class AgentSession {
 					// (senpi#3566 todo 9), while truncation and rendering stay on the server.
 					bash: {
 						commandPrefix: shellCommandPrefix,
+						redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 						shellPath,
 						operations: this._toolDispatcher.bashOperations({ shellPath }),
 					},
@@ -13415,6 +13417,7 @@ export class AgentSession {
 						return callbackResult;
 					},
 					signal: abortController.signal,
+					redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 				},
 			);
 

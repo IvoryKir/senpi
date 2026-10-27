@@ -68,7 +68,7 @@ function denyReason(
 	const source = provenance.layer === "cli" ? "--permission" : `${provenance.layer} settings.json`;
 	// Only promise an unblock when no other layer still denies the call: naming the winning rule and
 	// telling the user to edit it is wrong when a second deny would keep blocking.
-	const unblock = provenance.otherLayerDenies ? "" : " Edit that entry to allow this call.";
+	const unblock = provenance.otherLayerDenies ? "" : " The user can edit that entry to allow this call.";
 	return `${error.message} Denied by ${provenance.layer} permission rule ${provenance.permission}:${provenance.pattern} = deny (${source}).${unblock}`;
 }
 
