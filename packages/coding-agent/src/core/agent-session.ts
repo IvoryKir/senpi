@@ -285,7 +285,7 @@ import { createUserActivitySource, emitUserActivity, type UserActivityKind } fro
 import { deliveryIdOf, ExternalAdmission, type InputHold } from "./external-admission.ts";
 import { HELD_INPUT_ENTRY, type HeldInput, HeldInputs, type HoldInputResult, heldInputHistory } from "./held-inputs.ts";
 import { shouldWarnHighReasoning } from "./high-reasoning-warning.ts";
-import { customTurnOrigin, type InputOrigin, inputOriginOf } from "./input-origin.ts";
+import { customTurnOrigin, type InputOrigin, inputAttributionOf, inputOriginOf } from "./input-origin.ts";
 import { markInterrupted, type StopInterrupt } from "./interrupted-tool-result.ts";
 import {
 	deliveredReceipts,
@@ -5651,6 +5651,7 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 		source: InputSource,
+		inputOrigin: InputOrigin,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<{ text: string; images: ImageContent[] | undefined; inputId?: string } | undefined> {
 		if (!this._extensionRunner.hasHandlers("input")) {
@@ -5658,7 +5659,14 @@ export class AgentSession {
 		}
 
 		const inputId = `${this.sessionManager.getSessionId()}:${++this._nextInputId}`;
-		const inputResult = await this._extensionRunner.emitInput(text, images, source, streamingBehavior, inputId);
+		const inputResult = await this._extensionRunner.emitInput(
+			text,
+			images,
+			source,
+			streamingBehavior,
+			inputId,
+			inputAttributionOf(inputOrigin),
+		);
 		if (inputResult.action === "handled") {
 			await this._emitInputDisposition(inputId, "handled");
 			return undefined;
@@ -6066,6 +6074,7 @@ export class AgentSession {
 					options?.source ?? "interactive",
 					this.isStreaming ? options?.streamingBehavior : undefined,
 					inputId,
+					inputAttributionOf(originOf(options)),
 				);
 				throwIfCancelled();
 				if (inputResult.action === "handled") {
@@ -6617,6 +6626,7 @@ export class AgentSession {
 			text,
 			images,
 			options?.source ?? "interactive",
+			originOf(options),
 			this.isStreaming ? behavior : undefined,
 		);
 		if (!processedInput) return "handled";

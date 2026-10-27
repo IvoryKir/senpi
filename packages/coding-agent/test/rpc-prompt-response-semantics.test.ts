@@ -517,6 +517,38 @@ describe("RPC prompt response semantics", () => {
 		}
 	});
 
+	// senpi#4471: a client's prompt and steer are the user's; what an extension sends in response is an agent's.
+	it("attributes client prompts and steers to the user and extension sends to an agent", async () => {
+		const seen: { text: string; source: string; attribution: string }[] = [];
+		const { lineHandler, cleanup, releaseResponse } = await startRpcMode({
+			withAuth: true,
+			holdResponse: true,
+			extensionsResult: await createTestExtensionsResult([
+				(pi) => {
+					pi.on("input", (event) => {
+						seen.push({ text: event.text, source: event.source, attribution: event.attribution });
+						if (event.text === "A") pi.sendUserMessage("B", { deliverAs: "steer" });
+					});
+				},
+			]),
+		});
+
+		try {
+			lineHandler(JSON.stringify({ id: "start", type: "prompt", message: "Start" }));
+			await vi.waitFor(() => expect(getPromptResponses(rpcIo.outputLines, "start")).toHaveLength(1));
+			lineHandler(JSON.stringify({ id: "A", type: "steer", message: "A" }));
+			await vi.waitFor(() => expect(seen).toHaveLength(3));
+			expect(seen).toEqual([
+				{ text: "Start", source: "rpc", attribution: "user" },
+				{ text: "A", source: "rpc", attribution: "user" },
+				{ text: "B", source: "extension", attribution: "agent" },
+			]);
+		} finally {
+			releaseResponse();
+			await cleanup();
+		}
+	});
+
 	it("returns and clears queued steering and follow-up messages", async () => {
 		const { lineHandler, cleanup } = await startRpcMode({ withAuth: true, responseDelayMs: 500 });
 

@@ -95,6 +95,22 @@ describe("Input Event", () => {
 		}
 	});
 
+	it("attributes input to the user or an agent from its source unless the caller says who sent it", async () => {
+		const r = await createRunner(
+			`export default p => p.on("input", async e => { globalThis.testVar = e.attribution; return { action: "continue" }; });`,
+		);
+		for (const [source, attribution] of [
+			["interactive", "user"],
+			["rpc", "user"],
+			["extension", "agent"],
+		] as const) {
+			await r.emitInput("x", undefined, source);
+			expect((globalThis as any).testVar).toBe(attribution);
+		}
+		await r.emitInput("x", undefined, "extension", undefined, "answer", "user");
+		expect((globalThis as any).testVar).toBe("user");
+	});
+
 	it("passes streamingBehavior correctly", async () => {
 		const r = await createRunner(
 			`export default p => p.on("input", async e => { globalThis.testVar = e.streamingBehavior; return { action: "continue" }; });`,
