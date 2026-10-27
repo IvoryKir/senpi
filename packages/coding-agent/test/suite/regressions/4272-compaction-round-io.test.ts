@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { expect, it, vi } from "vitest";
 import { CompactContentIndex } from "../../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore, type LeafId } from "../../../src/modes/rpc/compact-content-store.ts";
@@ -12,17 +13,21 @@ interface Round {
 	deadWrites: number;
 }
 
-// senpi#4272 / RULING-47: a round writes one segment of its surviving nodes, plus its page and owner marker.
-it("packs each compaction round into one segment file and writes no node it replaced", async () => {
+const PAGE_BYTES = 65_536;
+
+// senpi#4272 / RULING-47 as amended by RULING-54: a round writes its surviving nodes as node files of at most
+// 64 KiB, ceil(round node bytes / 64 KiB) of them, plus its page and owner marker; it writes no node it replaced.
+it("packs each compaction round into bounded node files and writes no node it replaced", async () => {
 	const root = await spoolRoot();
 	const files = new Map<string, Buffer>();
-	let creates = 0;
+	const writes: { readonly name: string; readonly bytes: number; readonly job: string | undefined }[] = [];
 	let deletes = 0;
+	let job: string | undefined;
 	const store = new CompactContentStore({
 		dir: root.dir,
 		io: {
 			async writeFile(path, data) {
-				creates++;
+				writes.push({ name: basename(path), bytes: data.byteLength, job });
 				files.set(path, Buffer.from(data));
 			},
 			async readFile(path, range) {
@@ -36,6 +41,17 @@ it("packs each compaction round into one segment file and writes no node it repl
 			},
 		},
 	});
+	const enqueue = store.enqueue.bind(store);
+	store.enqueue = (operation, work) =>
+		enqueue(operation, async () => {
+			const outer = job;
+			job = operation;
+			try {
+				await work();
+			} finally {
+				job = outer;
+			}
+		});
 	const count = 8192;
 	const index = new CompactContentIndex<{ n: number }>(store, () => [], 1);
 	const tree = index.bases as unknown as {
@@ -55,12 +71,18 @@ it("packs each compaction round into one segment file and writes no node it repl
 		for (let n = 0; n < count; n++) index.set(String(n).padStart(5, "0"), { n });
 		await store.idle();
 		pause.mockRestore();
-		const before = { creates, deletes, allocated: index.bases.allocatedNodes };
+		const before = { creates: writes.length, deletes, allocated: index.bases.allocatedNodes };
 		store.subscribeCommitted((id) => {
 			if (current()?.built.has(id)) current().written.add(id);
 		});
 		vi.spyOn(tree, "cached").mockImplementation(async (operation) => {
-			const round: Round = { start: creates, built: new Set(), written: new Set(), survivors: 0, deadWrites: 0 };
+			const round: Round = {
+				start: writes.length,
+				built: new Set(),
+				written: new Set(),
+				survivors: 0,
+				deadWrites: 0,
+			};
 			rounds.push(round);
 			try {
 				return await cached(operation);
@@ -93,12 +115,20 @@ it("packs each compaction round into one segment file and writes no node it repl
 		const allocated = index.bases.allocatedNodes - before.allocated;
 		expect(survived, "nodes surviving their round").toBeLessThanOrEqual(count + rounds.length * (height + 1));
 		expect(allocated, "paged-node allocations").toBeLessThanOrEqual(1.5 * survived);
-		const folded = { creates: creates - before.creates, deletes: deletes - before.deletes };
-		expect(folded.creates, "fold file creates").toBeLessThanOrEqual(3 * rounds.length);
+		const folded = { creates: writes.length - before.creates, deletes: deletes - before.deletes };
 		expect(folded.deletes, "fold file deletes").toBeLessThanOrEqual(folded.creates);
 		for (const [n, round] of rounds.entries()) {
-			const roundCreates = (rounds[n + 1]?.start ?? creates) - round.start;
-			expect(roundCreates, `round ${n} file creates`).toBeLessThanOrEqual(3);
+			const window = writes.slice(round.start, rounds[n + 1]?.start ?? writes.length);
+			for (const file of window) expect(file.bytes, `round ${n} ${file.name} bytes`).toBeLessThanOrEqual(PAGE_BYTES);
+			// Segment rewrites between rounds are reclaim jobs, bounded by 4272-segment-reclamation; the round's own
+			// creates are its node files and its page, plus the page's owner marker that the next value_write job writes.
+			const own = window.filter((file) => file.job === "page_write");
+			const nodes = own.filter((file) => file.name.startsWith("node-"));
+			const nodeBytes = nodes.reduce((sum, file) => sum + file.bytes, 0);
+			expect(nodes.length, `round ${n} node files for ${nodeBytes} bytes`).toBe(Math.ceil(nodeBytes / PAGE_BYTES));
+			expect(own.length, `round ${n} round-job file creates`).toBe(nodes.length + 1);
+			const markers = window.filter((file) => file.job === "value_write").length;
+			expect(markers, `round ${n} owner markers`).toBeLessThanOrEqual(1);
 			expect(round.deadWrites, `round ${n} writes of replaced nodes`).toBe(0);
 		}
 		expect(index.status()).toMatchObject({ baseRows: count, overrideSlots: 0 });

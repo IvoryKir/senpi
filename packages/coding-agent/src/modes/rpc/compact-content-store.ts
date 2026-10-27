@@ -1,6 +1,11 @@
-import { type CompactSegment, CompactSegmentStorage, type CompactSlot } from "./compact-segment-storage.ts";
+import { type CompactPlacement, CompactSegmentStorage, type CompactSlot } from "./compact-segment-storage.ts";
 import { RECLAIM_WORK_ALLOWANCE_BYTES } from "./compact-spool-storage.ts";
-import { type CompactStorageFailure, type CompactStorageIo, nodeCompactStorageIo } from "./compact-storage-io.ts";
+import {
+	type CompactStorageFailure,
+	type CompactStorageIo,
+	type CompactStorageOperation,
+	nodeCompactStorageIo,
+} from "./compact-storage-io.ts";
 import { CompactReadError } from "./compact-read-lease.ts";
 import { CompactTextRoots } from "./compact-text-roots.ts";
 
@@ -241,8 +246,13 @@ export class CompactContentStore extends CompactSegmentStorage {
 		return this.flushLeaves([id]);
 	}
 
-	/** Writes the resident leaves among `ids`, all of one kind, as one segment; each is read back by offset. */
-	async flushLeaves(ids: Iterable<LeafId>): Promise<void> {
+	/**
+	 * Writes the resident leaves among `ids`, all of one kind, as segment files of at most 64 KiB each, then
+	 * publishes them in one synchronous step once the last file is durable: that step is the batch's commit
+	 * record, so no leaf is committed and no file is reachable before every file of the batch exists. A
+	 * compaction round passes `node_write`; its files get the `node-` prefix.
+	 */
+	async flushLeaves(ids: Iterable<LeafId>, operation?: CompactStorageOperation): Promise<void> {
 		if (!this.spillAllowed) return;
 		const batch: [LeafId, Leaf, string][] = [];
 		for (const id of ids) {
@@ -253,21 +263,21 @@ export class CompactContentStore extends CompactSegmentStorage {
 			batch.push([id, leaf, leaf.text]);
 		}
 		if (!batch.length) return;
-		let segment: CompactSegment | undefined;
+		let placements: readonly CompactPlacement[] | undefined;
 		try {
 			const texts = batch.map(([, , text]) => text);
-			segment = await this.writeSegment(texts, batch[0][1].value ? "value_write" : "spill_write");
+			placements = await this.writeSegments(texts, operation ?? (batch[0][1].value ? "value_write" : "spill_write"));
 		} finally {
 			// A failed write, or a failure report that threw, keeps the leaves resident and spillable.
-			for (const [id, leaf] of segment ? [] : batch) {
+			for (const [id, leaf] of placements ? [] : batch) {
 				leaf.state = "ram";
 				if (this.leaves.get(id) === leaf) (leaf.value ? this.ramValues : this.ramLeaves).add(id);
 			}
 		}
-		if (!segment) return;
+		if (!placements) return;
 		const placed: LeafId[] = [];
-		let offset = 0;
-		for (const [id, leaf] of batch) {
+		for (const [n, [id, leaf]] of batch.entries()) {
+			const [segment, offset] = placements[n];
 			const bytes = leaf.units * 2;
 			// A leaf released during the write, or any leaf once retirement began, is not published.
 			if (this.leaves.get(id) === leaf && !this.retired) {
@@ -283,9 +293,8 @@ export class CompactContentStore extends CompactSegmentStorage {
 				}
 				placed.push(id);
 			}
-			offset += bytes;
 		}
-		this.settle(segment);
+		for (const segment of new Set(placements.map(([segment]) => segment))) this.settle(segment);
 		for (const id of placed) this.committed(id);
 	}
 }
