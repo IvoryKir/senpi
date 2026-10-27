@@ -74,6 +74,31 @@ it("drops the captured records of a session detached during the gap and reports 
 	peer.writer.unregisterConnection("peer");
 });
 
+it("drops the captured records of a session detached and re-attached during the gap; the new attachment gets its own baseline", async () => {
+	vi.useFakeTimers();
+	const peer = heldPeer(512);
+	peer.writer.attachConnectionToSession("peer", "rpc-1");
+	peer.writer.enqueue("rpc-1", { type: "message_start", message: message("") });
+	// The deltas overflow the budget at a cut; the last ones are captured behind it for the attachment of that moment.
+	for (let index = 1; index <= 5; index++) peer.writer.enqueue("rpc-1", delta(`${index}`, "x".repeat(index)));
+
+	// The attach ordinal the captured suffix was held for ends here; the re-attach is a new attachment.
+	peer.writer.detachConnectionFromSession("peer", "rpc-1");
+	peer.writer.attachConnectionToSession("peer", "rpc-1");
+	await peer.release();
+
+	const gap = peer.records.findIndex((record) => record.type === "resync_required" && !record.sessionId);
+	const after = peer.records.slice(gap + 1).filter((record) => record.sessionId === "rpc-1");
+	const shape = after.map((record) =>
+		record.type === "message_update"
+			? (record.assistantMessageEvent as { delta: string }).delta
+			: String(record.type),
+	);
+	expect(shape).toEqual(["resync_required", "message_start", "1", "2", "3", "4", "5"]);
+	expect(peer.writer.openLegacyViews).toBe(0);
+	peer.writer.unregisterConnection("peer");
+});
+
 it("keeps the captured records of a session the peer still holds and of a lifecycle broadcast", async () => {
 	vi.useFakeTimers();
 	const peer = heldPeer(512);

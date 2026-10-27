@@ -181,11 +181,11 @@ export class SessionEventFanout {
 			: [undefined];
 	}
 
-	/** For a record that reaches `id` because it holds `sessionId`: whether it still does; undefined for every other audience. */
+	/** For a record that reaches `id` because it holds `sessionId`: whether that attachment still does; undefined for every other audience. */
 	attachmentOf(id: string, sessionId: string, isTargeted: boolean, recordType: unknown): (() => boolean) | undefined {
 		if (isTargeted || (typeof recordType === "string" && BROADCAST_LIFECYCLE_RECORDS.has(recordType)))
 			return undefined;
-		return this.holds(id, sessionId) ? () => this.holds(id, sessionId) : undefined;
+		return this.attachment(id, sessionId);
 	}
 
 	get(id: string): RegisteredConnection | undefined {
@@ -220,9 +220,10 @@ export class SessionEventFanout {
 
 	/** Deliver one line to the connections attached to a session, never to the rest of the fanout. */
 	deliverToSession(sessionId: string, line: string): void {
-		for (const [id, { actor }] of this.connections)
-			if (this.holds(id, sessionId))
-				actor.enqueue(line, undefined, undefined, undefined, false, () => this.holds(id, sessionId));
+		for (const [id, { actor }] of this.connections) {
+			const held = this.attachment(id, sessionId);
+			if (held) actor.enqueue(line, undefined, undefined, undefined, false, held);
+		}
 	}
 
 	rememberSnapshot(sessionId: string, value: Record<string, unknown>, line: string, placeholderLine?: string): void {
@@ -237,6 +238,15 @@ export class SessionEventFanout {
 
 	private holds(id: string, sessionId: string): boolean {
 		return this.connectionSessions.get(id)?.has(sessionId) ?? false;
+	}
+
+	/**
+	 * The attach holding `sessionId` for `id` now, as a liveness check: true only while that same attach (its ordinal,
+	 * the rule an attach baseline's liveness uses) still holds it, so a detach and re-attach ends it.
+	 */
+	private attachment(id: string, sessionId: string): (() => boolean) | undefined {
+		const ordinal = this.connectionSessions.get(id)?.get(sessionId);
+		return ordinal === undefined ? undefined : () => this.connectionSessions.get(id)?.get(sessionId) === ordinal;
 	}
 
 	private held(id: string): readonly string[] {
