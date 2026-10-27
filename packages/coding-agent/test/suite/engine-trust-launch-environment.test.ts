@@ -146,6 +146,17 @@ describe("applyEngineTrustRestore", () => {
 		expect(env).toEqual({ PATH: "/bin", NODE_EXTRA_CA_CERTS: "/user.pem", BUN_OPTIONS: "kept" });
 	});
 
+	it("reads a restore entry by value, so an undefined BUN_OPTIONS leaves the ambient one alone (senpi#4526 review)", () => {
+		const env: Env = { BUN_OPTIONS: "ambient" };
+		applyEngineTrustRestore(env, { BUN_OPTIONS: undefined }, "linux");
+		expect(env).toEqual({ BUN_OPTIONS: "ambient" });
+		const handBuilt = { ...standaloneMarker, restore: { BUN_OPTIONS: undefined } };
+		expect(parseEngineTrustMarker(serializeEngineTrustMarker(handBuilt))).toEqual({
+			...standaloneMarker,
+			restore: {},
+		});
+	});
+
 	it("restores BUN_OPTIONS only when the restore names it, and removes Windows case forms", () => {
 		const env: Env = {
 			node_extra_ca_certs: "x",
