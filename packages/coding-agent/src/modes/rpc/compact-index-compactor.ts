@@ -1,4 +1,5 @@
-import type { CompactContentIndex, IndexOverride, IndexPage, IndexRow } from "./compact-content-index.ts";
+import type { BaseRow, CompactContentIndex, IndexOverride, IndexPage, IndexRow } from "./compact-content-index.ts";
+import type { LeafId } from "./compact-content-store.ts";
 import { packPages } from "./compact-index-pages.ts";
 import { CompactReadError } from "./compact-read-lease.ts";
 
@@ -153,41 +154,42 @@ export class CompactIndexCompactor {
 				offset += chunk.length;
 			}
 			if (!i.store.spillAllowed) return false;
-			for (const candidate of written) {
-				const kept: [string, number][] = [];
-				const refs: number[] = [];
-				for (const [offset, key] of candidate.keys.entries()) {
-					const row = rows.get(key);
-					if (!row) throw new CompactReadError("ownership");
-					// Even a concurrently removed row's on-disk key must survive page traversal.
-					refs.push(row.key.owner);
-					const folded = selected.get(key);
-					const current = i.overlays.get(i.overrides, key);
-					if (folded && current !== folded && (!current || current.deleted || current.row !== folded.row))
-						continue;
-					refs.push(row.value.owner, row.payload);
-					kept.push([key, offset]);
-				}
-				const file = i.store.ownFile(candidate.page.path, candidate.page.bytes);
-				const page = { ...candidate.page, owner: i.store.text.own([...refs, file]) };
-				i.store.adjust(file, -1, 0);
-				unowned.delete(candidate.page);
-				try {
+			const changes = new Map<string, BaseRow | undefined>();
+			const owners: LeafId[] = [];
+			try {
+				for (const candidate of written) {
+					const kept: [string, number][] = [];
+					const refs: number[] = [];
+					for (const [offset, key] of candidate.keys.entries()) {
+						const row = rows.get(key);
+						if (!row) throw new CompactReadError("ownership");
+						// Even a concurrently removed row's on-disk key must survive page traversal.
+						refs.push(row.key.owner);
+						const folded = selected.get(key);
+						const current = i.overlays.get(i.overrides, key);
+						if (folded && current !== folded && (!current || current.deleted || current.row !== folded.row))
+							continue;
+						refs.push(row.value.owner, row.payload);
+						kept.push([key, offset]);
+					}
+					const file = i.store.ownFile(candidate.page.path, candidate.page.bytes);
+					const page = { ...candidate.page, owner: i.store.text.own([...refs, file]) };
+					owners.push(page.owner);
+					i.store.adjust(file, -1, 0);
+					unowned.delete(candidate.page);
 					for (const [key, offset] of kept) {
-						const next = await i.bases.set(draft, key, { page, offset });
-						i.bases.adjust(draft, -1, 0);
-						draft = next;
+						changes.set(key, { page, offset });
 						removed.delete(key);
 					}
 					if (kept.length) candidate.page = page;
-				} finally {
-					i.store.adjust(page.owner, -1, 0);
 				}
-			}
-			for (const key of removed) {
-				const next = await i.bases.set(draft, key, undefined);
+				for (const key of removed) changes.set(key, undefined);
+				// One sorted pass builds each changed node once; the pages' owners outlive it.
+				const next = await i.bases.apply(draft, changes);
 				i.bases.adjust(draft, -1, 0);
 				draft = next;
+			} finally {
+				for (const owner of owners) i.store.adjust(owner, -1, 0);
 			}
 			await i.bases.flush();
 			if (!i.store.spillAllowed) return false;
