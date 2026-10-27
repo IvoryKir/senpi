@@ -2743,7 +2743,8 @@ export class InteractiveMode {
 	 */
 	private unsubscribeSecurityNotices?: () => void;
 	private detachMcpGrantPresentation?: () => void;
-	private mcpMrtrPresentationLifetime = new AbortController();
+	/** A presentation is optional until extension UI is created; shutdown may precede it. */
+	private mcpMrtrPresentationLifetime?: AbortController;
 	private mcpLocalPresenter?: McpFormBinding;
 	private async bindCurrentSessionExtensions(): Promise<void> {
 		this.mcpMrtrPresentationLifetime?.abort();
@@ -3721,6 +3722,7 @@ export class InteractiveMode {
 
 	private createExtensionUIContext(): ExtensionUIContext {
 		this.mcpMrtrPresentationLifetime ??= new AbortController();
+		if (this.isShuttingDown) this.mcpMrtrPresentationLifetime.abort();
 		const context: ExtensionUIContext = {
 			select: (title, options, opts) =>
 				this.withBlockedHostDialog(
@@ -5641,6 +5643,10 @@ export class InteractiveMode {
 					this.clearStatusIndicator("working");
 				}
 				this.ui.requestRender();
+				break;
+
+			case "session_recovered":
+				this.showWarning(sanitizeTerminalLabel(event.notice));
 				break;
 
 			case "continuation_error":

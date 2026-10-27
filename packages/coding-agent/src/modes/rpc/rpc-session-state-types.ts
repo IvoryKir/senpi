@@ -4,6 +4,7 @@ import type { Model, ProviderDiagnostic, ThinkingSelection } from "@earendil-wor
 import type { AgentAbortSource } from "../../core/agent-abort-provenance.ts";
 import type { QueuedInput } from "../../core/agent-session.ts";
 import type { HoldKind } from "../../core/engine-turn-hold.ts";
+import type { ProviderOrigin } from "../../core/provider-origin.ts";
 
 import type { ServiceTier } from "../../core/extensions/builtin/service-tier.ts";
 import type { ContextUsage } from "../../core/extensions/types.ts";
@@ -31,6 +32,8 @@ export interface RpcAuthProvider {
 	status: RpcAuthStatus;
 	/** Last four characters of an API key stored by the app; absent for OAuth, env, models.json and short keys. */
 	keyHint?: string;
+	/** Where the provider is defined, so a client can name the file or extension to edit (senpi#4328). */
+	origin?: ProviderOrigin;
 }
 
 /** Auth status mirror (no credential values), from getProviderAuthStatus. */
