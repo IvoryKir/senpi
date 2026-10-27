@@ -52,8 +52,9 @@ it.each(
 		await store.idle();
 		const hydrations = reads.mock.calls.length;
 		reads.mockRestore();
-		// New nodes stay decoded; each 128-row append round rehydrates only its upper path.
-		const bound = Math.ceil(count / 128) * Math.ceil(Math.log2(count));
+		// The first round folds into an empty base; each later 128-row append round rehydrates its upper path
+		// once, shared by the selection lookup and the batched apply (without the round cache, it is read twice).
+		const bound = (Math.ceil(count / 128) - 1) * Math.ceil(Math.log2(count));
 		if (mode === "cache-disabled") expect(hydrations).toBeGreaterThan(bound);
 		else expect(hydrations).toBeLessThanOrEqual(bound);
 		// A warm path can hide disk reads, but must not hide one root descent per overlay key.
