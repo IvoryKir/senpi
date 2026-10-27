@@ -14,7 +14,7 @@ import {
 } from "../../src/engine-trust/index.ts";
 import { daemonEnvironment } from "../../src/modes/rpc/host-daemon-env.ts";
 import { createHostDaemonPaths } from "../../src/modes/rpc/host-daemon-paths.ts";
-import { initialHostEnvironment } from "../../src/modes/rpc/host-spawn-environment.ts";
+import { initialHostEnvironment, successorHostEnvironment } from "../../src/modes/rpc/host-spawn-environment.ts";
 import { serverMarker } from "./engine-trust-fixtures.ts";
 
 describe("a host daemon and the engine trust generation", () => {
@@ -44,18 +44,25 @@ describe("a host daemon and the engine trust generation", () => {
 		});
 	});
 
-	it("adds the hand-off to a daemon spawn only after this process adopted a generation", () => {
+	it("adds the hand-off to an initial and a successor daemon spawn only after this process adopted a generation", () => {
 		const paths = createHostDaemonPaths({ socket: "/home/u/.omo/agent/host.sock", agentDir: "/home/u/.omo/agent" });
-		const spawn = () => initialHostEnvironment({ paths, instanceId: "i", generation: 1 });
+		const spawns = {
+			initial: () => initialHostEnvironment({ paths, instanceId: "i", generation: 1 }),
+			successor: () => successorHostEnvironment({ paths, instanceId: "i", generation: 2 }),
+		};
 		expect(adoptedEngineTrust()).toBeUndefined();
-		expect(spawn().SENPI_ENGINE_TRUST).toBeUndefined();
-		expect(spawn().NODE_EXTRA_CA_CERTS).toBeUndefined();
+		for (const [kind, spawn] of Object.entries(spawns)) {
+			expect(spawn().SENPI_ENGINE_TRUST, kind).toBeUndefined();
+			expect(spawn().NODE_EXTRA_CA_CERTS, kind).toBeUndefined();
+		}
 
 		recordAdoptedEngineTrust(serverMarker);
-		const env = spawn();
-		expect(env.NODE_EXTRA_CA_CERTS).toBe(serverMarker.file);
-		expect(parseEngineTrustMarker(env.SENPI_ENGINE_TRUST ?? "")?.restore).toEqual({});
-		expect(env.SENPI_ENGINE_TRUST_HOP).toBeUndefined();
-		expect(env.SSL_CERT_FILE).toBe(serverMarker.defaults?.file);
+		for (const [kind, spawn] of Object.entries(spawns)) {
+			const env = spawn();
+			expect(env.NODE_EXTRA_CA_CERTS, kind).toBe(serverMarker.file);
+			expect(parseEngineTrustMarker(env.SENPI_ENGINE_TRUST ?? "")?.restore, kind).toEqual({});
+			expect(env.SENPI_ENGINE_TRUST_HOP, kind).toBeUndefined();
+			expect(env.SSL_CERT_FILE, kind).toBe(serverMarker.defaults?.file);
+		}
 	});
 });

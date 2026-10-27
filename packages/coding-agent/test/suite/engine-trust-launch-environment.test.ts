@@ -53,6 +53,9 @@ describe("classifyTrustArrival", () => {
 		expect(classifyTrustArrival(lower, "linux").marker.kind).toBe("none");
 		const twoFiles = { ...lower, NODE_EXTRA_CA_CERTS: "/other.pem" };
 		expect(classifyTrustArrival(twoFiles, "win32").marker).toEqual({ kind: "foreign", reason: "ambiguous" });
+		const otherMarker = serializeEngineTrustMarker({ ...serverMarker, sha256: "c".repeat(64) });
+		const twoMarkers = { ...lower, SENPI_ENGINE_TRUST: otherMarker };
+		expect(classifyTrustArrival(twoMarkers, "win32").marker).toEqual({ kind: "foreign", reason: "ambiguous" });
 	});
 });
 
