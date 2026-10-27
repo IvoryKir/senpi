@@ -12233,6 +12233,7 @@ export class AgentSession {
 					// (senpi#3566 todo 9), while truncation and rendering stay on the server.
 					bash: {
 						commandPrefix: shellCommandPrefix,
+						redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 						shellPath,
 						operations: this._toolDispatcher.bashOperations({ shellPath }),
 					},
@@ -13401,6 +13402,7 @@ export class AgentSession {
 						return callbackResult;
 					},
 					signal: abortController.signal,
+					redactSecretsInOutput: this.settingsManager.getBashRedactSecretsInOutput(),
 				},
 			);
 
