@@ -1586,6 +1586,9 @@
         "bedrock-provider.d.ts",
         // The pi-ai bin (package.json bin points at dist/cli.js).
         "src/cli.ts",
+        // vitest.config.ts loads it as a setupFile only when CI/GITHUB_ACTIONS is set, so knip's vitest
+        // plugin resolves it only under CI; listing it keeps the entry set the same on every machine.
+        "test/ci-diagnostics.ts",
       ],
       "includeEntryExports": true,
       // dist/cli.js is a committed bin stub the build overwrites.
