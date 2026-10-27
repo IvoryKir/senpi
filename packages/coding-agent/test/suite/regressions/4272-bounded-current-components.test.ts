@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { CompactSessionState } from "../../../src/modes/rpc/compact-session-state.ts";
-import { spoolRoot } from "../compact-storage-support.ts";
+import { spoolRoot, startIdentity } from "../compact-storage-support.ts";
 
 // senpi#4272 / RULING-34: the real settled consumer reads large structured collections through the substrate.
 it("retains a large settled block collection across a cold status update", async () => {
@@ -15,6 +15,7 @@ it("retains a large settled block collection across a cold status update", async
 		for (let contentIndex = 0; contentIndex < 1024; contentIndex++)
 			state.accept({
 				type: "block_start",
+				...startIdentity(),
 				messageId: "old",
 				contentIndex,
 				kind: "text",

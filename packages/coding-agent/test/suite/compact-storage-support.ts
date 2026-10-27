@@ -3,6 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CompactStorageIo } from "../../src/modes/rpc/compact-storage-io.ts";
 
+let ordinal = 0;
+/** Producer-side fixture numbering; the consumer never fills missing identity fields. */
+export const startIdentity = () => ({ epoch: "fixture-producer", ordinal: ordinal++ });
+export const startBlock = (messageId: string, seed: string) => ({
+	type: "block_start" as const,
+	...startIdentity(),
+	messageId,
+	contentIndex: 0,
+	kind: "text" as const,
+	seed,
+	coveredCodeUnits: 0,
+});
+
 export interface IoHold {
 	/** Resolves with the path once the storage job reaches the held operation. */
 	readonly entered: Promise<string>;

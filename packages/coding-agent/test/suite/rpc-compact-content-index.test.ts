@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CompactContentIndex } from "../../src/modes/rpc/compact-content-index.ts";
 import { CompactContentStore, type LeafId } from "../../src/modes/rpc/compact-content-store.ts";
 import { CompactSessionState, type CompactSessionStateOptions } from "../../src/modes/rpc/compact-session-state.ts";
-import { controlledIo, spoolRoot } from "./compact-storage-support.ts";
+import { controlledIo, spoolRoot, startIdentity } from "./compact-storage-support.ts";
 
 // senpi#4272 (S03a-2): the spillable settled-row index under concurrent transitions. Every
 // asynchronous step is driven by an explicit I/O hold or by awaiting idle, never by elapsed time.
@@ -26,7 +26,15 @@ async function setup(options: Partial<CompactSessionStateOptions> = {}) {
 }
 
 function start(messageId: string, seed: string) {
-	return { type: "block_start", messageId, contentIndex: 0, kind: "text", seed, coveredCodeUnits: 0 } as const;
+	return {
+		type: "block_start",
+		...startIdentity(),
+		messageId,
+		contentIndex: 0,
+		kind: "text",
+		seed,
+		coveredCodeUnits: 0,
+	} as const;
 }
 
 function settle(state: CompactSessionState, messageId: string, seed: string, persistence = "pending" as const) {
@@ -76,7 +84,8 @@ describe("compact content index: transitions racing a compaction", () => {
 		const status = state.storageStatus();
 		expect(status).toMatchObject({ failures: [], overrideSlots: 0, baseRows: 5, reclaimDebtBytes: 0 });
 		expect(await texts(state)).toEqual({ m1: "a1", m3: "", m4: "", m5: "", m6: "" });
-		expect(await spoolFiles(dir, "leaf-")).toHaveLength(1);
+		expect(await spoolFiles(dir, "leaf-")).toHaveLength(0);
+		expect(status.structuredBytes.resident).toBe(0);
 		expect(await spoolFiles(dir, "page-")).toHaveLength(status.basePages);
 	});
 
@@ -89,13 +98,13 @@ describe("compact content index: transitions racing a compaction", () => {
 
 		expect(state.storageStatus()).toMatchObject({ failures: [], overrideSlots: 1 });
 		expect(await texts(state)).toEqual({ m1: "a1", m2: "new2", m3: "" });
-		expect(state.storageStatus().spilledLiveBytes).toBe(12);
+		expect(state.storageStatus().structuredBytes.resident).toBe(0);
 
 		for (const id of ["m4", "m5"]) settle(state, id, "");
 		await state.idle();
 		expect(state.storageStatus()).toMatchObject({ failures: [], overrideSlots: 0, baseRows: 5, reclaimDebtBytes: 0 });
 		expect(await texts(state)).toEqual({ m1: "a1", m2: "new2", m3: "", m4: "", m5: "" });
-		expect(await spoolFiles(dir, "leaf-")).toHaveLength(2);
+		expect(await spoolFiles(dir, "leaf-")).toHaveLength(0);
 	});
 
 	it("keeps the previous index after a failed page write, and the next compaction publishes", async () => {

@@ -14,6 +14,8 @@ export interface BlockAddress {
 export type CompactTransition =
 	| (BlockAddress & {
 			readonly type: "block_start";
+			readonly epoch: string;
+			readonly ordinal: number;
 			readonly kind: CompactBlockKind;
 			readonly seed: string;
 			/**
@@ -28,6 +30,8 @@ export type CompactTransition =
 	| { readonly type: "message_remove"; readonly messageId: string };
 
 type CompactRejection =
+	| "invalid_start_identity"
+	| "duplicate_or_stale_start"
 	| "unknown_block"
 	| "duplicate_block"
 	| "invalid_coverage"
