@@ -112,6 +112,7 @@ import type { CredentialReplacement } from "./auth-storage.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { envValue } from "./brand.ts";
 import { compactUpdatesEnabled } from "./engine-socket-flag.ts";
+import { QueuedInputDispositions } from "./queued-input-dispositions.ts";
 import { carryRecovery, recoveryCarrier, SessionRecoveryIdentity } from "./session-recovery-identity.ts";
 import type { BrowserEngine } from "./browser-engine.ts";
 import {
@@ -1204,6 +1205,9 @@ export interface QueuedInputOptions extends ClientMessageIdentity {
 	onQueuedInput?: (input: PreparedClientInput) => void;
 }
 
+/** Internal: the id of the `input` event a queued input passed, so its delivery can report `started`. */
+type QueuedInputEventId = { readonly inputId?: string | undefined };
+
 export interface PromptOptions extends ClientMessageIdentity {
 	/** Internal: this input was already reported to `onHumanInputAdmitted` by the caller, so it is not reported again. */
 	humanInputReported?: boolean;
@@ -1473,6 +1477,10 @@ export class AgentSession {
 	 * message is persisted. Kept off the message itself so it can never reach a provider request.
 	 */
 	private readonly _userInputSources = new WeakMap<AgentMessage, InputSource>();
+	// `queued` then `started` for input queued while a turn runs, keyed by the user message the queue hands over.
+	private readonly _queuedInputDispositions = new QueuedInputDispositions((inputId, disposition) =>
+		this._emitInputDisposition(inputId, disposition),
+	);
 	private readonly _queuedInputAges = new QueuedInputAges();
 	/** Recently delivered `queuedId`s (bounded), so a late dequeue answers `already_delivered`, not `not_found`. */
 	private readonly _deliveredQueuedIds = new Set<string>();
@@ -3938,6 +3946,7 @@ export class AgentSession {
 					}
 				}
 			}
+			await this._queuedInputDispositions.delivered(event.message);
 		}
 
 		const agentEndWillRetry = event.type === "agent_end" && this._willRetryAfterAgentEnd(event.messages);
@@ -6146,13 +6155,13 @@ export class AgentSession {
 				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
 				releaseStart(false);
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages, options);
+					await this._queueFollowUp(expandedText, currentImages, { ...options, inputId });
 				} else {
-					await this._queueSteer(expandedText, currentImages, options);
+					await this._queueSteer(expandedText, currentImages, { ...options, inputId });
 				}
 				noteJoined();
 				emitPendingCommandInvocation();
-				await emitInputDisposition("queued");
+				await this._queuedInputDispositions.queued(inputId);
 				promptDisposition?.("queued");
 				preflightResult?.(true);
 				return;
@@ -6168,13 +6177,13 @@ export class AgentSession {
 				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
 				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages, options);
+					await this._queueFollowUp(expandedText, currentImages, { ...options, inputId });
 				} else {
-					await this._queueSteer(expandedText, currentImages, options);
+					await this._queueSteer(expandedText, currentImages, { ...options, inputId });
 				}
 				noteJoined();
 				emitPendingCommandInvocation();
-				await emitInputDisposition("queued");
+				await this._queuedInputDispositions.queued(inputId);
 				promptDisposition?.("queued");
 				preflightResult?.(true);
 				return;
@@ -6191,13 +6200,13 @@ export class AgentSession {
 				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
 				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages, options);
+					await this._queueFollowUp(expandedText, currentImages, { ...options, inputId });
 				} else {
-					await this._queueSteer(expandedText, currentImages, options);
+					await this._queueSteer(expandedText, currentImages, { ...options, inputId });
 				}
 				noteJoined();
 				emitPendingCommandInvocation();
-				await emitInputDisposition("queued");
+				await this._queuedInputDispositions.queued(inputId);
 				promptDisposition?.("queued");
 				preflightResult?.(true);
 				return;
@@ -6223,13 +6232,13 @@ export class AgentSession {
 					// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
 					releaseStart(false);
 					if (options?.streamingBehavior === "followUp") {
-						await this._queueFollowUp(expandedText, currentImages, options);
+						await this._queueFollowUp(expandedText, currentImages, { ...options, inputId });
 					} else {
-						await this._queueSteer(expandedText, currentImages, options);
+						await this._queueSteer(expandedText, currentImages, { ...options, inputId });
 					}
 					noteJoined();
 					emitPendingCommandInvocation();
-					await emitInputDisposition("queued");
+					await this._queuedInputDispositions.queued(inputId);
 					promptDisposition?.("queued");
 					preflightResult?.(true);
 					return;
@@ -6250,13 +6259,13 @@ export class AgentSession {
 				// Queued, not started: release the start claim before enqueueing, or a claimed start diverts it.
 				releaseStart(false);
 				if (options?.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages, options);
+					await this._queueFollowUp(expandedText, currentImages, { ...options, inputId });
 				} else {
-					await this._queueSteer(expandedText, currentImages, options);
+					await this._queueSteer(expandedText, currentImages, { ...options, inputId });
 				}
 				noteJoined();
 				emitPendingCommandInvocation();
-				await emitInputDisposition("queued");
+				await this._queuedInputDispositions.queued(inputId);
 				promptDisposition?.("queued");
 				preflightResult?.(true);
 				return;
@@ -6655,12 +6664,13 @@ export class AgentSession {
 		const templateExpansion = expandPromptTemplateWithMetadata(expandedText, [...this.promptTemplates]);
 		expandedText = templateExpansion.text;
 
+		const queuedOptions = { ...options, inputId: processedInput.inputId };
 		if (behavior === "steer") {
-			await this._queueSteer(expandedText, processedInput.images, options);
+			await this._queueSteer(expandedText, processedInput.images, queuedOptions);
 		} else {
-			await this._queueFollowUp(expandedText, processedInput.images, options);
+			await this._queueFollowUp(expandedText, processedInput.images, queuedOptions);
 		}
-		await this._emitInputDisposition(processedInput.inputId, "queued");
+		await this._queuedInputDispositions.queued(processedInput.inputId);
 		if (templateExpansion.template) {
 			this._emit({
 				type: "command_invocation",
@@ -6789,7 +6799,7 @@ export class AgentSession {
 	private async _queueSteer(
 		text: string,
 		images?: ImageContent[],
-		options?: QueuedInputOptions & Pick<PromptOptions, "textBlocks">,
+		options?: QueuedInputOptions & Pick<PromptOptions, "textBlocks"> & QueuedInputEventId,
 	): Promise<void> {
 		await this._enqueueQueuedInput({ ...options, text, images, mode: "steer" });
 	}
@@ -6800,14 +6810,17 @@ export class AgentSession {
 	private async _queueFollowUp(
 		text: string,
 		images?: ImageContent[],
-		options?: QueuedInputOptions & Pick<PromptOptions, "textBlocks">,
+		options?: QueuedInputOptions & Pick<PromptOptions, "textBlocks"> & QueuedInputEventId,
 	): Promise<void> {
 		await this._enqueueQueuedInput({ ...options, text, images, mode: "followUp" });
 	}
 
 	/** Identified input is admitted into durable custody and enqueued in one gated step; other input as before. */
 	private async _enqueueQueuedInput(
-		input: QueuedInputOptions & Omit<PreparedClientInput, "enqueueOrder"> & Pick<PromptOptions, "textBlocks">,
+		input: QueuedInputOptions &
+			Omit<PreparedClientInput, "enqueueOrder"> &
+			Pick<PromptOptions, "textBlocks"> &
+			QueuedInputEventId,
 	): Promise<void> {
 		const clientMessageId = input.clientMessageId;
 		const sourced = { ...input, source: input.source ?? "interactive" };
@@ -6835,7 +6848,8 @@ export class AgentSession {
 	private _enqueuePreparedInput(
 		input: QueuedInputOptions &
 			Omit<PreparedClientInput, "enqueueOrder"> &
-			Pick<PromptOptions, "textBlocks"> & { readonly queuedId?: string },
+			Pick<PromptOptions, "textBlocks"> &
+			QueuedInputEventId & { readonly queuedId?: string },
 	): void {
 		const enqueueOrder = input.enqueueOrder ?? this.reserveQueuedInputOrder();
 		const prepared = {
@@ -6869,6 +6883,7 @@ export class AgentSession {
 		// `prompt()` does. Only restored input can lack one (a record written before sources were kept), and it
 		// stays unstamped: unknown origin, never defaulted to a trusted source.
 		if (input.source !== undefined) this._userInputSources.set(message, input.source);
+		if (input.inputId !== undefined) this._queuedInputDispositions.track(message, input.inputId);
 		this._queuedMessages.set(queuedId, message);
 		if (this._promptStartPending && this._skipNextPostCompactionAssistantCheck) {
 			const deferred =

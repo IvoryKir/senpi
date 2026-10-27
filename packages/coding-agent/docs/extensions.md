@@ -1301,6 +1301,17 @@ pi.on("input", async (event, ctx) => {
 - `transform` - modify text/images, then continue to expansion
 - `handled` - skip agent entirely (first handler to return this wins)
 
+#### input_disposition
+
+Fired once the session has decided what happens to an input an `input` handler saw. `event.inputId` matches that `input` event; `event.disposition` is `"handled"` (a handler or command consumed it), `"rejected"`, `"started"` (it began a turn) or `"queued"` (it waits as a steer or follow-up). An input queued while a turn runs gets `"queued"` when it is queued and then `"started"` when its message is delivered into a turn, always in that order.
+
+```typescript
+pi.on("input_disposition", async (event, ctx) => {
+  // event.inputId - the id of the matching input event
+  // event.disposition - "handled" | "rejected" | "started" | "queued"
+});
+```
+
 Transforms chain across handlers. See [input-transform.ts](../examples/extensions/input-transform.ts) and [input-transform-streaming.ts](../examples/extensions/input-transform-streaming.ts) for `streamingBehavior`-aware routing.
 
 ## ExtensionContext
