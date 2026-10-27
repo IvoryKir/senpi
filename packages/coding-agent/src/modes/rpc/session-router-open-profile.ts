@@ -124,8 +124,10 @@ export function validatedOpenProfile(
 }
 
 /**
- * The caller env of a task child's parent, when that parent is open on THIS host (senpi#4381): a lane
- * identity follows the task tree without every opener repeating it. A parent elsewhere contributes nothing.
+ * The caller env of a task child's parent, when THIS host currently holds that parent (senpi#4381): a lane
+ * identity follows the task tree without every opener repeating it. A closed parent or one elsewhere
+ * contributes nothing. The opening connection is not tied to the parent: this is the attach trust boundary,
+ * since any client that names an open session can already attach to it and run its tools.
  */
 function parentSessionEnv(host: RouterContext, parentSessionId: string | undefined): SessionEnv | undefined {
 	if (parentSessionId === undefined) return undefined;

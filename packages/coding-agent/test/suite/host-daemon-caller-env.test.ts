@@ -77,6 +77,19 @@ describe("caller-passable names", () => {
 		expect(sessionEnvError({ OMOCAT_LANE: "a\u0000b" }, {})).toBeDefined();
 		expect(sessionEnvError({ OMOCAT_LANE: "x".repeat(4097) }, {})).toBeDefined();
 	});
+
+	it("repeats at most the first 64 characters of a caller-supplied name, never its value", () => {
+		for (const name of ["a".repeat(10_000), "A".repeat(10_000)]) {
+			for (const value of ["secret-value", 7]) {
+				const detail = sessionEnvError({ [name]: value }, {}) ?? "";
+				expect(detail).toContain(`${name.slice(0, 64)}...`);
+				expect(detail).not.toContain(name.slice(0, 65));
+				expect(detail).not.toContain("secret-value");
+				expect(detail.length).toBeLessThan(200);
+			}
+		}
+		expect(sessionEnvError({ ["B".repeat(64)]: "x" }, {})).toContain(`env.${"B".repeat(64)} is not`);
+	});
 });
 
 describe("a task child's env", () => {

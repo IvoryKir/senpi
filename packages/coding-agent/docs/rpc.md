@@ -1949,15 +1949,21 @@ consumer above. Any other value is refused with `invalid_launch_profile`.
 `open_session.env: Record<string, string>` is the per-spawn caller env channel (senpi#4381): the small, explicit set
 of variables THIS session's tool subprocesses (the bash tool and everything it spawns, in-process or in the tool
 child) see on top of the process environment. It is applied to that one session only, after the daemon's own name
-allowlist: the host process never absorbs the values, a successor generation never inherits them, and no other
-session on the host sees them, so two clients opening through one daemon with different values each get only their
-own and a later open without the field gets none. Names are checked against the host's caller-passable set: exactly
+allowlist: the values are never merged into the host process environment, never carried to a successor generation
+through it, and never visible to a session that neither received them on its own open nor inherited them as a task
+child (below), so two clients opening through one daemon with different values each get only their own and a later
+open without the field gets none. Names are checked against the host's caller-passable set: exactly
 `OMOCAT_LANE` by default (the lane identity a task tree's tools label their posts with), plus whatever names the host
 process was started with in `SENPI_RPC_CALLER_ENV_NAMES` (comma-separated; a session-owned or host-owned name such
 as `PI_SESSION_ID` is never accepted). A name outside that set, a non-string value, a name that is not `[A-Z_][A-Z0-9_]*`,
 more than 16 entries, a value over 4096 characters or one containing NUL is refused with `invalid_session_env: <detail>`
-naming the offender and the passable set; values are never echoed. A task child (`open_session.spawnedBy` naming a
-parent open on this host) inherits its parent's entries, and its own `env` entries win over them. Applied when the open
+naming the offender (a name longer than 64 characters is cut to its first 64 plus `...`) and the passable set; values
+are never echoed. A task child (`open_session.spawnedBy` naming, by `durableSessionId` or `sessionId`, a parent session
+this host currently holds) inherits its parent's entries, and its own `env` entries win over them; a `spawnedBy`
+naming a parent that is closed or not on this host inherits nothing. Inheritance follows the same trust boundary as
+attach: the host does not tie the opening connection to the parent, so any client on the host that could attach to
+the parent (and run its tools there) can open a child that inherits the parent's entries, which grants it nothing
+attach does not. Applied when the open
 creates the session; an attach keeps the session's existing env. A session parked for a generation handoff carries
 its env into the successor's reopen as part of its own record, not through the successor's process environment.
 Probe `session_env` in `get_protocol_info` before sending the field.

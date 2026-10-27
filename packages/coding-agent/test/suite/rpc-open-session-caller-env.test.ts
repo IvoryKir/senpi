@@ -3,7 +3,7 @@ import { z } from "zod";
 import { contextHost, responseData } from "./rpc-session-context-support.ts";
 
 // senpi#4381: a caller passes a small explicit env to the ONE session it opens; the value reaches that
-// session's tool subprocesses and nothing else on the host.
+// session's tool subprocesses and the task children opened with spawnedBy naming it, nothing else.
 const PRINT_LANE = `printf "lane=%s" "\${OMOCAT_LANE-unset}"`;
 
 afterEach(() => {
@@ -82,6 +82,24 @@ it("gives a task child of a parent without a lane no lane, and ignores a parent 
 
 	expect(await host.bashOutput(String(child.sessionId), PRINT_LANE)).toBe("lane=unset");
 	expect(await host.bashOutput(String(orphan.sessionId), PRINT_LANE)).toBe("lane=unset");
+}, 120_000);
+
+it("inherits through spawnedBy on the attach trust boundary: any connection naming a held parent, never a closed one", async () => {
+	// The documented boundary (docs/rpc.md, "Caller env per session"): the opener is not tied to the parent,
+	// so a connection that never attached to it still inherits; once the parent is closed, nothing is inherited.
+	await using host = await contextHost({ idleEvictionMs: 1_000 });
+	const parent = await host.open("conn-parent", { env: { OMOCAT_LANE: "lane-parent" } });
+	const parentId = z.object({ sessionId: z.string() }).parse(parent.state).sessionId;
+	const spawnedBy = { parentSessionId: parentId, rootSessionId: parentId, taskId: "t-1" };
+
+	const stranger = await host.open("conn-stranger", { spawnedBy });
+	expect(await host.bashOutput(String(stranger.sessionId), PRINT_LANE)).toBe("lane=lane-parent");
+
+	await host.evictIdle(String(parent.sessionId));
+	expect((await host.list("conn-late")).map((row) => row.sessionId)).not.toContain(parent.sessionId);
+	const afterClose = await host.open("conn-late", { spawnedBy });
+
+	expect(await host.bashOutput(String(afterClose.sessionId), PRINT_LANE)).toBe("lane=unset");
 }, 120_000);
 
 it("advertises session_env, the capability a client waits for before sending the field", async () => {

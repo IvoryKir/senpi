@@ -1,6 +1,7 @@
 /**
  * The per-spawn caller env channel (senpi#4381): the small, explicit set of environment variables a
- * caller may hand to the ONE session it opens, scoped to that session's tool subprocesses.
+ * caller may hand to the ONE session it opens, scoped to that session's tool subprocesses and to the task
+ * children opened with `spawnedBy` naming it (`session-router-open-profile.ts`).
  *
  * A shared daemon serves every client on the machine, so a value that identifies one caller (a lane,
  * a work item) can never live in the daemon's own environment: the first caller's value would reach
@@ -25,6 +26,8 @@ export const DEFAULT_CALLER_ENV_NAMES: readonly string[] = Object.freeze(["OMOCA
 const MAX_SESSION_ENV_ENTRIES = 16;
 const MAX_SESSION_ENV_VALUE_LENGTH = 4096;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/u;
+/** A refusal repeats at most this many characters of a caller-supplied name. */
+const MAX_ECHOED_NAME_LENGTH = 64;
 
 export function callerEnvPassableNames(
 	hostEnv: Readonly<Record<string, string | undefined>> = process.env,
@@ -44,11 +47,11 @@ export function sessionEnvShapeError(value: unknown): string | undefined {
 	const entries = Object.entries(value);
 	if (entries.length > MAX_SESSION_ENV_ENTRIES) return `env allows at most ${MAX_SESSION_ENV_ENTRIES} entries.`;
 	for (const [name, entry] of entries) {
-		if (!ENV_NAME.test(name)) return `env name "${name}" must match ${ENV_NAME.source}.`;
-		if (typeof entry !== "string") return `env.${name} must be a string.`;
-		if (entry.includes("\u0000")) return `env.${name} must not contain NUL.`;
+		if (!ENV_NAME.test(name)) return `env name "${echoedName(name)}" must match ${ENV_NAME.source}.`;
+		if (typeof entry !== "string") return `env.${echoedName(name)} must be a string.`;
+		if (entry.includes("\u0000")) return `env.${echoedName(name)} must not contain NUL.`;
 		if (entry.length > MAX_SESSION_ENV_VALUE_LENGTH)
-			return `env.${name} must be at most ${MAX_SESSION_ENV_VALUE_LENGTH} characters.`;
+			return `env.${echoedName(name)} must be at most ${MAX_SESSION_ENV_VALUE_LENGTH} characters.`;
 	}
 	return undefined;
 }
@@ -66,7 +69,7 @@ export function sessionEnvError(
 	const passable = callerEnvPassableNames(hostEnv);
 	for (const name of Object.keys(value)) {
 		if (!passable.has(name))
-			return `env.${name} is not a caller-passable name (passable: ${[...passable].sort().join(", ")}).`;
+			return `env.${echoedName(name)} is not a caller-passable name (passable: ${[...passable].sort().join(", ")}).`;
 	}
 	return undefined;
 }
@@ -81,6 +84,11 @@ export function inheritedSessionEnv(
 ): SessionEnv | undefined {
 	const merged = { ...parent, ...requested };
 	return Object.keys(merged).length === 0 ? undefined : merged;
+}
+
+/** A caller-supplied name as a refusal repeats it: its first 64 characters, then `...` when longer. */
+function echoedName(name: string): string {
+	return name.length > MAX_ECHOED_NAME_LENGTH ? `${name.slice(0, MAX_ECHOED_NAME_LENGTH)}...` : name;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
