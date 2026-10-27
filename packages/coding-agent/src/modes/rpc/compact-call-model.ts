@@ -60,7 +60,12 @@ export interface CallProjection {
 	readonly startSequence: number | null;
 	readonly startedAtMs: number | null;
 	readonly outcome: CallOutcome | null;
-	readonly nestedCalls: { readonly calls: readonly CallProjection[]; readonly complete: boolean };
+	/** `omitted` counts completed children left out at `NESTED_PROJECTION_LIMIT` (RULING-49); `complete` is false when it is not 0. */
+	readonly nestedCalls: {
+		readonly calls: readonly CallProjection[];
+		readonly complete: boolean;
+		readonly omitted: number;
+	};
 }
 
 export interface CallCounters {

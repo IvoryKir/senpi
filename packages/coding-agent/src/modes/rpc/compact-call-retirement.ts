@@ -14,9 +14,9 @@ function projectionOf(call: OutstandingCall): Omit<CallProjection, "nestedCalls"
 }
 
 /**
- * The carrier settled: the call and its completed descendants leave the table with one projection. Children beyond
- * `NESTED_PROJECTION_LIMIT` (the parent's own nested-call record bound, RULING-13 Q5) or an incomplete child mark
- * the projection incomplete.
+ * The carrier settled: the call and its completed descendants leave the table with one projection. Completed children
+ * beyond `NESTED_PROJECTION_LIMIT` (the parent's own nested-call record bound, RULING-13 Q5) are counted in `omitted`
+ * (RULING-49); they, a child still executing or an incomplete child mark the projection incomplete.
  */
 export function settleCall(table: CompactCallTable, call: OutstandingCall, isError: boolean): CallProjection {
 	const settled: OutstandingCall = terminal(call)
@@ -29,15 +29,16 @@ function retire(table: CompactCallTable, call: OutstandingCall): CallProjection 
 	const children = table.childrenOf(call.runtimeItemKey);
 	const completed = children.filter(terminal);
 	const nested = completed.map((child) => retire(table, child));
+	const calls = nested.slice(0, NESTED_PROJECTION_LIMIT);
+	const omitted = nested.length - calls.length;
 	table.remove(call.runtimeItemKey);
 	return {
 		...projectionOf(call),
 		nestedCalls: {
-			calls: nested.slice(0, NESTED_PROJECTION_LIMIT),
+			calls,
 			complete:
-				completed.length === children.length &&
-				children.length <= NESTED_PROJECTION_LIMIT &&
-				nested.every((child) => child.nestedCalls.complete),
+				omitted === 0 && completed.length === children.length && calls.every((child) => child.nestedCalls.complete),
+			omitted,
 		},
 	};
 }

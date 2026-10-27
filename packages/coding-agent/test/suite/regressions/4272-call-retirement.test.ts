@@ -161,8 +161,9 @@ it("Q5 a projection is complete only when every grandchild rode on it; an execut
 		expect(row?.call).toMatchObject({
 			runtimeItemKey: keyOf("p1"),
 			nestedCalls: {
-				calls: [{ runtimeItemKey: keyOf("p1/c"), nestedCalls: { calls: [], complete: false } }],
+				calls: [{ runtimeItemKey: keyOf("p1/c"), nestedCalls: { calls: [], complete: false, omitted: 0 } }],
 				complete: false,
+				omitted: 0,
 			},
 		});
 		expect(settled.calls.map(shape)).toEqual([["p1/c/g", "executing", "pending", null]]);
@@ -202,14 +203,16 @@ it("Q5 a completed grandchild rides nested on its parent's projection and leaves
 								{
 									runtimeItemKey: keyOf("p1/c/g"),
 									parentKey: keyOf("p1/c"),
-									nestedCalls: { calls: [], complete: true },
+									nestedCalls: { calls: [], complete: true, omitted: 0 },
 								},
 							],
 							complete: true,
+							omitted: 0,
 						},
 					},
 				],
 				complete: true,
+				omitted: 0,
 			},
 		});
 		expect(settled.calls).toEqual([]);

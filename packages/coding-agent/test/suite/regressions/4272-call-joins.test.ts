@@ -42,7 +42,7 @@ it("Q2 Q7 the carrier's settle retires the call with a full projection on the S0
 				input: { announced: { command: "c1" }, started: { command: "c1" }, prepared: null },
 				startSequence: live.calls[0]?.startSequence,
 				outcome: { kind: "result", isError: false, source: "execution_end" },
-				nestedCalls: { calls: [], complete: true },
+				nestedCalls: { calls: [], complete: true, omitted: 0 },
 			},
 		});
 		expect(rig.lane.storageStatus().residentSettledKeys).toBeGreaterThan(0);
@@ -316,7 +316,7 @@ it("RULING-13 an unannounced start has a null owning message and a parentKey res
 			runtimeItemKey: parentKey,
 			owningMessageId: null,
 			parentKey: null,
-			nestedCalls: { calls: [{ toolCallId: "u1/1", owningMessageId: null, parentKey }], complete: true },
+			nestedCalls: { calls: [{ toolCallId: "u1/1", owningMessageId: null, parentKey }], complete: true, omitted: 0 },
 		});
 		expect(settled.calls.map((entry) => entry.toolCallId)).toEqual(["o1"]);
 		rig.lane.release(live.root);
