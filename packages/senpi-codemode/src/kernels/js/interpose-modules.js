@@ -53,10 +53,26 @@ export function installModulePermissions(check) {
 			},
 		});
 	}
+	// The decision comes first. A cell nothing is enforced against sees the engine's own module, so
+	// no-rules behaviour is unchanged and matches what import() returns; only a refusal is answered
+	// with the port primitives the cell already owns as globals.
+	const requireGuard = (specifier, importer) => {
+		if (!sealed || !workerThreads.test(String(specifier))) {
+			guard(specifier, importer);
+			return undefined;
+		}
+		try {
+			guard(specifier, importer);
+		} catch (error) {
+			if (error?.code !== "cell_permission_denied") throw error;
+			return portPrimitives();
+		}
+		return undefined;
+	};
 	const originalRequire = module.prototype.require;
 	module.prototype.require = function (specifier) {
-		if (sealed && workerThreads.test(String(specifier))) return portPrimitives();
-		guard(specifier, this.filename);
+		const substitute = requireGuard(specifier, this.filename);
+		if (substitute) return substitute;
 		if (specifier === "bun" && globalThis.Bun) return globalThis[Symbol.for("senpi.kernel.bun")] ?? globalThis.Bun;
 		return originalRequire.call(this, specifier);
 	};
@@ -64,8 +80,8 @@ export function installModulePermissions(check) {
 	module.createRequire = function (...args) {
 		const require = originalCreateRequire.apply(this, args);
 		const guarded = function (specifier) {
-			if (sealed && workerThreads.test(String(specifier))) return portPrimitives();
-			guard(specifier, requestedPath(args[0]) ?? String(args[0]));
+			const substitute = requireGuard(specifier, requestedPath(args[0]) ?? String(args[0]));
+			if (substitute) return substitute;
 			if (specifier === "bun" && globalThis.Bun) return globalThis[Symbol.for("senpi.kernel.bun")] ?? globalThis.Bun;
 			return require(specifier);
 		};
