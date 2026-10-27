@@ -92,6 +92,11 @@ const TRANSIENT_ENV_NAMES = new Set([
 	"SENPI_RPC_HOST_EXPECTED_RUNTIME_BUILD_ID",
 ]);
 
+/** A name one session or one host generation owns; a caller may never pass it to a child either (senpi#4381). */
+export function isTransientDaemonEnvName(name: string): boolean {
+	return TRANSIENT_ENV_NAMES.has(name);
+}
+
 export function daemonEnvIsAllowed(name: string, platform: NodeJS.Platform = process.platform): boolean {
 	const upper = name.toUpperCase();
 	if (TRANSIENT_ENV_NAMES.has(platform === "win32" ? upper : name)) return false;

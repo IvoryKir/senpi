@@ -137,6 +137,14 @@ export const PROMPT_SURFACE_CAPABILITY = "prompt_surface";
 export const BROWSER_ENGINE_CAPABILITY = "browser_engine";
 
 /**
+ * HOST capability: this host honors `open_session.env` (senpi#4381), the per-spawn caller env channel.
+ * The entries are that session's own: its tool subprocesses see them, the host process never does, a
+ * successor generation never inherits them, and no other session on the host sees them. A name outside
+ * the host's caller-passable set is refused with `invalid_session_env`.
+ */
+export const SESSION_ENV_CAPABILITY = "session_env";
+
+/**
  * HOST capability: this host honors `open_session.retryFallback` (`{ modelFallback, fallbackChains }`). The
  * policy is that session's own: it is applied as an in-memory settings override for that session only,
  * never written to a settings file and never seen by another session on the host.

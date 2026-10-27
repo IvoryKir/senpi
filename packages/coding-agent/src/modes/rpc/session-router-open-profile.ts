@@ -14,9 +14,11 @@ import type { RpcCommand, RpcResponse } from "./rpc-types.ts";
 import {
 	RPC_ERROR_INVALID_LAUNCH_PROFILE,
 	RPC_ERROR_INVALID_SESSION_CONTEXT,
+	RPC_ERROR_INVALID_SESSION_ENV,
 	RPC_ERROR_INVALID_SESSION_KIND,
 	RPC_ERROR_OWNER_CHANGED,
 } from "./rpc-types.ts";
+import { inheritedSessionEnv, type SessionEnv, sessionEnvError } from "./session-caller-env.ts";
 
 import type { RpcSessionLaunchProfile } from "./session-registry.ts";
 
@@ -88,6 +90,9 @@ export function validatedOpenProfile(
 	const retryFallbackError = sessionRetryFallbackError(command.retryFallback);
 	if (retryFallbackError)
 		return error(command.id, "open_session", `${RPC_ERROR_INVALID_LAUNCH_PROFILE}: ${retryFallbackError}`);
+	const envError = sessionEnvError(command.env);
+	if (envError) return error(command.id, "open_session", `${RPC_ERROR_INVALID_SESSION_ENV}: ${envError}`);
+	const sessionEnv = inheritedSessionEnv(parentSessionEnv(host, command.spawnedBy?.parentSessionId), command.env);
 	return {
 		cwd: command.cwd ?? host.defaults.cwd,
 		...(command.attended === false ? { attended: false as const } : {}),
@@ -114,5 +119,18 @@ export function validatedOpenProfile(
 		...(command.promptSurface !== undefined ? { promptSurface: command.promptSurface } : {}),
 		...(command.browserEngine !== undefined ? { browserEngine: command.browserEngine } : {}),
 		...(command.retryFallback !== undefined ? { retryFallback: command.retryFallback } : {}),
+		...(sessionEnv !== undefined ? { sessionEnv } : {}),
 	};
+}
+
+/**
+ * The caller env of a task child's parent, when that parent is open on THIS host (senpi#4381): a lane
+ * identity follows the task tree without every opener repeating it. A parent elsewhere contributes nothing.
+ */
+function parentSessionEnv(host: RouterContext, parentSessionId: string | undefined): SessionEnv | undefined {
+	if (parentSessionId === undefined) return undefined;
+	const parent = host.registry
+		.list()
+		.find((row) => row.durableSessionId === parentSessionId || row.sessionId === parentSessionId);
+	return parent === undefined ? undefined : host.registry.peek(parent.sessionId)?.profile.sessionEnv;
 }

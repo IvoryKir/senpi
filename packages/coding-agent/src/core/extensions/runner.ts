@@ -556,6 +556,7 @@ export class ExtensionRunner {
 		timeoutMinutes: 30,
 	});
 	private getBrowserEngineFn: NonNullable<ExtensionContextActions["getBrowserEngine"]> = () => undefined;
+	private getSessionEnvFn: NonNullable<ExtensionContextActions["getSessionEnv"]> = () => undefined;
 	private getImageSettingsFn: ExtensionContextActions["getImageSettings"] = () => ({
 		autoResize: true,
 		blockImages: false,
@@ -727,6 +728,7 @@ export class ExtensionRunner {
 		this.getLookAtSettingsFn = contextActions.getLookAtSettings;
 		if (contextActions.getAskUserSettings) this.getAskUserSettingsFn = contextActions.getAskUserSettings;
 		if (contextActions.getBrowserEngine) this.getBrowserEngineFn = contextActions.getBrowserEngine;
+		if (contextActions.getSessionEnv) this.getSessionEnvFn = contextActions.getSessionEnv;
 		this.getImageSettingsFn = contextActions.getImageSettings;
 		this.sessionSettingsFn = contextActions.sessionSettings;
 		this.compactFn = contextActions.compact;
@@ -1519,6 +1521,10 @@ export class ExtensionRunner {
 			get browserEngine() {
 				runner.assertActive();
 				return runner.getBrowserEngineFn();
+			},
+			get sessionEnv() {
+				runner.assertActive();
+				return runner.getSessionEnvFn();
 			},
 			get modelRegistry() {
 				runner.assertActive();
