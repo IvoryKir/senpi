@@ -17,6 +17,7 @@ import type {
 	RpcSessionParkedEvent,
 } from "./rpc-types.ts";
 import { RpcSecurityPresentations } from "./security-presentations.ts";
+import type { RecoveryCheckpoints } from "./compact-recovery-state.ts";
 import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { SessionEventFanout, type SessionEventWriterConnection } from "./session-event-fanout.ts";
 import { SessionOpenTurns } from "./session-open-turns.ts";
@@ -274,6 +275,11 @@ export class SessionEventWriter {
 	/** Legacy views frozen for a peer's baseline and not yet released (R3.C6.4 accounting). */
 	get openLegacyViews(): number {
 		return this.fanout.replay.openCursors;
+	}
+
+	/** The checkpoint tokens frozen for peers' baselines and recoveries (S08a, R3.C1.5). */
+	get recoveryCheckpoints(): RecoveryCheckpoints {
+		return this.fanout.checkpoints;
 	}
 
 	registerConnection(

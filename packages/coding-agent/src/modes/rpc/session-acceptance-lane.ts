@@ -99,6 +99,11 @@ export class SessionAcceptanceLane {
 		return this.nonce;
 	}
 
+	/** The public epoch of this incarnation (S08-Q1): distinct from the producer nonce, which is never serialized. */
+	get sessionEpoch(): string {
+		return this.epoch;
+	}
+
 	get retired(): boolean {
 		return this.retiredAs !== undefined;
 	}

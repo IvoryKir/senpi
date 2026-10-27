@@ -1,9 +1,10 @@
 import { compactUpdatesEnabled } from "../../core/engine-socket-flag.ts";
 import { legacyAttachView, legacyResyncMessage } from "./compact-legacy-view.ts";
+import { type FrozenCheckpoint, RecoveryCheckpoints } from "./compact-recovery-state.ts";
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
 import { LegacyReplayStore } from "./legacy-replay-store.ts";
 import { resyncCut } from "./legacy-resync-view.ts";
-import type { FrozenAcceptedRoot, SessionAcceptanceLane } from "./session-acceptance-lane.ts";
+import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { type ShedMode, SocketEventSinkActor } from "./socket-event-fanout.ts";
 import { EVENT_RESYNC_CAPABILITY } from "./socket-peer-recovery.ts";
 
@@ -34,15 +35,12 @@ const BROADCAST_LIFECYCLE_RECORDS = new Set([
 type RegisteredConnection = {
 	readonly connection: SessionEventWriterConnection;
 	readonly actor: SocketEventSinkActor;
+	/** This registration's incarnation of the peer: the owner every checkpoint it freezes is bound to. */
+	readonly socketEpoch: string;
 };
 
-/** A lane root pinned for one frozen view, released once on that view's end (R3.C1.5). */
-type PinnedRoot = {
-	readonly sessionId: string;
-	readonly lane: SessionAcceptanceLane;
-	readonly root: FrozenAcceptedRoot;
-	readonly epoch: string;
-};
+/** A checkpoint pinned for one frozen view, released once on that view's end (R3.C1.5). */
+type PinnedRoot = FrozenCheckpoint & { readonly sessionId: string };
 
 export class SessionEventFanout {
 	onConnectionClosed?: (id: string) => void;
@@ -50,6 +48,9 @@ export class SessionEventFanout {
 	readonly acceptance = new Map<string, SessionAcceptanceLane>();
 	/** Today's retention for a session without a lane (RULING-25 Q5), and the open-view count of both sources. */
 	readonly replay = new LegacyReplayStore();
+	/** The checkpoint tokens this host froze for its peers' baselines and recoveries (S08a). */
+	readonly checkpoints = new RecoveryCheckpoints();
+	private socketEpochs = 0;
 	/** Today's shed path with the compact-updates flag off; the cut frozen at the shed with it on. */
 	private readonly shedMode: ShedMode = compactUpdatesEnabled() ? "capture" : "drop";
 	private readonly connections = new Map<string, RegisteredConnection>();
@@ -64,6 +65,7 @@ export class SessionEventFanout {
 		connection: SessionEventWriterConnection,
 		options: { readonly maxQueueBytes?: number; readonly stallMs?: number } = {},
 	): void {
+		const socketEpoch = `socket-${++this.socketEpochs}`;
 		const actor = new SocketEventSinkActor(
 			connection,
 			(cause) => {
@@ -72,6 +74,7 @@ export class SessionEventFanout {
 					this.connectionCapabilities.delete(id);
 					this.connectionSessions.delete(id);
 					this.registeredCapabilityConnections.delete(id);
+					this.checkpoints.forgetPeer(socketEpoch);
 					this.onConnectionClosed?.(id);
 				}
 				process.stderr.write(
@@ -83,7 +86,7 @@ export class SessionEventFanout {
 			options.stallMs,
 			this.shedMode,
 		);
-		this.connections.set(id, { connection, actor });
+		this.connections.set(id, { connection, actor, socketEpoch });
 		this.connectionCapabilities.set(id, new Set());
 		this.connectionSessions.set(id, new Map());
 	}
@@ -92,6 +95,7 @@ export class SessionEventFanout {
 		const registered = this.connections.get(id);
 		if (!registered) return;
 		registered.actor.close();
+		this.checkpoints.forgetPeer(registered.socketEpoch);
 		this.connections.delete(id);
 		this.connectionCapabilities.delete(id);
 		this.connectionSessions.delete(id);
@@ -99,10 +103,10 @@ export class SessionEventFanout {
 	}
 
 	/**
-	 * A first attach freezes the cut C synchronously (the lane root, read later for the baseline; today's replay
-	 * view for a session without a lane) and installs that peer's baseline barrier before the session is live for
-	 * it; a repeated hold adds nothing. The attempt dies with a detach, the peer, or a replacement (new lane
-	 * epoch), and releases its root in every case.
+	 * A first attach is one admission: it freezes the cut C synchronously as that admission's checkpoint (the lane
+	 * root, read later for the baseline; today's replay view for a session without a lane) and installs that peer's
+	 * baseline barrier before the session is live for it; a repeated hold adds nothing. The attempt dies with a
+	 * detach, the peer, or a replacement (new lane epoch), and releases its checkpoint in every case.
 	 */
 	attachConnectionToSession(id: string, sessionId: string): void {
 		const registered = this.connections.get(id);
@@ -112,7 +116,7 @@ export class SessionEventFanout {
 		const ordinal = ++this.attachOrdinal;
 		sessions.set(sessionId, ordinal);
 		this.connectionSessions.set(id, sessions);
-		const pinned = this.pin([sessionId]);
+		const pinned = this.pin(id, [sessionId]);
 		const view = { placeholders: this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY), now: Date.now() };
 		const cursor = this.acceptance.has(sessionId)
 			? legacyAttachView(
@@ -127,7 +131,7 @@ export class SessionEventFanout {
 			() =>
 				this.connections.get(id)?.actor === registered.actor &&
 				this.connectionSessions.get(id)?.get(sessionId) === ordinal &&
-				pinned.every(({ lane, epoch }) => lane.recoveryEpoch === epoch),
+				pinned.every(({ lane, root }) => lane.sessionEpoch === root.sessionEpoch),
 		);
 	}
 
@@ -141,12 +145,13 @@ export class SessionEventFanout {
 		this.connectionCapabilities.set(id, new Set(capabilities));
 		this.registeredCapabilityConnections.add(id);
 		if (capabilities.includes(EVENT_RESYNC_CAPABILITY)) {
-			// Roots pinned at the shed, before the actor awaits its drain (R3.C1.5); released when the recovery ends.
+			// Checkpoints frozen at the shed, before the actor awaits its drain (R3.C1.5), as the next generation of each
+			// held admission; released when the recovery ends.
 			registered.actor.enableRecovery((reason, carried = []) => {
 				const capture = this.shedMode === "capture";
 				const attached = this.held(id);
 				const ordinals = new Map(this.connectionSessions.get(id));
-				const pinned = this.pin(attached);
+				const pinned = this.pin(id, attached);
 				const roots = new Map(pinned.map((root) => [root.sessionId, root]));
 				const view = {
 					reason,
@@ -282,14 +287,26 @@ export class SessionEventFanout {
 		return [...(this.connectionSessions.get(id)?.keys() ?? [])];
 	}
 
-	private pin(sessionIds: readonly string[]): readonly PinnedRoot[] {
+	/** One checkpoint per held lane-owned session, on the admission (the attach ordinal) that holds it for `id`. */
+	private pin(id: string, sessionIds: readonly string[]): readonly PinnedRoot[] {
+		const socketEpoch = this.connections.get(id)?.socketEpoch;
 		return sessionIds.flatMap((sessionId) => {
 			const lane = this.acceptance.get(sessionId);
-			return lane && !lane.retired ? [{ sessionId, lane, root: lane.freeze(), epoch: lane.recoveryEpoch }] : [];
+			const ordinal = this.connectionSessions.get(id)?.get(sessionId);
+			if (!lane || ordinal === undefined || socketEpoch === undefined) return [];
+			const route = {
+				socketEpoch,
+				admissionId: `attach-${ordinal}`,
+				routeKind: "ordinary" as const,
+				peer: id,
+				sessionId,
+			};
+			const frozen = this.checkpoints.freeze(route, lane);
+			return frozen.ok ? [{ sessionId, ...frozen.value }] : [];
 		});
 	}
 
 	private unpin(pinned: readonly PinnedRoot[]): void {
-		for (const { lane, root } of pinned) lane.release(root);
+		for (const { token } of pinned) this.checkpoints.release(token);
 	}
 }
