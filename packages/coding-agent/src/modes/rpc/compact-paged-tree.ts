@@ -176,13 +176,14 @@ export class CompactPagedTree<T> {
 	}
 
 	/**
-	 * Commits a round: nodes replaced within it were released and are skipped, so only survivors are written.
-	 * Until then a round's built nodes stay resident, at most 384 keys x 3 nodes per level x (height + 1).
+	 * Commits a round as one segment file: nodes replaced within it were released and are skipped, so only
+	 * survivors are written. Until then a round's built nodes stay resident, at most 384 keys x 3 nodes per
+	 * level x (height + 1).
 	 */
 	async flush(): Promise<void> {
 		const dirty = this.dirty;
 		this.dirty = [];
-		for (const leaf of dirty) await this.store.flushLeaf(leaf);
+		await this.store.flushLeaves(dirty);
 	}
 
 	private async balance(node: Node<T>): Promise<PagedRoot> {
