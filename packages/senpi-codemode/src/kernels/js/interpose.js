@@ -16,6 +16,31 @@ const workerThreads = process.getBuiltinModule("node:worker_threads");
 const bootstrap = workerThreads.workerData;
 // Restore the public value before any builtin namespace or user preload observes it.
 if (bootstrap.script) workerThreads.workerData = bootstrap.userWorkerData;
+// Bun gives each worker one ESM namespace per builtin, copied from the module object at its first
+// import and never refreshed, so the guarded constructor must be in place before that import. Only a
+// user worker started under an active token is enforced against for its whole life, so only it gets
+// the forwarder; every other context keeps the engine's own Worker on the module.
+let guardedWorker;
+let forwarder;
+if (bootstrap.script && bootstrap.enforced) {
+	// A function, not a class: it hands back the instance the guarded class builds for new.target.
+	forwarder = function Worker(...args) {
+		if (!new.target) throw new TypeError("Class constructor Worker cannot be invoked without 'new'");
+		if (!guardedWorker) throw new Error("Worker is unavailable until the permission runtime starts");
+		return Reflect.construct(guardedWorker, args, new.target);
+	};
+	Object.setPrototypeOf(forwarder.prototype, EventTarget.prototype);
+	Object.defineProperty(workerThreads, "Worker", { value: forwarder, writable: false, configurable: false, enumerable: true });
+}
+const installGuardedWorker = (Guarded) => {
+	if (!forwarder) {
+		globalThis.Worker = Guarded;
+		return;
+	}
+	guardedWorker = Guarded;
+	Object.setPrototypeOf(forwarder.prototype, Guarded.prototype);
+	globalThis.Worker = forwarder;
+};
 const originals = { ...fs.promises, readFileSync: fs.readFileSync, realpathSync: fs.realpathSync };
 const execFile = process.getBuiltinModule("node:child_process").execFile;
 const cleanupExecFile = (...args) => {
@@ -56,5 +81,6 @@ await initializePermissionRuntime((authorize) => { runtimeAuthorize = authorize;
 	resolverIO: originals,
 	cleanupExecFile,
 	activate,
+	installGuardedWorker,
 });
 activate();

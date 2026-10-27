@@ -60,8 +60,10 @@ export async function initializePermissionRuntime(install, workerData, engine) {
 		finally { if (token) bound.delete(token.id); }
 	};
 
+	// Only a configured kernel replaces the constructor; the entry already put a forwarder on the module
+	// before its ESM namespace existed, and this class is what it constructs.
 	if (data && globalThis.Worker) {
-		globalThis.Worker = class Worker extends EventTarget {
+		engine.installGuardedWorker(class Worker extends EventTarget {
 			#port;
 			onmessage = null;
 			onerror = null;
@@ -119,7 +121,7 @@ export async function initializePermissionRuntime(install, workerData, engine) {
 			terminate() { this.#port.postMessage({ type: "terminate" }); }
 			ref() { this.#port.ref(); return this; }
 			unref() { this.#port.unref(); return this; }
-		};
+		});
 	}
 
 	if (workerData.script) {

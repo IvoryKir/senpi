@@ -293,6 +293,7 @@ export class KernelPermissionHost {
 				...workerOptions,
 				workerData: {
 					permission: { ...permission, messageKey },
+					enforced: token !== undefined,
 					script: message.script,
 					preload,
 					userWorkerData: workerOptions.workerData,

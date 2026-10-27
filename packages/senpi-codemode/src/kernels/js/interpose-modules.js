@@ -17,13 +17,6 @@ export function installModulePermissions(check, userWorker = false) {
 		? /^(?:bun:ffi|(?:node:)?vm)$/u
 		: /^(?:bun:ffi|(?:node:)?(?:vm|worker_threads))$/u;
 	const workerThreads = /^(?:node:)?worker_threads$/u;
-	// The constructor the module hands out is whatever the runtime installed as the guarded one, in
-	// every context and through both require and import, so no script reaches the raw Worker and
-	// starts one this kernel never interposed.
-	const threads = process.getBuiltinModule("node:worker_threads");
-	if (threads) {
-		Object.defineProperty(threads, "Worker", { get: () => globalThis.Worker, configurable: true });
-	}
 	// A cell already owns these as globals, so handing them back over require grants nothing, while
 	// Worker, parentPort and workerData stay out of reach: the raw Worker would spawn an uninterposed
 	// one. Only require can substitute a namespace, so import and getBuiltinModule stay refused.
