@@ -34,6 +34,9 @@ export interface ExecutionStart {
 	readonly parentToolCallId?: string;
 }
 
+/** The four "can still take this record" states, one per record kind; every per-id record picks the oldest such call. */
+const awaitingStart = (call: OutstandingCall) => call.startSequence === null && !terminal(call);
+const executing = (call: OutstandingCall) => call.phase === "executing";
 const stillOpen = (call: OutstandingCall) => !terminal(call);
 const awaitingCarrier = (call: OutstandingCall) => call.join === "pending";
 
@@ -147,20 +150,21 @@ export class CompactSessionCalls {
 	executionStart(step: CallStep, start: ExecutionStart): void {
 		const turnId = step.scope.turnId;
 		if (turnId === null) return;
-		const existing = this.table.byTurnId(turnId, start.toolCallId);
 		const started = {
 			startSequence: step.sequence,
 			startedAtMs: Date.now(),
 			resolvedName: start.toolName,
 		};
-		if (existing && existing.startSequence === null && !terminal(existing)) {
-			this.update(step, existing, {
+		const announced = this.table.oldestById(start.toolCallId, turnId, awaitingStart);
+		if (announced) {
+			this.update(step, announced, {
 				...started,
 				phase: "executing",
-				input: { ...existing.input, started: start.args },
+				input: { ...announced.input, started: start.args },
 			});
 			return;
 		}
+		const existing = this.table.byTurnId(turnId, start.toolCallId);
 		if (existing) this.table.counters.reused++;
 		const parent = start.parentToolCallId ? this.lookup(turnId, start.parentToolCallId) : undefined;
 		const created = this.create(step, {
@@ -175,7 +179,7 @@ export class CompactSessionCalls {
 	}
 
 	executionUpdate(step: CallStep, toolCallId: string, args: unknown, partialResult: unknown): void {
-		const call = this.lookup(step.scope.turnId, toolCallId);
+		const call = this.resolve(step, toolCallId, executing);
 		if (!call) return this.ignore("unknown");
 		if (call.phase !== "executing") return this.ignore("late");
 		const progressed = this.table.replaceSlot(call, "progress", partialResult);
@@ -185,7 +189,7 @@ export class CompactSessionCalls {
 	}
 
 	hook(step: CallStep, toolCallId: string, record: unknown): void {
-		const call = this.lookup(step.scope.turnId, toolCallId);
+		const call = this.resolve(step, toolCallId, stillOpen);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call)) return this.ignore("late");
 		this.table.replaceSlot(call, "hook", record);
@@ -194,8 +198,7 @@ export class CompactSessionCalls {
 
 	/** An end closes the oldest call still open under its id (senpi#4278); with none open it may replace an abandoned one. */
 	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
-		const turnId = step.scope.turnId;
-		const call = this.table.oldestById(toolCallId, turnId, stillOpen) ?? this.lookup(turnId, toolCallId);
+		const call = this.resolve(step, toolCallId, stillOpen);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call) && call.outcome?.kind !== "abandoned") return this.ignore("late");
 		const ended = this.table.replaceSlot(call, "result", result);
@@ -211,8 +214,7 @@ export class CompactSessionCalls {
 	 * same order the ends closed them in, senpi#4278), leaves with its completed descendants as one projection.
 	 */
 	settle(step: CallStep, toolCallId: string, isError: boolean): CallProjection | undefined {
-		const turnId = step.scope.turnId;
-		const call = this.table.oldestById(toolCallId, turnId, awaitingCarrier) ?? this.lookup(turnId, toolCallId);
+		const call = this.resolve(step, toolCallId, awaitingCarrier);
 		if (!call) return undefined;
 		const projection = settleCall(this.table, call, isError);
 		this.sequence = step.sequence;
@@ -245,6 +247,12 @@ export class CompactSessionCalls {
 
 	entries(ref: ValueRef | undefined, valid: () => void) {
 		return this.table.entriesOf(ref, valid);
+	}
+
+	/** FIFO (senpi#4278): the oldest call under the id that can take the record, own turn first; none open, the newest. */
+	private resolve(step: CallStep, toolCallId: string, open: (call: OutstandingCall) => boolean) {
+		const turnId = step.scope.turnId;
+		return this.table.oldestById(toolCallId, turnId, open) ?? this.lookup(turnId, toolCallId);
 	}
 
 	private lookup(turnId: string | null, toolCallId: string): OutstandingCall | undefined {
