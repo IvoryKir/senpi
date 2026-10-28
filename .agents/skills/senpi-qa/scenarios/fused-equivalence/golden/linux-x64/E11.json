@@ -4367,12 +4367,6 @@
       "widgetKey": "prompt-url"
      },
      {
-      "type": "loaded_surfaces_changed"
-     },
-     {
-      "type": "loaded_surfaces_changed"
-     },
-     {
       "type": "extension_ui_request",
       "id": "<uuid:14>",
       "method": "setStatus",
@@ -6841,6 +6835,14 @@
       "id": "<uuid:30>",
       "method": "setStatus",
       "statusKey": "loop"
+     }
+    ],
+    "surfaces": [
+     {
+      "type": "loaded_surfaces_changed"
+     },
+     {
+      "type": "loaded_surfaces_changed"
      }
     ]
    }

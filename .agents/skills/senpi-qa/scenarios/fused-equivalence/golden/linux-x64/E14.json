@@ -3355,7 +3355,8 @@
       "completedAt": "<ts:events.completedAt:8>",
       "status": "completed"
      }
-    ]
+    ],
+    "surfaces": []
    },
    {
     "events": [
@@ -4413,7 +4414,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    },
    {
     "events": [
@@ -4617,7 +4619,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    }
   ],
   "O7": {

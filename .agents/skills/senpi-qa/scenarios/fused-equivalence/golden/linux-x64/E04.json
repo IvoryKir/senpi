@@ -4586,7 +4586,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    },
    {
     "events": [
@@ -4790,7 +4791,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    }
   ],
   "O7": {

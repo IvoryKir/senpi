@@ -7486,7 +7486,8 @@
       },
       "sessionId": "<id:1>"
      }
-    ]
+    ],
+    "surfaces": []
    },
    {
     "events": [
@@ -8860,7 +8861,8 @@
       },
       "sessionId": "<id:1>"
      }
-    ]
+    ],
+    "surfaces": []
    },
    {
     "events": [
@@ -9064,7 +9066,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    }
   ],
   "O7": {

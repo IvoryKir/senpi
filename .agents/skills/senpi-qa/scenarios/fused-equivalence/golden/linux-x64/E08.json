@@ -7329,7 +7329,8 @@
       "method": "setStatus",
       "statusKey": "loop"
      }
-    ]
+    ],
+    "surfaces": []
    }
   ],
   "O7": {
