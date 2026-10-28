@@ -33,7 +33,7 @@ export const secretOutputObfuscator: JobWidgetObfuscator = () => new SecretOutpu
  * credential scan (key prefixes such as `ghp_`/`sk-`/`AKIA`, JWTs, bearer tokens, secret-named values).
  * A key block leaves one line, so the lines out are not the lines in.
  */
-export class JobWidgetSourceRedactor {
+class JobWidgetSourceRedactor {
 	readonly #keys = new PrivateKeyLineFilter();
 	readonly #obfuscator: JobWidgetObfuscator | undefined;
 	#stream: JobWidgetStreamRedactor | undefined;

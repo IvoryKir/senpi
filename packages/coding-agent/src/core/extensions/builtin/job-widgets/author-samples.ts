@@ -8,10 +8,10 @@ import { formatSize } from "../../../tools/truncate.ts";
 import { truncateText } from "./format.ts";
 import type { JobWidgetSourceSample } from "./source-stats.ts";
 
-export const MAX_SAMPLE_LINE_CHARS = 300;
+const MAX_SAMPLE_LINE_CHARS = 300;
 export const MAX_SAMPLE_BYTES = 12 * 1024;
 /** Lines of one shape (same text but for its digits and spacing) the head, and the tail, of a source keep. */
-export const MAX_SHAPE_REPEATS = 3;
+const MAX_SHAPE_REPEATS = 3;
 
 export interface JobWidgetPromptSource {
 	readonly id: string;
