@@ -20,7 +20,7 @@ import {
 	sourceSample,
 } from "./source-stats.ts";
 import type { JobTextSource } from "./source-types.ts";
-import { keyedFields } from "./spec-rules.ts";
+import { keyedFields, pinnedKeys } from "./spec-rules.ts";
 import { type JobWidgetSpec, MAX_TITLE_CHARS } from "./spec-types.ts";
 import { buildBlock, buildHeadline, hasData } from "./view-build.ts";
 import type { JobWidgetEntryState, JobWidgetView } from "./view-types.ts";
@@ -73,7 +73,7 @@ export class JobWidgetRuntime {
 		this.#matcher = options.matcher;
 		this.#startTime = options.startTime;
 		this.#now = options.now ?? Date.now;
-		this.#store = new FieldStore(keyedFields(options.spec));
+		this.#store = new FieldStore(keyedFields(options.spec), pinnedKeys(options.spec));
 	}
 
 	/** Non-empty lines seen since the last match on a source some rule reads: the drift signal. */
