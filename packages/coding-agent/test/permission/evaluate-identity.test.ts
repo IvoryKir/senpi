@@ -234,6 +234,71 @@ describe("path rules decide by file identity across spellings (design 11.1.2)", 
 		expect((await decide(service, "read", `${real}/real/secret`, `${real}/real/secret`)).action).toBe("allow");
 	});
 
+	it.skipIf(!darwin)(
+		"a firmlink spelling matches a rule on the canonical spelling whatever native form the host keeps (design row 895)",
+		async () => {
+			// The vitest host is Node, whose realpathSync.native keeps the /System/Volumes/Data spelling; the real
+			// fixture transport below therefore reports that spelling as the canonical form, exactly as a Node
+			// install would. Both sides are compared after the firmlink rewrite, so the rule still applies.
+			const executed = `/System/Volumes/Data${real}/real/secret`;
+			const onCanonical = serviceWith([deny(`${real}/real/secret`)]);
+			expect((await decide(onCanonical, "read", executed, executed)).action).toBe("deny");
+			const onFirmlink = serviceWith([deny(`/System/Volumes/Data${real}/link/secret`)]);
+			expect((await decide(onFirmlink, "read", `${real}/real/secret`, `${real}/real/secret`)).action).toBe("deny");
+			const viaLink = serviceWith([deny(`${real}/real/secret`)]);
+			expect(
+				(
+					await decide(
+						viaLink,
+						"read",
+						`/System/Volumes/Data${real}/link/secret`,
+						`/System/Volumes/Data${real}/link/secret`,
+					)
+				).action,
+			).toBe("deny");
+			const nodeNative: IdentityInput = { canonical: [{ path: executed, foldCase: false }] };
+			await onCanonical.identitySettled();
+			expect(onCanonical.dispatchDecision("read", executed, { identity: nodeNative }).action).toBe("deny");
+		},
+	);
+
+	it("the identity retained for a refusal's provenance is released once the request settles", async () => {
+		const service = serviceWith([deny(`${root}/link/secret`), allow(`${real}/real/allowed`)]);
+		const request = (id: string, written: string) => ({
+			id,
+			sessionID: "s",
+			permission: "read",
+			patterns: [written],
+			always: [written],
+			metadata: {},
+		});
+		const denied = await service.ask(request("r-deny", "link/secret"), { executed: [`${root}/link/secret`] }).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(denied).toBeInstanceOf(DeniedError);
+		expect((denied as DeniedError).identity?.canonical.map((entry) => entry.path)).toEqual([`${real}/real/secret`]);
+		expect(service.requestIdentity("r-deny")).toBeUndefined();
+		await service.ask(request("r-allow", "real/allowed"), { executed: [`${real}/real/allowed`] });
+		expect(service.requestIdentity("r-allow")).toBeUndefined();
+		const emitter = createLocalEventEmitter();
+		const asking = new PermissionService(
+			[deny(`${root}/link/secret`)],
+			[],
+			emitter,
+			undefined,
+			root,
+			undefined,
+			resolver,
+		);
+		emitter.onAsked((asked) => {
+			expect(asking.requestIdentity(asked.id)).toBeDefined();
+			asking.reply({ requestID: asked.id, reply: "once" });
+		});
+		await asking.ask(request("r-ask", "real/other"), { executed: [`${real}/real/other`] });
+		expect(asking.requestIdentity("r-ask")).toBeUndefined();
+	});
+
 	it("zero path rules: nothing is canonicalized and decisions are unchanged", async () => {
 		const service = serviceWith([deny("rm *", "bash")]);
 		expect(service.identityWanted("read")).toBe(false);

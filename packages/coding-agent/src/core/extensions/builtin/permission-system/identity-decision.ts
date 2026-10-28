@@ -38,7 +38,7 @@ export function identityWanted(
 	rules: readonly Rule[],
 	permission: string,
 ): boolean {
-	if (!resolver || !PATH_PERMISSIONS.has(permission)) return false;
+	if (!resolver || resolver.unavailable !== undefined || !PATH_PERMISSIONS.has(permission)) return false;
 	return pathRulesOf(rules).length > 0;
 }
 
@@ -134,11 +134,12 @@ export function identityMatcher(
 	cache: RuleIdentityCache,
 	permission: string,
 	identity: IdentityInput | undefined,
+	rewrite: (value: string) => string,
 ): IdentityMatcher | undefined {
 	if (!identity || !PATH_PERMISSIONS.has(permission) || identity.canonical.length === 0) return undefined;
 	return (rulePattern) => {
 		const entry = cache.stateOf(rulePattern);
 		if (typeof entry === "string") return false;
-		return identity.canonical.some((request) => identityMatches(entry, request, Wildcard.match, path.sep));
+		return identity.canonical.some((request) => identityMatches(entry, request, Wildcard.match, path.sep, rewrite));
 	};
 }

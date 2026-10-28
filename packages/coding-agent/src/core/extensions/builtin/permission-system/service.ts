@@ -139,7 +139,7 @@ export class PermissionService {
 	}
 
 	identityMatcher(permission: string, identity: IdentityInput | undefined): IdentityMatcher | undefined {
-		return identityMatcher(this.ruleIdentities, permission, identity);
+		return identityMatcher(this.ruleIdentities, permission, identity, this.mountRewrite);
 	}
 
 	/**
@@ -267,7 +267,8 @@ export class PermissionService {
 		}
 
 		if (deniedPatterns.length > 0) {
-			throw new DeniedError(deniedPatterns);
+			this.requestIdentities.delete(info.id);
+			throw new DeniedError(deniedPatterns, identity);
 		}
 
 		if (!READ_ONLY_PERMISSIONS.has(info.permission)) {
@@ -276,11 +277,14 @@ export class PermissionService {
 		}
 
 		if (!needsAsk) {
+			this.requestIdentities.delete(info.id);
 			this.emitter.emitReplied(info.id, info.sessionID, "allow");
 			return;
 		}
 
-		const pendingPromise = this.pendingRequests.register(info, options);
+		const pendingPromise = this.pendingRequests
+			.register(info, options)
+			.finally(() => this.requestIdentities.delete(info.id));
 
 		this.emitter.emitAsked(info);
 

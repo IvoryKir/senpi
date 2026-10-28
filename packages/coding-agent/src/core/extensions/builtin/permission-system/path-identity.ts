@@ -210,17 +210,20 @@ export function createPathIdentity({
 /**
  * Whether a rule's canonical form covers a request's canonical path. The request target's volume
  * decides the fold (N6): on a case-insensitive volume both sides are folded, otherwise neither.
+ * Both sides go through the mount rewrite first: a native realpath that keeps the firmlink spelling
+ * (Node's does on darwin) must still meet a rule written on the canonical one, and the reverse.
  */
 export function identityMatches(
 	rule: CanonicalRule,
 	request: CanonicalPath,
 	match: (value: string, pattern: string) => boolean,
 	sep: string,
+	rewrite: (value: string) => string = (value) => value,
 ): boolean {
 	const fold = request.foldCase ? foldCaseText : (value: string) => value;
-	const value = fold(request.path);
+	const value = fold(rewrite(request.path));
 	if (rule.wildcardOnly || rule.prefix === undefined) return match(value, fold(rule.suffix));
-	const prefix = fold(rule.prefix);
+	const prefix = fold(rewrite(rule.prefix));
 	if (rule.suffix === "") return value === prefix;
 	if (value !== prefix && !value.startsWith(prefix === sep ? sep : prefix + sep)) return false;
 	return match(value.slice(prefix.length), fold(rule.suffix));

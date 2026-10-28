@@ -65,7 +65,7 @@ function denyReason(
 	service?: PermissionService,
 ): string {
 	if (settingsManager === null) return error.message;
-	const matchesIdentity = service?.identityMatcher(request.permission, service.requestIdentity(request.id));
+	const matchesIdentity = service?.identityMatcher(request.permission, error.identity);
 	const provenance = findDenyProvenance(
 		settingsManager,
 		cliRuleset,

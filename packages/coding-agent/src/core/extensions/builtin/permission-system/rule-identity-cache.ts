@@ -113,7 +113,8 @@ export class RuleIdentityCache {
 					return;
 				}
 				identity.entry = "literal-only";
-				console.warn(`permission: rule ${pattern} keeps literal matching only (${code})`);
+				if (code !== "EUNAVAILABLE")
+					console.warn(`permission: rule ${pattern} keeps literal matching only (${code})`);
 			});
 		identity.fill = fill;
 		return identity;
