@@ -15,8 +15,8 @@ import type { JobWidgetRequestLimits } from "./request-policy.ts";
 import { JobWidgetStatePublisher } from "./state-publisher.ts";
 import type { JobWidgetEntry, JobWidgetState } from "./view-types.ts";
 
-export const INGEST_MIN_INTERVAL_MS = 250;
-export const REFRESH_INTERVAL_MS = 1000;
+const INGEST_MIN_INTERVAL_MS = 250;
+const REFRESH_INTERVAL_MS = 1000;
 
 /** A host's hold on one registered job. Every call is a no-op once the job is forgotten. */
 export interface JobWidgetSourceHandle {

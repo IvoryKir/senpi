@@ -84,7 +84,7 @@ export function forceRespondChoice(payload: unknown, model: Model<Api>): unknown
 }
 
 /** The answer a response carries: the respond call's arguments, or a JSON object in its text. */
-export function jobWidgetAnswer(message: AssistantMessage): unknown {
+function jobWidgetAnswer(message: AssistantMessage): unknown {
 	const call = message.content.find(
 		(part): part is ToolCall => part.type === "toolCall" && part.name === JOB_WIDGET_RESPOND_TOOL,
 	);
