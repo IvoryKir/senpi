@@ -5108,6 +5108,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | --- | --- |
 | `auth` | re-authenticate the provider |
 | `request_refused` | send the message again or choose another model; if it keeps failing, re-authenticate `<provider>` |
+| `model_unavailable` | choose another model, or check that your plan or key includes this model |
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
@@ -5116,7 +5117,7 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | `network` | check connectivity |
 | `unknown` | send the message again; if it repeats, choose another model |
 
-`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. An `unknown` failure the provider answered with HTTP 404 is `model_unavailable` instead: a model endpoint returns 404 for a model id this account cannot use, as the ChatGPT subscription backend does for a model not yet rolled out to the plan. Retry and fallback decisions do not read `failure`.
 
 A turn that never reached the provider because no API key or sign-in is saved for it (the message carries auth resolution's `Provider is not configured: <id>` sentinel) reports `auth`, with a `reason` naming the provider and an `action` to connect it or choose another model; it carries no `httpStatus` or `code`.
 
