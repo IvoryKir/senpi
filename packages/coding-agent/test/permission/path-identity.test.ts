@@ -653,10 +653,10 @@ describe("alias detector: zero false negatives against native (design 5.4, 11.1.
 			durations.sort((a, b) => a - b);
 			const p95 = durations[Math.floor(durations.length * 0.95)] ?? 0;
 			expect(falsePositives, `${name}: ${falsePositives.slice(0, 5).join("; ")}`).toEqual([]);
-			// 5.6 measured p95 <= 10 ms on an idle host; this guard catches an order-of-magnitude regression
-			// without failing on a shared, loaded runner (p95 is printed so a drift is visible in the log).
+			// 5.6 measured p95 <= 10 ms on an idle host and 14-24 ms on a loaded shared runner; 100 ms is about 4x the
+			// worst loaded measurement, so a real regression fails here (p95 is printed so a drift stays visible).
 			console.log(`detector ${name}: n=${durations.length} p95=${p95.toFixed(2)}ms`);
-			expect(p95, `${name} p95`).toBeLessThan(250);
+			expect(p95, `${name} p95`).toBeLessThan(100);
 		}
 	}, 60_000);
 
