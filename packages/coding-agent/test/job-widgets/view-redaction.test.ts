@@ -144,6 +144,20 @@ const KEY_STREAMS: readonly KeyStream[] = [
 			return tap;
 		},
 	},
+	{
+		name: "gap ends inside the BEGIN marker line and the job ends before END",
+		print: async (key, eol, refresh) => {
+			const bodyEnd = key.bodyStart + key.body.length;
+			const kept = text(key.lines.slice(0, bodyEnd), eol).length - 5;
+			const tap = new TextTap("out", "command output", kept);
+			tap.append(text(PRE, eol));
+			await refresh(tap);
+			tap.append(text(key.lines.slice(0, bodyEnd), eol));
+			tap.close();
+			await refresh(tap);
+			return tap;
+		},
+	},
 ];
 
 const SETTINGS: readonly (readonly [string, JobWidgetObfuscator | undefined])[] = [
