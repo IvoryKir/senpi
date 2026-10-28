@@ -2162,21 +2162,22 @@ describe("ExtensionRunner", () => {
 
 	describe("getRegisteredMcpServers", () => {
 		it("returns declarations from all extensions with distinct names", async () => {
+			const runtime = createExtensionRuntime();
 			const a = await loadExtensionFromFactory(
 				(pi) => pi.registerMcpServer("alpha", { type: "stdio", command: "node", args: ["a.js"] }),
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-a>",
 			);
 			const b = await loadExtensionFromFactory(
 				(pi) => pi.registerMcpServer("beta", { type: "stdio", command: "node" }),
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-b>",
 			);
-			const runner = new ExtensionRunner([a, b], createExtensionRuntime(), tempDir, sessionManager, modelRegistry);
+			const runner = new ExtensionRunner([a, b], runtime, tempDir, sessionManager, modelRegistry);
 			const servers = runner.getRegisteredMcpServers();
 			expect(servers.map((s) => s.name).sort()).toEqual(["alpha", "beta"]);
 			expect(servers.find((s) => s.name === "alpha")?.extensionPath).toBe("<ext-a>");
@@ -2184,21 +2185,22 @@ describe("ExtensionRunner", () => {
 
 		it("first extension wins on name collision and warns naming both paths", async () => {
 			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const runtime = createExtensionRuntime();
 			const a = await loadExtensionFromFactory(
 				(pi) => pi.registerMcpServer("dup", { type: "stdio", command: "first" }),
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-a>",
 			);
 			const b = await loadExtensionFromFactory(
 				(pi) => pi.registerMcpServer("dup", { type: "stdio", command: "second" }),
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-b>",
 			);
-			const runner = new ExtensionRunner([a, b], createExtensionRuntime(), tempDir, sessionManager, modelRegistry);
+			const runner = new ExtensionRunner([a, b], runtime, tempDir, sessionManager, modelRegistry);
 			const servers = runner.getRegisteredMcpServers();
 			expect(servers).toHaveLength(1);
 			expect(servers[0]?.extensionPath).toBe("<ext-a>");
@@ -2216,11 +2218,12 @@ describe("ExtensionRunner", () => {
 
 		it("exposes the aggregate via ExtensionContext in session_start handlers", async () => {
 			let captured: ReturnType<typeof runner.getRegisteredMcpServers> | undefined;
+			const runtime = createExtensionRuntime();
 			const a = await loadExtensionFromFactory(
 				(pi) => pi.registerMcpServer("gamma", { type: "stdio", command: "node" }),
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-a>",
 			);
 			const b = await loadExtensionFromFactory(
@@ -2231,10 +2234,10 @@ describe("ExtensionRunner", () => {
 				},
 				tempDir,
 				createEventBus(),
-				createExtensionRuntime(),
+				runtime,
 				"<ext-b>",
 			);
-			const runner = new ExtensionRunner([a, b], createExtensionRuntime(), tempDir, sessionManager, modelRegistry);
+			const runner = new ExtensionRunner([a, b], runtime, tempDir, sessionManager, modelRegistry);
 			await runner.emit({ type: "session_start", reason: "startup" });
 			expect(captured?.map((s) => s.name)).toEqual(["gamma"]);
 		});

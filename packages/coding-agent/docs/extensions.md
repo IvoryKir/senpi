@@ -2063,9 +2063,11 @@ automatically and must call their own policy if they access the filesystem.
 
 ### pi.registerMcpServer(name, config)
 
-Register an MCP server that the agent can use. This is a **factory-time only**
-API: it must be called inside the extension factory before the factory returns.
-Calling it after startup throws because registration is tied to extension load.
+Register an MCP server for the current session. Servers registered while the
+extension factory runs connect on `session_start`, together with the `mcp.json`
+servers; servers registered later reach the extension that connects registered
+servers right away (see `mcp_servers_change` below). Registrations are not
+saved: register again on every load.
 
 `config` accepts the same fields as `mcpServers.<name>` in `mcp.json` (see the
 [MCP server fields reference](mcp.md#server-fields-mcpserversname)): `type`,
@@ -2106,6 +2108,37 @@ cwd (the cwd passed to the factory), not the ambient `process.cwd()`.
 Extension factories re-run on `/reload`, so declarations are refreshed then.
 In-process senpi-task children load no extensions, so they see no
 extension-declared MCP servers.
+
+### pi.unregisterMcpServer(name)
+
+Remove an MCP server this extension registered. Names registered by another
+extension are left alone.
+
+### pi.getMcpServers()
+
+Every MCP server registered by extensions, in registration order, as
+`{ name, config, extensionPath }` copies (`RegisteredMcpServer`). For extensions
+that connect MCP servers themselves, such as `pi-mcp-adapter`: read it on
+`session_start` and handle `mcp_servers_change` for later changes.
+
+### mcp_servers_change
+
+Fired after the extensions are bound whenever an extension registers or
+unregisters an MCP server, with `servers` listing every registered server after
+the change (same shape as `pi.getMcpServers()`). Registrations made while the
+extensions load do not fire it; read them with `pi.getMcpServers()` on
+`session_start`.
+
+Handling this event marks an extension as the one that connects registered
+servers: the built-in MCP support then does not connect them (one connection per
+server) while it keeps connecting the `mcp.json` servers. When no loaded
+extension handles the event, the built-in MCP support connects registered
+servers as before.
+
+```typescript
+pi.on("session_start", () => connect(pi.getMcpServers()));
+pi.on("mcp_servers_change", (event) => connect(event.servers));
+```
 
 ### pi.sendMessage(message, options?)
 
