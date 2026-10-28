@@ -8,7 +8,23 @@ import { spoolRoot } from "../compact-storage-support.ts";
 it("keeps each round's decoded-node cache within its budget and releases it after the round", async () => {
 	const count = 8000;
 	const root = await spoolRoot();
-	const store = new CompactContentStore({ dir: root.dir });
+	const files = new Map<string, Buffer>();
+	const store = new CompactContentStore({
+		dir: root.dir,
+		io: {
+			async writeFile(path, data) {
+				files.set(path, Buffer.from(data));
+			},
+			async readFile(path, range) {
+				const data = files.get(path);
+				if (!data) throw new Error("missing backing file");
+				return Buffer.from(range ? data.subarray(range.offset, range.offset + range.length) : data);
+			},
+			async unlink(path) {
+				files.delete(path);
+			},
+		},
+	});
 	const index = new CompactContentIndex<{ n: number }>(store, () => [], 128);
 	const tree = index.bases as unknown as {
 		cache: Map<number, unknown> | undefined;

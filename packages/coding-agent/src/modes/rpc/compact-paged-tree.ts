@@ -7,7 +7,7 @@ import { CompactValues, type ValueRef } from "./compact-values.ts";
  * Decoded-node budget of one compaction round's LRU (senpi#4559). A round's 128 rows land on up to 128 separate
  * tree paths, about 1,000 nodes of about 0.9 KiB each (as accounted below) at 8,000 rows. The selection lookup and the
  * batched apply walk the same paths, so the cache must hold a whole round's paths for the apply to reuse them.
- * Measured at 8,000 settled rows: 32 KiB re-read 67,509 nodes from the spool, 512 KiB 58,175, 1 MiB 31,507.
+ * Measured at 8,000 settled rows: 32 KiB re-read 67,509 nodes from the spool, 512 KiB 58,175, 1 MiB 31,543.
  */
 export const ROUND_CACHE_BYTES = 1024 * 1024;
 
