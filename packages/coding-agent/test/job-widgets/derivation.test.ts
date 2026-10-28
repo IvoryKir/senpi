@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 import { MAX_MATCH_LINES } from "../../src/core/extensions/builtin/job-widgets/index.ts";
-import { block, harness, ScriptedSource, validSpec } from "./support.ts";
+import { block, describeEachMatcher, harness, ScriptedSource, validSpec } from "./support.ts";
 
 const BLENDER_SPEC = {
 	title: "Blender render · per-frame time",
@@ -40,7 +40,7 @@ const BLENDER_LINES = [
 	" Time: 00:04.30 (Saving: 00:00.10)",
 ];
 
-describe("job widget derivation", () => {
+describeEachMatcher("job widget derivation", () => {
 	it("charts a Blender render: frame times against the budget, frames toward the stated total", () => {
 		const spec = validSpec(
 			BLENDER_SPEC,

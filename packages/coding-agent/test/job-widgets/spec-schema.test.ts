@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 import {
 	JOB_WIDGET_SPEC_SCHEMA,
 	sampleLines,
 	validateJobWidgetSpec,
 } from "../../src/core/extensions/builtin/job-widgets/index.ts";
-import { harness, RegExpLineMatcher, ScriptedSource, validSpec } from "./support.ts";
+import { describeEachMatcher, harness, lineMatcher, ScriptedSource, validSpec } from "./support.ts";
 
 function field(value: unknown, key: string): unknown {
 	return typeof value === "object" && value !== null ? Object.getOwnPropertyDescriptor(value, key)?.value : undefined;
@@ -30,7 +30,7 @@ function undeclared(value: unknown, schema: unknown, path: string): string[] {
 	});
 }
 
-describe("job widget respond-tool schema", () => {
+describeEachMatcher("job widget respond-tool schema", () => {
 	it("declares every property a spec using every block kind and option carries", () => {
 		const spec = {
 			title: "everything",
@@ -87,7 +87,7 @@ describe("job widget respond-tool schema", () => {
 	});
 });
 
-describe("job widget samples", () => {
+describeEachMatcher("job widget samples", () => {
 	it("hands the dry run its head and tail lines without overlap", () => {
 		const out = new ScriptedSource("out");
 		const h = harness(undefined, out);
@@ -100,6 +100,6 @@ describe("job widget samples", () => {
 			rules: [{ from: "out", match: String.raw`rps=(?P<rps>\d+)` }],
 			blocks: [{ kind: "spark", field: "rps", label: "rps" }],
 		};
-		expect(validateJobWidgetSpec(spec, { matcher: new RegExpLineMatcher(), samples: [sample] }).ok).toBe(true);
+		expect(validateJobWidgetSpec(spec, { matcher: lineMatcher(), samples: [sample] }).ok).toBe(true);
 	});
 });

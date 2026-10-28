@@ -2,6 +2,7 @@ export * from "./field-state.ts";
 export * from "./format.ts";
 export * from "./line-reader.ts";
 export * from "./matcher.ts";
+export * from "./re2-matcher.ts";
 export * from "./runtime.ts";
 export * from "./source-stats.ts";
 export * from "./source-types.ts";

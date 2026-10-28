@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 import type { JobWidgetAgg } from "../../src/core/extensions/builtin/job-widgets/index.ts";
-import { harness, ScriptedSource, validSpec } from "./support.ts";
+import { describeEachMatcher, harness, ScriptedSource, validSpec } from "./support.ts";
 
-describe("job widget aggregations", () => {
+describeEachMatcher("job widget aggregations", () => {
 	const cases: [JobWidgetAgg, string | undefined][] = [
 		["last", "8"],
 		["first", "4"],
@@ -58,7 +58,7 @@ describe("job widget aggregations", () => {
 	});
 });
 
-describe("job widget states", () => {
+describeEachMatcher("job widget states", () => {
 	it("is pending while a spec is authored, with the lines read so far", () => {
 		const out = new ScriptedSource("out");
 		const h = harness(undefined, out);

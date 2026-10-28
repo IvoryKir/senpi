@@ -1,5 +1,8 @@
+import { beforeEach, describe } from "vitest";
+
 import {
 	type CompiledLineMatcher,
+	defaultLineMatcher,
 	type JobTextChunk,
 	type JobTextSource,
 	type JobWidgetBlock,
@@ -53,6 +56,29 @@ export class RegExpLineMatcher implements LineMatcher {
 	}
 }
 
+/** Every engine the P1 tables run on: the shipped RE2 matcher and the RegExp fake. */
+export const LINE_MATCHERS: readonly [string, () => LineMatcher][] = [
+	["re2", () => defaultLineMatcher],
+	["RegExp fake", () => new RegExpLineMatcher()],
+];
+
+let activeMatcher = LINE_MATCHERS[0][1];
+
+/** The engine of the running {@link describeEachMatcher} pass; `validSpec` and `harness` use it. */
+export function lineMatcher(): LineMatcher {
+	return activeMatcher();
+}
+
+/** Declares `body`'s tests once per engine in {@link LINE_MATCHERS}. */
+export function describeEachMatcher(name: string, body: () => void): void {
+	describe.each(LINE_MATCHERS)(`${name} (%s)`, (_engine, make) => {
+		beforeEach(() => {
+			activeMatcher = make;
+		});
+		body();
+	});
+}
+
 /** A source whose retained text and dropped prefix the test controls. */
 export class ScriptedSource implements JobTextSource {
 	readonly id: string;
@@ -91,14 +117,14 @@ export class ScriptedSource implements JobTextSource {
 export const START = 1_000_000;
 
 export function validSpec(value: unknown, samples?: readonly JobWidgetSampleLines[], brief?: string): JobWidgetSpec {
-	const checked = validateJobWidgetSpec(value, { matcher: new RegExpLineMatcher(), samples, brief });
+	const checked = validateJobWidgetSpec(value, { matcher: lineMatcher(), samples, brief });
 	if (!checked.ok) throw new Error(checked.errors.join("\n"));
 	return checked.spec;
 }
 
 export function harness(spec: JobWidgetSpec | undefined, ...sources: ScriptedSource[]) {
 	let now = START;
-	const runtime = new JobWidgetRuntime({ spec, matcher: new RegExpLineMatcher(), startTime: START, now: () => now });
+	const runtime = new JobWidgetRuntime({ spec, matcher: lineMatcher(), startTime: START, now: () => now });
 	return {
 		runtime,
 		advance(ms: number): void {

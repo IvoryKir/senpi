@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 
 import {
 	JOB_WIDGET_SPEC_SCHEMA,
@@ -6,7 +6,7 @@ import {
 	type JobWidgetSampleLines,
 	validateJobWidgetSpec,
 } from "../../src/core/extensions/builtin/job-widgets/index.ts";
-import { RegExpLineMatcher, validSpec } from "./support.ts";
+import { describeEachMatcher, lineMatcher, validSpec } from "./support.ts";
 
 const base = {
 	title: "t",
@@ -15,13 +15,13 @@ const base = {
 };
 
 function errorsOf(value: unknown, samples?: readonly JobWidgetSampleLines[], brief?: string): string[] {
-	const checked = validateJobWidgetSpec(value, { matcher: new RegExpLineMatcher(), samples, brief });
+	const checked = validateJobWidgetSpec(value, { matcher: lineMatcher(), samples, brief });
 	return checked.ok ? [] : checked.errors;
 }
 
 const withRule = (match: string) => ({ ...base, rules: [{ from: "out", match }] });
 
-describe("job widget spec validation rejects", () => {
+describeEachMatcher("job widget spec validation rejects", () => {
 	const rejections: [string, unknown, string][] = [
 		["lookbehind", withRule(String.raw`(?<=rps=)(?P<rps>\d+)`), "rules[0].match: lookaround"],
 		["negative lookahead", withRule(String.raw`rps=(?!0)(?P<rps>\d+)`), "rules[0].match: lookaround"],
@@ -126,7 +126,7 @@ describe("job widget spec validation rejects", () => {
 	});
 });
 
-describe("job widget spec local repairs", () => {
+describeEachMatcher("job widget spec local repairs", () => {
 	it("accepts both named-group spellings", () => {
 		const spec = validSpec({
 			...base,
