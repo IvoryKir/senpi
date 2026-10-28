@@ -8,7 +8,7 @@ import { createHostDaemonPaths } from "../../src/modes/rpc/host-daemon-paths.ts"
 import { HeldAnthropicModel, openedSessionId } from "../helpers/rpc-generation-support.ts";
 import { MOCK_MODEL, MOCK_PROVIDER, writeRpcModelsJson } from "../helpers/rpc-hermetic.ts";
 import { enrollmentRequest } from "../mcp/fixtures/presenter-enrollment.ts";
-import { bootstrap, enroll, next, send, signature } from "./host-cli-presenter-support.ts";
+import { acknowledgedRequest, bootstrap, enroll, next, send, signature } from "./host-cli-presenter-support.ts";
 import { hostCliSandbox, onlyJsonLine, runHostCli, sweepHostCliSandboxes } from "./host-cli-support.ts";
 import { authenticate, HOST_TEST_TIMEOUT_MS, Peer, type Wire } from "./rpc-public-auth-harness.ts";
 
@@ -58,16 +58,18 @@ async function busy(qa: Awaited<ReturnType<typeof hostCliSandbox>>) {
 	sockets.push(peer.socket);
 	await authenticate(peer, qa.agentDir);
 	const sessionId = openedSessionId(
-		await peer.request({
-			id: "open",
-			type: "open_session",
-			cwd: qa.root,
-			provider: MOCK_PROVIDER,
-			modelId: MOCK_MODEL,
-		}),
+		await acknowledgedRequest(
+			peer.socket,
+			{ id: "open", type: "open_session", cwd: qa.root, provider: MOCK_PROVIDER, modelId: MOCK_MODEL },
+			peer.deadlineMs,
+		),
 	);
 	const started = peer.waitFor((record) => record.type === "agent_start");
-	await peer.request({ id: "prompt", type: "prompt", sessionId, message: "hold this turn" });
+	await acknowledgedRequest(
+		peer.socket,
+		{ id: "prompt", type: "prompt", sessionId, message: "hold this turn" },
+		peer.deadlineMs,
+	);
 	await started;
 	return { peer, sessionId };
 }
