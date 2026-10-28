@@ -49,9 +49,7 @@ function withoutRuntimeGated(value, patterns, counts) {
 	}
 	if (Array.isArray(value)) return value.map((item) => withoutRuntimeGated(item, patterns, counts));
 	if (value && typeof value === "object")
-		return Object.fromEntries(
-			Object.entries(value).map(([k, v]) => [k, withoutRuntimeGated(v, patterns, counts)]),
-		);
+		return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withoutRuntimeGated(v, patterns, counts)]));
 	return value;
 }
 const RUNTIMES = new Set(["node", "bun"]);

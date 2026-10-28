@@ -79,7 +79,10 @@ test("content-addressed blob ids map one-to-one by field, and only at those fiel
 	const normalize = createNormalizer();
 	const out = normalize({
 		id: "entry-1",
-		conversationState: { rootPromptMessagesJson: ["L7/T3UHG6bQTLK3q=", "KJu71vy2TD317VOe="], turns: ["L7/T3UHG6bQTLK3q="] },
+		conversationState: {
+			rootPromptMessagesJson: ["L7/T3UHG6bQTLK3q=", "KJu71vy2TD317VOe="],
+			turns: ["L7/T3UHG6bQTLK3q="],
+		},
 		spec: { turns: ["E12-FIRST"] },
 	});
 	assert.deepEqual(out, {
