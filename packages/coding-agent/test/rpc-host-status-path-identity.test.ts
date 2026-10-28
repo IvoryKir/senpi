@@ -53,9 +53,9 @@ describe("host status reports the path identity resolver", () => {
 		expect(data.path_identity_resolver).toMatchObject({
 			state: expect.stringMatching(/^(not_started|ready|unavailable)$/),
 		});
-		expect(parseHostProtocolInfo({ ...data, path_identity_resolver: { state: "not_started" } })?.path_identity_resolver).toEqual(
-			{ state: "not_started", detail: null },
-		);
+		expect(
+			parseHostProtocolInfo({ ...data, path_identity_resolver: { state: "not_started" } })?.path_identity_resolver,
+		).toEqual({ state: "not_started", detail: null });
 		const parsed = parseHostProtocolInfo({
 			...data,
 			path_identity_resolver: { state: "unavailable", detail: "ERR_MODULE_NOT_FOUND" },
