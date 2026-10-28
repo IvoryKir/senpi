@@ -62,7 +62,7 @@ export function buildBlock(block: JobWidgetBlockSpec, ctx: BuildContext): JobWid
 		case "spark":
 			return buildSpark(block, ctx);
 		case "bars": {
-			const entries = ctx.store.keys(block.field).slice(-MAX_BAR_ITEMS);
+			const entries = ctx.store.keys(block.field, MAX_BAR_ITEMS);
 			const unit = block.agg === "change" ? "%" : block.unit;
 			const values = entries.map(([, series]) => aggregateSeries(series, block.agg, ctx.now, ctx.startTime) ?? 0);
 			const labels = keyLabels(entries.map(([key]) => key));
@@ -91,7 +91,7 @@ export function buildBlock(block: JobWidgetBlockSpec, ctx: BuildContext): JobWid
 				}),
 			};
 		case "grid": {
-			const entries = ctx.store.keys(block.field).slice(-MAX_GRID_CELLS);
+			const entries = ctx.store.keys(block.field, MAX_GRID_CELLS);
 			const labels = keyLabels(entries.map(([key]) => key));
 			return {
 				kind: "grid",
