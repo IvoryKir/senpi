@@ -50,6 +50,16 @@ dependencies get private globals dictionaries too. Rebinding public stdlib names
 cannot change an authority word, forge a reply, or redirect a permission target.
 The `posix`/`nt` aliases share the same wrappers as `os`.
 
+Every path request carries two fields: `path`, the spelling as written, and
+`executedPath`, the string the operating system receives (a relative spelling
+joined onto the interpreter's current directory with `os.path.join`, never
+collapsed or resolved in the interpreter). Python sends no canonical form:
+`os.path.realpath` rebuilds a path from the request's own components and
+differs from the native resolution on case and Unicode-form aliases, so the
+host canonicalizes the executed path on its resolver worker, the same way it
+does for every other request. A spelling that is not valid UTF-8 cannot travel
+losslessly and is refused as uncheckable.
+
 File modes map to read, write, or both. Descriptor grants record paths and
 modes; unknown descriptors and opposite-mode operations refuse. Retained file
 objects check authority on use. SQLite connections compose their authorizer

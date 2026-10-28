@@ -50,6 +50,9 @@ export async function permissionCheck(body: unknown): Promise<unknown> {
 		input: {
 			...("command" in input && typeof input.command === "string" ? { command: input.command } : {}),
 			...("path" in input && typeof input.path === "string" ? { path: input.path } : {}),
+			...("executedPath" in input && typeof input.executedPath === "string"
+				? { executedPath: input.executedPath }
+				: {}),
 		},
 		...("cwd" in call && typeof call.cwd === "string" ? { cwd: call.cwd } : {}),
 	};

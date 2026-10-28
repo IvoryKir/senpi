@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -297,7 +297,12 @@ describe("Python permission interposition", () => {
 				].includes(owner) ||
 				["UnsupportedOperation", "SQLITE_OK"].includes(name)
 			)
-				expect(h.calls).toContainEqual(expect.objectContaining({ tool: "read", input: { path: "subject" } }));
+				expect(h.calls).toContainEqual(
+					expect.objectContaining({
+						tool: "read",
+						input: { path: "subject", executedPath: join(realpathSync.native(h.cwd), "subject") },
+					}),
+				);
 		} finally {
 			await h.close();
 		}

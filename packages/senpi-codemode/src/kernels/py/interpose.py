@@ -36,8 +36,9 @@ pty = importlib.import_module("pty") if os.name == "posix" else None
 
 def install(check, enforcing, refuse):
     # Private dependency references are captured before cell code can rebind modules.
-    fsdecode, fspath, PathLike = os.fsdecode, os.fspath, os.PathLike
-    join_path, dirname, basename = os.path.join, os.path.dirname, os.path.basename
+    fsdecode, fspath, PathLike, getcwd = os.fsdecode, os.fspath, os.PathLike, os.getcwd
+    join_path, dirname, basename, isabs = os.path.join, os.path.dirname, os.path.basename, os.path.isabs
+    encode_utf8 = str.encode
     O_WRONLY, O_RDWR, O_CREAT, O_TRUNC = os.O_WRONLY, os.O_RDWR, os.O_CREAT, os.O_TRUNC
     platform_name, environment_get = os.name, os.environ.get
     quote = shlex.quote
@@ -67,6 +68,7 @@ def install(check, enforcing, refuse):
     join_path = capture(join_path, os=path_os)
     dirname = capture(dirname, os=path_os)
     basename = capture(basename, os=path_os)
+    isabs = capture(isabs, os=path_os)
     quote = capture(quote)
     resolve_name = capture(resolve_name)
     urlsplit, parse_qs, unquote = capture(urlsplit), capture(parse_qs), capture(unquote)
@@ -116,11 +118,22 @@ def install(check, enforcing, refuse):
             refuse("import registry mutation")
         return True
 
+    def path_input(requested):
+        # The written spelling travels byte-for-byte and the executed spelling is the string the OS
+        # receives: the cwd-joined form of a relative path, never collapsed or resolved here; the
+        # host canonicalizes it. A spelling that is not valid UTF-8 cannot travel losslessly.
+        try:
+            encode_utf8(requested, "utf-8")
+        except UnicodeEncodeError:
+            refuse("operation cannot be checked")
+        executed = requested if isabs(requested) else join_path(getcwd(), requested)
+        return {"path": requested, "executedPath": executed}
+
     def path_call(tool, path, *, dir_fd=None):
         if isinstance(path, int):
             if tool == "ls":
                 resource(path, "read")
-                check("ls", {"path": grants[path][0]})
+                check("ls", path_input(grants[path][0]))
             else:
                 resource(path, tool)
             return
@@ -129,7 +142,7 @@ def install(check, enforcing, refuse):
             # Relative dir-fd resolution cannot be attributed without a recorded directory.
             resource(dir_fd, "read")
             requested = join_path(grants[dir_fd][0], requested)
-        check(tool, {"path": requested})
+        check(tool, path_input(requested))
 
     def resource(fd, mode):
         if not active():
