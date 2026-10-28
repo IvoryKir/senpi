@@ -5,4 +5,6 @@
  * import performs the read and arms a deadline that SIGKILLs the process when no key arrives. Any
  * other module that only needs to recognise - or drop - the name imports it from here instead.
  */
-export const INTERNAL_KEY_STDIN_ENV = "SENPI_RPC_INTERNAL_KEY_STDIN";
+export const INTERNAL_KEY_ENV_PREFIX = "SENPI_RPC_INTERNAL_KEY";
+
+export const INTERNAL_KEY_STDIN_ENV = `${INTERNAL_KEY_ENV_PREFIX}_STDIN`;
