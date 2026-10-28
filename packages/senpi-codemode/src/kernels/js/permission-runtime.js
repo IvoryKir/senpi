@@ -30,8 +30,37 @@ export async function initializePermissionRuntime(install, workerData, engine) {
 		error.rule = rule;
 		return error;
 	};
-	const authorize = (operation) => {
+	// Resolution hooks and module top-level bodies run outside the importing cell's async context. A
+	// token that is importing opens a LOADING WINDOW; an out-of-context operation is attributed to that
+	// token only while it is the sole loader, bound, active and alive, and no other bound token is active
+	// (design 6.4 / N4). Any other shape keeps today's refusal: never a pass that was a refusal before.
+	const loading = new Map();
+	const activeBit = (entry) => Atomics.load(new Int32Array(entry.authority), 0) & 1;
+	const aliveBit = (entry) => Atomics.load(new Int32Array(entry.authority), 0) & 2;
+	const load = async (thunk) => {
 		const token = context.getStore();
+		if (!token) return thunk();
+		const entry = loading.get(token.id);
+		if (entry) entry.depth += 1;
+		else loading.set(token.id, { token, depth: 1 });
+		try {
+			return await thunk();
+		} finally {
+			const current = loading.get(token.id);
+			if (current && (current.depth -= 1) === 0) loading.delete(token.id);
+		}
+	};
+	Object.defineProperty(load, "pending", { value: () => loading.size });
+	Object.defineProperty(globalThis, Symbol.for("senpi.kernel.permissionLoad"), { value: load });
+	const soleLoader = () => {
+		if (loading.size !== 1) return undefined;
+		const [{ token }] = loading.values();
+		if (!bound.has(token.id) || !activeBit(token) || !aliveBit(token)) return undefined;
+		for (const other of bound.values()) if (other.id !== token.id && activeBit(other)) return undefined;
+		return token;
+	};
+	const authorize = (operation) => {
+		const token = context.getStore() ?? soleLoader();
 		const disposition = authorityDecision(token, token ? [] : [...bound.values()], kernel);
 		if (disposition === "pass") return;
 		const rule = token?.rules[0] ?? [...bound.values()].find((entry) => entry.rules.length)?.rules[0] ?? kernel.rules[0];
@@ -149,9 +178,9 @@ export async function initializePermissionRuntime(install, workerData, engine) {
 			const { isAbsolute } = process.getBuiltinModule("node:path");
 			for (const preload of preloads) {
 				const resolved = /^[a-z][a-z\d+.-]*:/iu.test(preload) && !isAbsolute(preload) ? preload : require.resolve(preload);
-				await import(isAbsolute(resolved) ? pathToFileURL(resolved).href : resolved);
+				await load(() => import(isAbsolute(resolved) ? pathToFileURL(resolved).href : resolved));
 			}
-			await import(workerData.script);
+			await load(() => import(workerData.script));
 		});
 		return;
 	}

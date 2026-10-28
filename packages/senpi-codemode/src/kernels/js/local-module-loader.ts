@@ -108,7 +108,10 @@ function loaderPrelude(context: RuntimeModuleContext): string {
 		"    const urlModule = await import('node:url');",
 		"    target = urlModule.pathToFileURL(specifier).href;",
 		"  }",
-		"  const load = (resolved) => (options === undefined ? import(resolved) : import(resolved, options));",
+		// The import and everything it loads (resolution hooks, module bodies) run under the cell's loading window.
+		"  const permissionLoad = globalThis[Symbol.for('senpi.kernel.permissionLoad')];",
+		"  const run = (resolved) => (options === undefined ? import(resolved) : import(resolved, options));",
+		"  const load = (resolved) => (permissionLoad ? permissionLoad(() => run(resolved)) : run(resolved));",
 		"  const resolvePackage = globalThis[Symbol.for('senpi.kernel.resolvePackage')];",
 		"  if (target === specifier && typeof resolvePackage === 'function') {",
 		"    const resolved = resolvePackage(specifier, [context.cwdUrl, context.packageRootUrl]);",
