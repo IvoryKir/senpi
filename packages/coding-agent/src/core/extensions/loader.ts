@@ -41,6 +41,7 @@ import { validateChildModuleRegistration } from "../tool-dispatch/offload.ts";
 import { type ReadClassifier, registerReadClassifier } from "../tools/read-classifiers.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import { validateMcpServerDeclaration } from "./builtin/mcp/config-schema.ts";
+import { McpServerRegistry } from "./mcp-server-registry.ts";
 import { readPermissionPreset } from "./builtin/permission-system/preset-registry.ts";
 import type { PermissionPresetName } from "./builtin/permission-system/types.ts";
 import type { EvalHandleHost } from "./eval-handle-host.ts";
@@ -81,6 +82,7 @@ import type {
 	ProviderConfig,
 	RegisteredChildModule,
 	RegisteredCommand,
+	RegisteredMcpServer,
 	RegisteredMcpServerDeclaration,
 	SendMessageItem,
 	SendMessageOptions,
@@ -306,6 +308,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
 		pendingVirtualModelRegistrations: [],
+		mcpServers: new McpServerRegistry(),
 		createContext: notInitialized,
 		assertActive,
 		invalidate: (message) => {
@@ -633,17 +636,28 @@ function createExtensionAPI(
 		},
 
 		registerMcpServer(name: string, config: RegisteredMcpServerDeclaration["config"]): void {
-			runtime.assertActive();
+			assertActive();
 			const error = validateMcpServerDeclaration(name, config);
 			if (error) {
 				throw new Error(error);
 			}
 			extension.mcpServers.set(name, {
 				name,
-				config,
+				config: structuredClone(config),
 				extensionPath: extension.path,
 				registrationCwd: extension.registrationCwd,
 			});
+			runtime.mcpServers.changed();
+		},
+
+		unregisterMcpServer(name: string): void {
+			assertActive();
+			if (extension.mcpServers.delete(name)) runtime.mcpServers.changed();
+		},
+
+		getMcpServers(): RegisteredMcpServer[] {
+			assertActive();
+			return runtime.mcpServers.list();
 		},
 
 		// Flag access - checks extension registered it, reads from runtime
@@ -1024,6 +1038,7 @@ async function initializeExtension(
 ): Promise<Extension> {
 	const extension = createExtension(extensionPath, resolvedPath, cwd);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus, session);
+	runtime.mcpServers.track(extension);
 	try {
 		await runOwnedBy(extension, () => factory(load.api));
 		load.commit();
@@ -1033,6 +1048,7 @@ async function initializeExtension(
 			runtimeFactories.set(runtime, factories);
 		}
 	} catch (error) {
+		runtime.mcpServers.untrack(extension);
 		load.discard();
 		throw error;
 	}
