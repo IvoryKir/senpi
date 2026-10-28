@@ -35,18 +35,6 @@ const fileContent = (bytes) => {
 };
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 /**
- * The session's lifecycle tracker writes its snapshots (`session-lifecycle`) and work-custody records, and the host
- * announces loaded-surface changes (an MCP server connecting), on their own schedule beside the turn's events: where
- * one lands between two turn events is a race (a background delivery or a connect settles a millisecond earlier or
- * later). O6 and O7 keep each channel (lifecycle, surfaces) in its own ordered list, so its sequence is still compared
- * in full while its interleave with the turn and with the other channel is not.
- */
-const LIFECYCLE_CUSTOM_TYPES = new Set(["session-lifecycle", "work-custody"]);
-const isLifecycleEntry = (entry) => entry?.type === "custom" && LIFECYCLE_CUSTOM_TYPES.has(entry.customType);
-const isLifecycleEvent = (event) =>
-	event.type === "session_lifecycle" || (event.type === "entry_appended" && isLifecycleEntry(event.entry));
-const isSurfacesEvent = (event) => event.type === "loaded_surfaces_changed";
-/**
  * A multi-session host's event-loop watchdog reports a stall when the machine is loaded (`host_stalled` with its drift):
  * whether one fires depends on how loaded the machine is, not on the session, so it is not part of O6.
  */
@@ -76,14 +64,9 @@ export const collectors = {
 			),
 		),
 	O5: (run) => ({ calls: effectCalls(run), tree: sandboxTree(run.box.cwd), extra: run.effects }),
-	O6: (run) =>
-		run.clients.map((client) => ({
-			turn: client.events.filter(
-				(event) => !isLifecycleEvent(event) && !isSurfacesEvent(event) && !isHostHealthEvent(event),
-			),
-			lifecycle: client.events.filter(isLifecycleEvent),
-			surfaces: client.events.filter(isSurfacesEvent),
-		})),
+	// One interleaved stream per client: lifecycle snapshots and surface changes are compared where they land among the
+	// turn's events, as a TUI or desktop client receives them.
+	O6: (run) => run.clients.map((client) => ({ events: client.events.filter((event) => !isHostHealthEvent(event)) })),
 	O7: (run) => {
 		const entries =
 			run.sessionFile && existsSync(run.sessionFile) ? readJsonl(readFileSync(run.sessionFile, "utf8")) : [];
@@ -91,8 +74,7 @@ export const collectors = {
 			nonEmpty: entries.length > 0,
 			count: entries.length,
 			durableIdStable: run.sessionIds.length > 0 && run.sessionIds.every((id) => id === run.sessionIds[0]),
-			entries: entries.filter((entry) => !isLifecycleEntry(entry)),
-			lifecycleEntries: entries.filter(isLifecycleEntry),
+			entries,
 		};
 	},
 	O8: (run) => ({ headless: run.states }),

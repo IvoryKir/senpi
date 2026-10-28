@@ -75,7 +75,21 @@ test("wall-clock values never cause a difference: ties, gaps and clock races nor
 	assert.deepEqual(normalize([{ at: 1 }]), [{ at: 1 }]);
 });
 
-test("durations and resource measurements are dropped and nothing else is", () => {
+test("content-addressed blob ids map one-to-one by field, and only at those fields", () => {
+	const normalize = createNormalizer();
+	const out = normalize({
+		id: "entry-1",
+		conversationState: { rootPromptMessagesJson: ["L7/T3UHG6bQTLK3q=", "KJu71vy2TD317VOe="], turns: ["L7/T3UHG6bQTLK3q="] },
+		spec: { turns: ["E12-FIRST"] },
+	});
+	assert.deepEqual(out, {
+		id: "<id:1>",
+		conversationState: { rootPromptMessagesJson: ["<id:2>", "<id:3>"], turns: ["<id:2>"] },
+		spec: { turns: ["E12-FIRST"] },
+	});
+});
+
+test("durations are dropped, measurement values become <measured> with their keys kept, nothing else changes", () => {
 	const normalize = createNormalizer();
 	const out = normalize({
 		durationMs: 12,
@@ -83,11 +97,23 @@ test("durations and resource measurements are dropped and nothing else is", () =
 		toolDurationMs: 9,
 		generationMs: 25,
 		queued_ms: 4,
-		memory: { liveBytes: 7 },
+		memory: { liveBytes: 7, rssBytes: 9, heapUsedBytes: 1, heapTotalBytes: 2, externalBytes: 3 },
 		timeoutMs: 5000,
 		text: "took 12ms",
 	});
-	assert.deepEqual(out, { memory: {}, timeoutMs: 5000, text: "took 12ms" });
+	assert.deepEqual(out, {
+		memory: {
+			liveBytes: "<measured>",
+			rssBytes: "<measured>",
+			heapUsedBytes: "<measured>",
+			heapTotalBytes: "<measured>",
+			externalBytes: "<measured>",
+		},
+		timeoutMs: 5000,
+		text: "took 12ms",
+	});
+	// A measurement that appears in one observation and not the other is a difference.
+	assert.equal(diffNormalized(normalize({ memory: { liveBytes: 7 } }), normalize({ memory: {} })).length, 1);
 });
 
 test("roots and host facts are replaced longest first; other text is never masked", () => {
