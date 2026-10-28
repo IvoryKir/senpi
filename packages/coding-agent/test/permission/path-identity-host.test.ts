@@ -235,6 +235,123 @@ describe("path identity resolver worker (design 6.7 / 11.1.3)", () => {
 	});
 });
 
+describe("resolver worker that cannot start (fail safe, fail loud)", () => {
+	let root: string;
+	const deny = (pattern: string, permission = "read"): Rule => ({ permission, pattern, action: "deny" });
+	const allow = (pattern: string, permission = "read"): Rule => ({ permission, pattern, action: "allow" });
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "resolver-unavailable-"));
+		mkdirSync(join(root, "real"));
+		writeFileSync(join(root, "real", "notes.txt"), "N");
+		writeFileSync(join(root, "real", "app.env"), "E");
+		symlinkSync(join(root, "real"), join(root, "link"));
+	});
+
+	afterEach(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("a startup error marks the resolver unavailable once, loudly, and rejects at once instead of timing out", async () => {
+		const fatal: string[] = [];
+		const states: ResolverStateEvent[] = [];
+		const transport = fixtureTransport({ startupError: "ERR_MODULE_NOT_FOUND" });
+		const resolver = createPathIdentityResolver({
+			spawn: () => transport,
+			log: () => {},
+			fatal: (line) => fatal.push(line),
+			onState: (event) => states.push(event),
+		});
+		const unavailable = new Promise<void>((resolve) =>
+			resolver.onState((event) => event.state === "unavailable" && resolve()),
+		);
+		const started = Date.now();
+		const first = settled(resolver.canonicalize(`${root}/link/notes.txt`));
+		await unavailable;
+		expect(await first).toEqual({ ok: false, code: "EUNAVAILABLE" });
+		expect(Date.now() - started).toBeLessThan(DEADLINE);
+		expect(resolver.unavailable).toContain("ERR_MODULE_NOT_FOUND");
+		expect(await settled(resolver.canonicalize(`${root}/link/notes.txt`))).toEqual({
+			ok: false,
+			code: "EUNAVAILABLE",
+		});
+		expect(await resolver.detect(`${root}/link/notes.txt`)).toBe(true);
+		expect(fatal).toHaveLength(1);
+		expect(fatal[0]).toContain("ERR_MODULE_NOT_FOUND");
+		expect(states.map((event) => event.state)).toEqual(["unavailable"]);
+		expect(transport.terminated.count).toBe(0);
+		await resolver.close();
+	});
+
+	it("a real worker whose entry is missing reports unavailable through the same path", async () => {
+		const fatal: string[] = [];
+		const resolver = createPathIdentityResolver({
+			workerEntry: new URL("./no-such-path-identity-worker.js", import.meta.url),
+			log: () => {},
+			fatal: (line) => fatal.push(line),
+		});
+		const outcome = await settled(resolver.canonicalize(`${root}/link/notes.txt`));
+		expect(outcome).toEqual({ ok: false, code: "EUNAVAILABLE" });
+		expect(resolver.unavailable).toBeDefined();
+		expect(fatal).toHaveLength(1);
+		await resolver.close();
+	}, 20_000);
+
+	it("with the worker unavailable, zero rules and plain rules decide exactly by spelling: no timeouts, no synthetic deny", async () => {
+		const resolver = createPathIdentityResolver({
+			spawn: () => fixtureTransport({ startupError: "ERR_MODULE_NOT_FOUND" }),
+			log: () => {},
+			fatal: () => {},
+		});
+		const unavailable = new Promise<void>((resolve) =>
+			resolver.onState((event) => event.state === "unavailable" && resolve()),
+		);
+		resolver.start();
+		await unavailable;
+		const askFor = (service: PermissionService, permission: string, written: string, executed: string) =>
+			settled(
+				service.ask(
+					{ sessionID: "s", permission, patterns: [written], always: [written], metadata: {} },
+					{ autoApproveAsk: true, executed: [executed] },
+				),
+			);
+		const zeroRules = new PermissionService(
+			[deny("rm *", "bash")],
+			[],
+			createLocalEventEmitter(),
+			undefined,
+			root,
+			undefined,
+			resolver,
+		);
+		expect(zeroRules.identityWanted("read")).toBe(false);
+		expect(await askFor(zeroRules, "read", "link/notes.txt", `${root}/link/notes.txt`)).toEqual({
+			ok: true,
+			value: undefined,
+		});
+		const plainDeny = new PermissionService(
+			[allow("*"), deny("*.env")],
+			[],
+			createLocalEventEmitter(),
+			undefined,
+			root,
+			undefined,
+			resolver,
+		);
+		expect(plainDeny.identityWanted("read")).toBe(false);
+		expect(await askFor(plainDeny, "read", "notes.txt", `${root}/real/notes.txt`)).toEqual({
+			ok: true,
+			value: undefined,
+		});
+		const denied = await askFor(plainDeny, "read", "app.env", `${root}/real/app.env`);
+		expect(denied.ok).toBe(false);
+		const spy = vi.spyOn(plainDeny, "dispatchDecision");
+		await askFor(plainDeny, "read", "notes.txt", `${root}/real/notes.txt`);
+		expect(spy.mock.calls.every(([, , options]) => options?.identity === undefined)).toBe(true);
+		await resolver.close();
+	});
+});
+
 describe("permission service with a wedged or slow resolver (design 6.5, 6.5.1 / 11.1.3)", () => {
 	let root: string;
 	let real: string;

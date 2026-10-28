@@ -17,6 +17,8 @@ export interface FixtureTransportOptions {
 	readonly delayMs?: (request: ResolverRequest) => number;
 	/** Whether `terminate()` resolves; a never-resolving terminate models a thread stuck in a syscall. */
 	readonly terminateResolves?: boolean;
+	/** An error the worker reports before it ever publishes a snapshot: a startup failure such as a missing module. */
+	readonly startupError?: string;
 	/** The mount snapshot the worker publishes; defaults to the live table. */
 	readonly snapshot?: MountSnapshot;
 	readonly firmlinks?: readonly string[];
@@ -32,6 +34,7 @@ export interface FixtureTransport extends ResolverTransport {
 export function fixtureTransport(options: FixtureTransportOptions = {}): FixtureTransport {
 	const service = createResolverService(() => options.snapshot ?? readMountTable());
 	const handlers: ((message: ResolverWorkerMessage) => void)[] = [];
+	const errorHandlers: ((error: Error) => void)[] = [];
 	const posted: ResolverRequest[] = [];
 	const stalled: ResolverRequest[] = [];
 	let terminateSettle: (() => void) | undefined;
@@ -70,7 +73,16 @@ export function fixtureTransport(options: FixtureTransportOptions = {}): Fixture
 		},
 		onMessage(handler) {
 			handlers.push(handler);
+			if (options.startupError !== undefined) return;
 			deliver(snapshotMessage());
+		},
+		onError(handler) {
+			errorHandlers.push(handler);
+			if (options.startupError === undefined) return;
+			const error = Object.assign(new Error(options.startupError), { code: options.startupError });
+			queueMicrotask(() => {
+				for (const errorHandler of errorHandlers) errorHandler(error);
+			});
 		},
 		onExit() {},
 		terminate() {

@@ -708,7 +708,7 @@ describe.skipIf(!darwin)("alias detector: attached volumes (case-sensitive APFS 
 		}
 		rmSync(scratch, { recursive: true, force: true });
 		expect(images.every((image) => !image.mountPoint || !existsSync(image.mountPoint))).toBe(true);
-	});
+	}, 120_000);
 
 	it("each volume confirms through its OWN mount entry; case and NFC variants are not enumerable", (context) => {
 		const cs = attach(`senpi-csapfs-${process.pid}`, "Case-sensitive APFS");

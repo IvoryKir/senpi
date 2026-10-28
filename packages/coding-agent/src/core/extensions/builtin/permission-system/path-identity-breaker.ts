@@ -8,7 +8,7 @@ export type BreakerState = "closed" | "open" | "half-open";
 
 export interface ResolverStateEvent {
 	readonly volumeKey: string;
-	readonly state: BreakerState | "leak-cap" | "leak-recovered";
+	readonly state: BreakerState | "leak-cap" | "leak-recovered" | "unavailable";
 	readonly leaked: number;
 }
 

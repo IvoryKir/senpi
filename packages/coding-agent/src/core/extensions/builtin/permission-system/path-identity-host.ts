@@ -7,11 +7,14 @@ import {
 	type ResolverStateEvent,
 } from "./path-identity-breaker.ts";
 import type { ResolverRequest, ResolverValue } from "./path-identity-protocol.ts";
+import { createWorkerLifecycle } from "./path-identity-worker-lifecycle.ts";
 import {
 	ResolverFailure,
 	type ResolverRequestOptions,
 	ResolverTimeoutError,
 	type ResolverTransport,
+	ResolverUnavailableError,
+	workerEntryFor,
 	workerTransport,
 } from "./path-identity-transport.ts";
 
@@ -28,6 +31,8 @@ export {
 	type ResolverRequestOptions,
 	ResolverTimeoutError,
 	type ResolverTransport,
+	ResolverUnavailableError,
+	workerEntryFor,
 } from "./path-identity-transport.ts";
 
 export const DEFAULT_CHECK_DEADLINE_MS = 2000;
@@ -53,6 +58,8 @@ export interface PathIdentityResolver {
 	onState(handler: (event: ResolverStateEvent) => void): () => void;
 	/** Spawn the worker now (it is otherwise started by the first request). */
 	start(): void;
+	/** Set once a worker failed to START (never from a stall): path rules then match by spelling only. */
+	readonly unavailable: string | undefined;
 	readonly leaked: number;
 	readonly snapshot: MountSnapshot | undefined;
 	close(): Promise<void>;
@@ -61,9 +68,12 @@ export interface PathIdentityResolver {
 export interface ResolverHostOptions {
 	readonly checkDeadlineMs?: number;
 	readonly spawn?: () => ResolverTransport;
+	/** The worker script the default transport starts; tests point it at a missing file. */
+	readonly workerEntry?: string | URL;
 	readonly onState?: (event: ResolverStateEvent) => void;
 	readonly log?: (line: string) => void;
-	readonly now?: () => number;
+	/** Where a startup failure is reported, once; defaults to console.error. */
+	readonly fatal?: (line: string) => void;
 }
 
 type RequestBody = ResolverRequest extends infer R ? (R extends ResolverRequest ? Omit<R, "id"> : never) : never;
@@ -78,10 +88,10 @@ interface Pending {
 
 export function createPathIdentityResolver(options: ResolverHostOptions = {}): PathIdentityResolver {
 	const deadlineMs = resolverDeadlineMs(options.checkDeadlineMs);
-	const spawn = options.spawn ?? workerTransport;
+	const spawn = options.spawn ?? (() => workerTransport(options.workerEntry ?? workerEntryFor(import.meta.url)));
 	const log = options.log ?? ((line: string) => console.warn(`permission resolver: ${line}`));
+	const fatal = options.fatal ?? ((line: string) => console.error(`permission resolver: ${line}`));
 	const pending = new Map<number, Pending>();
-	let worker: { transport: ResolverTransport; live: boolean } | undefined;
 	let snapshot: MountSnapshot | undefined;
 	let rewrite = createMountRewrite([]);
 	let nextId = 1;
@@ -109,35 +119,6 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		return entry;
 	};
 
-	const attach = (transport: ResolverTransport) => {
-		const handle = { transport, live: true };
-		worker = handle;
-		transport.onMessage((message) => {
-			if (worker !== handle) return;
-			if ("type" in message) {
-				snapshot = message.snapshot;
-				rewrite = createMountRewrite(message.firmlinks);
-				return;
-			}
-			const entry = settle(message.id);
-			if (!entry) return;
-			if (message.ok) {
-				if (!entry.soft) breakers.recordSuccess(entry.key);
-				entry.resolve(message.value);
-			} else {
-				if (!entry.soft) breakers.recordSuccess(entry.key);
-				entry.reject(new ResolverFailure(message.code));
-			}
-		});
-		transport.onExit(() => {
-			if (worker !== handle) return;
-			handle.live = false;
-			worker = undefined;
-			rejectAll("resolver worker exited");
-		});
-		return handle;
-	};
-
 	const rejectAll = (detail: string) => {
 		for (const [id, entry] of [...pending]) {
 			pending.delete(id);
@@ -146,24 +127,35 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		}
 	};
 
-	const retire = (detail: string) => {
-		const current = worker;
-		worker = undefined;
-		rejectAll(detail);
-		if (!current) return;
-		current.live = false;
-		abandoned.track(current.transport.terminate());
-	};
-
-	const ensureWorker = (): ResolverTransport | undefined => {
-		if (worker?.live) return worker.transport;
-		if (abandoned.atCap) return undefined;
-		return attach(spawn()).transport;
-	};
+	const lifecycle = createWorkerLifecycle({
+		spawn,
+		abandoned,
+		onSnapshot: (message) => {
+			snapshot = message.snapshot;
+			rewrite = createMountRewrite(message.firmlinks);
+		},
+		onReply: (message) => {
+			const entry = settle(message.id);
+			if (!entry) return;
+			if (!entry.soft) breakers.recordSuccess(entry.key);
+			if (message.ok) entry.resolve(message.value);
+			else entry.reject(new ResolverFailure(message.code));
+		},
+		rejectAll,
+		onUnavailable: (detail) => {
+			breakers.clearProbes();
+			for (const [id, entry] of [...pending]) {
+				pending.delete(id);
+				clearTimeout(entry.timer);
+				entry.reject(new ResolverUnavailableError(detail));
+			}
+			fatal(`the path identity worker could not start (${detail}); path rules match by spelling only until restart`);
+			emit("process", "unavailable");
+		},
+	});
 
 	const requestRefresh = () => {
-		const transport = worker?.live ? worker.transport : undefined;
-		transport?.post({ id: nextId++, kind: "refresh" });
+		lifecycle.live?.post({ id: nextId++, kind: "refresh" });
 	};
 
 	const send = (
@@ -173,7 +165,11 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		onLate?: (value: ResolverValue) => void,
 	): Promise<ResolverValue> => {
 		if (closed) return Promise.reject(new ResolverTimeoutError("resolver closed"));
-		const transport = ensureWorker();
+		if (lifecycle.unavailable !== undefined)
+			return Promise.reject(new ResolverUnavailableError(lifecycle.unavailable));
+		const transport = lifecycle.ensure();
+		if (lifecycle.unavailable !== undefined)
+			return Promise.reject(new ResolverUnavailableError(lifecycle.unavailable));
 		const key = volumeKeyFor(snapshot, rewrite, path);
 		const breaker = breakers.breakerFor(key);
 		if (breaker.state === "open") return Promise.reject(new ResolverTimeoutError(`breaker open for ${key}`));
@@ -191,7 +187,7 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 					return;
 				}
 				breakers.recordTimeout(key);
-				retire(`resolver stalled on ${key}`);
+				lifecycle.retire(`resolver stalled on ${key}`);
 			}, budget);
 			timer.unref?.();
 			pending.set(id, { key, soft, resolve, reject, timer });
@@ -222,7 +218,10 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		walk: (path, requestOptions) =>
 			send({ kind: "walk", path }, path, requestOptions?.soft ?? false, requestOptions?.onLate) as Promise<string>,
 		start: () => {
-			if (!closed) ensureWorker();
+			if (!closed) lifecycle.ensure();
+		},
+		get unavailable() {
+			return lifecycle.unavailable;
 		},
 		volumeKey: (path) => volumeKeyFor(snapshot, rewrite, path),
 		breakerState: (key) => breakers.stateOf(key),
@@ -239,8 +238,7 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		close: async () => {
 			closed = true;
 			breakers.clearProbes();
-			const current = worker;
-			worker = undefined;
+			const current = lifecycle.drop();
 			rejectAll("resolver closed");
 			if (current) await current.transport.terminate().catch(() => {});
 		},
