@@ -32,13 +32,19 @@ export function pathRulesOf(rules: readonly Rule[]): Rule[] {
 	);
 }
 
-/** True when a static or approved rule of a path class could match by identity (R3-H2 gate). */
+/**
+ * True when a static or approved rule of a path class could match by identity (R3-H2 gate). With the
+ * resolver unavailable only a request that brings its own current canonical (a JS cell) keeps the route:
+ * it needs no worker, so its decision stays exact; every other request matches by spelling only.
+ */
 export function identityWanted(
 	resolver: PathIdentityResolver | undefined,
 	rules: readonly Rule[],
 	permission: string,
+	kernel?: KernelCanonical,
 ): boolean {
-	if (!resolver || resolver.unavailable !== undefined || !PATH_PERMISSIONS.has(permission)) return false;
+	if (!resolver || !PATH_PERMISSIONS.has(permission)) return false;
+	if (resolver.unavailable !== undefined && kernel?.canonical?.v !== PATH_IDENTITY_VERSION) return false;
 	return pathRulesOf(rules).length > 0;
 }
 
@@ -46,7 +52,7 @@ export interface IdentityContext {
 	readonly resolver: PathIdentityResolver | undefined;
 	readonly cache: RuleIdentityCache;
 	readonly mountRewrite: (value: string) => string;
-	identityWanted(permission: string): boolean;
+	identityWanted(permission: string, kernel?: KernelCanonical): boolean;
 }
 
 /**
@@ -62,10 +68,15 @@ export function prepareIdentity(
 	kernel?: KernelCanonical,
 ): IdentityInput | Promise<IdentityInput> {
 	const none: IdentityInput = { canonical: [] };
-	if (!context.identityWanted(permission) || !context.resolver) return none;
+	if (!context.identityWanted(permission, kernel) || !context.resolver) return none;
 	if (kernel?.unresolvable !== undefined && !kernel.canonical)
 		return { canonical: [], unresolvable: kernel.unresolvable };
 	const current = kernel?.canonical?.v === PATH_IDENTITY_VERSION ? kernel.canonical : undefined;
+	// Unavailable resolver: the rule forms it managed to fill before failing are all there will be, and
+	// nothing can time out, so the kernel canonical is used as is.
+	if (current && context.resolver.unavailable !== undefined) {
+		return { canonical: [{ path: current.path, foldCase: current.foldCase }] };
+	}
 	const settle = context.cache.settleRules(permission);
 	const timedOut = () => context.cache.timedOutDenies(permission);
 	if (current && settle === undefined && timedOut().length === 0) {
@@ -135,11 +146,13 @@ export function identityMatcher(
 	permission: string,
 	identity: IdentityInput | undefined,
 	rewrite: (value: string) => string,
+	resolverUnavailable = false,
 ): IdentityMatcher | undefined {
 	if (!identity || !PATH_PERMISSIONS.has(permission) || identity.canonical.length === 0) return undefined;
 	return (rulePattern) => {
-		const entry = cache.stateOf(rulePattern);
-		if (typeof entry === "string") return false;
+		const cached = cache.stateOf(rulePattern);
+		const entry = typeof cached === "string" && resolverUnavailable ? cache.lexicalForm(rulePattern) : cached;
+		if (entry === undefined || typeof entry === "string") return false;
 		return identity.canonical.some((request) => identityMatches(entry, request, Wildcard.match, path.sep, rewrite));
 	};
 }

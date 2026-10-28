@@ -217,7 +217,7 @@ export function createCellDecision(
 		for (const request of requests) {
 			for (const pattern of request.patterns) {
 				const identity =
-					executed !== undefined && service.identityWanted(request.permission)
+					executed !== undefined && service.identityWanted(request.permission, kernel)
 						? service.prepareIdentity(request.permission, [executed], call.cwd, kernel)
 						: undefined;
 				if (identity instanceof Promise) pendingIdentities.push(identity);

@@ -297,6 +297,63 @@ describe("resolver worker that cannot start (fail safe, fail loud)", () => {
 		await resolver.close();
 	}, 20_000);
 
+	it("with the worker unavailable, a JS cell's kernel canonical still decides exactly: an alias to a denied file is denied, a plain file is allowed", async () => {
+		const resolver = createPathIdentityResolver({
+			spawn: () => fixtureTransport({ startupError: "ERR_MODULE_NOT_FOUND" }),
+			log: () => {},
+			fatal: () => {},
+		});
+		const unavailable = new Promise<void>((resolve) =>
+			resolver.onState((event) => event.state === "unavailable" && resolve()),
+		);
+		resolver.start();
+		await unavailable;
+		const real = realpathSync.native(root);
+		const s = new PermissionService(
+			[allow("*"), deny(`${real}/real/app.env`)],
+			[],
+			createLocalEventEmitter(),
+			undefined,
+			root,
+			undefined,
+			resolver,
+		);
+		const kernelCanonical = (path: string) => ({ canonical: { v: PATH_IDENTITY_VERSION, path, foldCase: false } });
+		const viaAlias = s.prepareIdentity(
+			"read",
+			[`${root}/link/app.env`],
+			root,
+			kernelCanonical(`${real}/real/app.env`),
+		);
+		expect(viaAlias).not.toBeInstanceOf(Promise);
+		expect(
+			s.dispatchDecision("read", `${root}/link/app.env`, {
+				ruleAliases: [`${root}/link/app.env`],
+				identity: await viaAlias,
+			}).action,
+		).toBe("deny");
+		const plain = s.prepareIdentity(
+			"read",
+			[`${real}/real/notes.txt`],
+			root,
+			kernelCanonical(`${real}/real/notes.txt`),
+		);
+		expect(
+			s.dispatchDecision("read", `${real}/real/notes.txt`, {
+				ruleAliases: [`${real}/real/notes.txt`],
+				identity: await plain,
+			}).action,
+		).toBe("allow");
+		const unresolved = s.prepareIdentity("read", [`${root}/link/notes.txt`], root, { unresolvable: "EACCES" });
+		expect(
+			s.dispatchDecision("read", `${root}/link/notes.txt`, {
+				ruleAliases: [`${root}/link/notes.txt`],
+				identity: await unresolved,
+			}).action,
+		).toBe("allow");
+		await resolver.close();
+	});
+
 	it("with the worker unavailable, zero rules and plain rules decide exactly by spelling: no timeouts, no synthetic deny", async () => {
 		const resolver = createPathIdentityResolver({
 			spawn: () => fixtureTransport({ startupError: "ERR_MODULE_NOT_FOUND" }),

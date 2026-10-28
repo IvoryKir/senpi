@@ -2,6 +2,7 @@ import { decideTarget, type Decision, type DecisionOptions } from "./decide-targ
 import { createLocalEventEmitter, type PermissionEventEmitter } from "./events.ts";
 import { decideExternalPaths } from "./external-spellings.ts";
 import {
+	type IdentityContext,
 	type IdentityInput,
 	identityMatcher,
 	identityWanted,
@@ -87,8 +88,8 @@ export class PermissionService {
 	private readonly mountRewrite: (value: string) => string;
 	private readonly ruleIdentities: RuleIdentityCache;
 
-	identityWanted(permission: string): boolean {
-		return identityWanted(this.resolver, [...this.staticRuleset, ...this.approved], permission);
+	identityWanted(permission: string, kernel?: KernelCanonical): boolean {
+		return identityWanted(this.resolver, [...this.staticRuleset, ...this.approved], permission, kernel);
 	}
 
 	private pathRules(): Rule[] {
@@ -117,18 +118,16 @@ export class PermissionService {
 		cwd?: string,
 		kernel?: KernelCanonical,
 	): IdentityInput | Promise<IdentityInput> {
-		return prepareIdentity(
-			{
-				resolver: this.resolver,
-				cache: this.ruleIdentities,
-				mountRewrite: this.mountRewrite,
-				identityWanted: (candidate) => this.identityWanted(candidate),
-			},
-			permission,
-			executed,
-			cwd,
-			kernel,
-		);
+		return prepareIdentity(this.identityContext, permission, executed, cwd, kernel);
+	}
+
+	private get identityContext(): IdentityContext {
+		return {
+			resolver: this.resolver,
+			cache: this.ruleIdentities,
+			mountRewrite: this.mountRewrite,
+			identityWanted: (candidate, kernel) => this.identityWanted(candidate, kernel),
+		};
 	}
 
 	/** Identity inputs by request id, so a refusal can name the layer of an identity-matched deny. */
@@ -139,7 +138,8 @@ export class PermissionService {
 	}
 
 	identityMatcher(permission: string, identity: IdentityInput | undefined): IdentityMatcher | undefined {
-		return identityMatcher(this.ruleIdentities, permission, identity, this.mountRewrite);
+		const unavailable = this.resolver?.unavailable !== undefined;
+		return identityMatcher(this.ruleIdentities, permission, identity, this.mountRewrite, unavailable);
 	}
 
 	/**

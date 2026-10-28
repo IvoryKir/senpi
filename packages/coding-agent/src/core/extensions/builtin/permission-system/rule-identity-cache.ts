@@ -125,6 +125,22 @@ export class RuleIdentityCache {
 		return this.ruleIdentities.get(pattern)?.entry ?? "pending";
 	}
 
+	/**
+	 * The rule's form with the resolver UNAVAILABLE: its anchored spelling as written, split at the first
+	 * wildcard like the worker would, with no realpath. A rule written on a canonical spelling still meets a
+	 * JS cell's kernel canonical this way; a rule written through an alias does not, and that is the
+	 * documented cost of a worker that could not start.
+	 */
+	lexicalForm(pattern: string): CanonicalRule | undefined {
+		if (pattern === "*") return undefined;
+		const foldCase = process.platform === "darwin" || process.platform === "win32";
+		const wildcard = pattern.search(/[*?]/u);
+		if (wildcard < 0) return { prefix: this.anchoredPrefix(pattern), foldCase, suffix: "", wildcardOnly: false };
+		const boundary = Math.max(pattern.lastIndexOf("/", wildcard), pattern.lastIndexOf(path.sep, wildcard));
+		if (boundary < 0) return { prefix: undefined, foldCase, suffix: pattern, wildcardOnly: true };
+		return { prefix: this.anchoredPrefix(pattern), foldCase, suffix: pattern.slice(boundary), wildcardOnly: false };
+	}
+
 	/** Whether a rule's prefix goes through an alias; true while the worker has not answered yet. */
 	aliasBearing(pattern: string): boolean {
 		return this.ruleIdentities.get(pattern)?.aliasBearing ?? true;
