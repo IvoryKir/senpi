@@ -77,7 +77,7 @@ export function soakStep(step, idPrefix) {
 }
 
 /** The prompt the soak driver sends; each turn's step count starts at the latest message carrying it. */
-export const SOAK_PROMPT_PREFIX = "soak turn ";
+const SOAK_PROMPT_PREFIX = "soak turn ";
 
 const textOf = (content) =>
 	typeof content === "string"
@@ -122,7 +122,7 @@ function writeSse(res, turn, model) {
 }
 
 /** Start the soak model on 127.0.0.1. `requests` counts answered model calls. */
-export function startSoakModel() {
+function startSoakModel() {
 	const stats = { requests: 0 };
 	const server = createServer((req, res) => {
 		const chunks = [];
@@ -174,11 +174,10 @@ const READY_TIMEOUT_MS = 300_000;
 const STOP_TIMEOUT_MS = 30_000;
 
 /** The stdio MCP fixture every soak session connects to; its path marks MCP server processes in the tree. */
-export const mcpFixture = () =>
-	join(repoRoot(), "packages", "coding-agent", "test", "mcp", "fixtures", "stdio-server.ts");
+const mcpFixture = () => join(repoRoot(), "packages", "coding-agent", "test", "mcp", "fixtures", "stdio-server.ts");
 
 /** X4 (the worker cap) as today's source defines it: `SESSION_WORKER_LIMITS.workers`. */
-export function x4Cap() {
+function x4Cap() {
 	const source = readFileSync(
 		join(repoRoot(), "packages", "coding-agent", "src", "modes", "rpc", "session-worker-protocol.ts"),
 		"utf8",
@@ -201,7 +200,7 @@ function git(args) {
 }
 
 /** `soak.deps`: the engine that ran (version + head, or the binary's sha256) and the repository head it ran from. */
-export function soakDeps() {
+function soakDeps() {
 	const runtime = childRuntime();
 	const head = git(["rev-parse", "HEAD"]) ?? process.env.SOAK_SOURCE_COMMIT ?? null;
 	const dirty = (git(["status", "--porcelain"]) ?? "") !== "";
@@ -216,13 +215,13 @@ export function soakDeps() {
 }
 
 /** The machine class a receipt records: platform, CPU model, cores and memory, never a host name. */
-export function machineClass() {
+function machineClass() {
 	const cpu = os.cpus()[0]?.model?.trim() ?? "unknown-cpu";
 	return `${process.platform}-${process.arch}/${cpu}/${os.availableParallelism()}c/${Math.round(os.totalmem() / 2 ** 30)}GB`;
 }
 
 /** Sandbox, model and MCP configuration, the host child, and a stop() that reports processes left behind. */
-export async function startSoakHost(model) {
+async function startSoakHost(model) {
 	const box = makeSandbox("soak");
 	writeMockModelsJson(box.agentDir, model, "openai-completions");
 	writeFileSync(join(box.cwd, "a.txt"), "alpha\n");
@@ -308,7 +307,7 @@ function exited(child) {
 	return new Promise((resolve) => child.once("close", () => resolve()));
 }
 
-export class SoakSession {
+class SoakSession {
 	/** @param {{ socket: string, env: object, cwd: string, onCall: (call: object) => void }} options */
 	constructor({ socket, env, cwd, onCall }) {
 		this.cwd = cwd;

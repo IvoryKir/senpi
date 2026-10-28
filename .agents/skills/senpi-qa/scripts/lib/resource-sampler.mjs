@@ -84,7 +84,7 @@ export function parseLsof(text) {
 }
 
 /** Open descriptors of each pid, as `Map<pid, {fd, name}[]>`. A pid that exited meanwhile is absent. */
-export async function readOpenFiles(pids) {
+async function readOpenFiles(pids) {
 	if (pids.length === 0) return new Map();
 	if (process.platform === "linux") {
 		const byPid = new Map();
