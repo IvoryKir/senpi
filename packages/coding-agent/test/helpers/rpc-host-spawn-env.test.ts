@@ -6,7 +6,6 @@ import * as hostDaemonPaths from "../../src/modes/rpc/host-daemon-paths.ts";
 import * as hostIdentityEnv from "../../src/modes/rpc/host-identity-env.ts";
 import * as hostLifetimeBinding from "../../src/modes/rpc/host-lifetime-binding.ts";
 import * as hostWatchdog from "../../src/modes/rpc/host-watchdog.ts";
-import * as internalKeyEnv from "../../src/modes/rpc/internal-key-env.ts";
 import * as socketTransport from "../../src/modes/rpc/socket-transport.ts";
 import { INTERNAL_HANDOFF_ENV_NAMES } from "./rpc-host-spawn-env.ts";
 
@@ -21,7 +20,6 @@ const ENV_CONSTANT_MODULES: readonly Record<string, unknown>[] = [
 	hostIdentityEnv,
 	hostLifetimeBinding,
 	hostWatchdog,
-	internalKeyEnv,
 	socketTransport,
 ];
 

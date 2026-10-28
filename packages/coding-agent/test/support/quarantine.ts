@@ -13,7 +13,7 @@
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { INTERNAL_KEY_ENV_PREFIX } from "../../src/modes/rpc/internal-key-env.ts";
+import { INTERNAL_KEY_ENV_PREFIX } from "../../src/modes/rpc/host-identity-env.ts";
 
 /** Env var suffix every brand uses for its agent-state directory override. */
 const AGENT_DIR_ENV_SUFFIX = "_CODING_AGENT_DIR";
@@ -57,7 +57,7 @@ const HOST_LIFECYCLE_ENV_PREFIX = "SENPI_RPC_HOST_";
  * tuning variables in the same namespace (idle window, RSS threshold) go too, and a test that needs
  * one sets it explicitly. Internal-key bootstrap state is private to the outer host too: inheriting
  * `SENPI_RPC_INTERNAL_KEY_STDIN=1` makes a CLI child try to read a key from its unrelated stdin. The
- * internal-key prefix is imported from the production leaf (`src/modes/rpc/internal-key-env.ts`), so
+ * internal-key prefix is imported from the production module that declares it (`src/modes/rpc/host-identity-env.ts`), so
  * renaming that namespace cannot silently leave this scrub matching a name nothing sets any more.
  */
 export function scrubHostLifecycleEnv(env: NodeJS.ProcessEnv = process.env): void {

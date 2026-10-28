@@ -10,8 +10,7 @@ import { isBunBinary } from "../../config.ts";
 import { runtimeExecArgv } from "../../utils/runtime-exec-argv.ts";
 import { resolveCliMainPath } from "./host-cli-entry.ts";
 import { HOST_DAEMON_DIR_ENV } from "./host-daemon-paths.ts";
-import { HOST_INSTANCE_ID_ENV } from "./host-identity-env.ts";
-import { INTERNAL_KEY_STDIN_ENV } from "./internal-key-env.ts";
+import { HOST_INSTANCE_ID_ENV, INTERNAL_KEY_STDIN_ENV } from "./host-identity-env.ts";
 import {
 	HOST_CLEANUP_PATHS_ENV,
 	HOST_PUBLIC_SOCKET_ENV,
