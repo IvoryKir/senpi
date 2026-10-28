@@ -5,7 +5,12 @@
  * clock, the author and the line matcher are injected.
  * Ported from oh-my-pi 9df0457b31 `job-widgets/registry.ts` (MIT, Copyright Can Boluk et al.).
  */
-import { createWidgetRedactor, type JobWidgetRedact, redactAuthorRequest } from "./author-redact.ts";
+import {
+	createWidgetRedactor,
+	type JobWidgetObfuscator,
+	type JobWidgetRedactor,
+	redactAuthorRequest,
+} from "./author-redact.ts";
 import type { JobWidgetAuthor, JobWidgetAuthorRequest, JobWidgetBrief } from "./author-types.ts";
 import type { LineMatcher } from "./matcher.ts";
 import {
@@ -38,7 +43,7 @@ export interface JobWidgetRequestControllerOptions {
 	readonly now?: () => number;
 	readonly limits?: Partial<JobWidgetRequestLimits>;
 	/** The session's secret obfuscation, run before the built-in redaction. */
-	readonly obfuscate?: JobWidgetRedact;
+	readonly obfuscate?: JobWidgetObfuscator;
 }
 
 const ROUNDS = 2;
@@ -53,7 +58,7 @@ export class JobWidgetRequestController {
 	readonly #matcher: LineMatcher;
 	readonly #now: () => number;
 	#limits: JobWidgetRequestLimits;
-	#redact: JobWidgetRedact;
+	#redact: JobWidgetRedactor;
 	readonly #states = new Map<string, JobWidgetAuthoringState>();
 	readonly #aborts = new Map<string, AbortController>();
 	/** Start times of author calls in the last {@link REQUEST_WINDOW_MS}, oldest first. */

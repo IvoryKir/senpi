@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_LINE_CHARS, SourceLineReader, TextTap } from "../../src/core/extensions/builtin/job-widgets/index.ts";
+import {
+	createWidgetRedactor,
+	defaultLineMatcher,
+	JobWidgetRuntime,
+	MAX_LINE_CHARS,
+	PRIVATE_KEY_MARKER,
+	SourceLineReader,
+	TextTap,
+} from "../../src/core/extensions/builtin/job-widgets/index.ts";
 import { block, harness, ScriptedSource, validSpec } from "./support.ts";
 
 function readAll(chunks: readonly string[], close = false): string[][] {
@@ -61,6 +69,23 @@ describe("source line reader", () => {
 		out.append("\rdone\n");
 		h.ingest();
 		expect(h.derive().view).toMatchObject({ stage: "done", lines: 5 });
+	});
+
+	it("redacts a CR progress segment before it stands for the stage", () => {
+		const out = new ScriptedSource("out");
+		const redactor = createWidgetRedactor();
+		const runtime = new JobWidgetRuntime({
+			spec: undefined,
+			matcher: defaultLineMatcher,
+			startTime: 0,
+			now: () => 0,
+			redactSource: () => redactor.source(),
+		});
+		out.append("copying\r -----BEGIN RSA PRIVATE KEY-----");
+		runtime.ingest([out], false);
+		const stage = runtime.derive({ label: "job", lineStage: true, authoring: true }).view.stage;
+		expect(stage).toContain(PRIVATE_KEY_MARKER);
+		expect(stage).not.toContain("BEGIN");
 	});
 
 	it("cuts lines at the line limit", () => {

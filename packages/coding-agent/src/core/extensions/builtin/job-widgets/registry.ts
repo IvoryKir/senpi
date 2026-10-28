@@ -5,7 +5,7 @@
  * enough to author) and runs only while some job is still open. Every refresh offers the session's
  * state to the publisher, which sends it only when it changed and at most once a second.
  */
-import { createWidgetRedactor, type JobWidgetRedact } from "./author-redact.ts";
+import { createWidgetRedactor, type JobWidgetObfuscator, type JobWidgetRedactor } from "./author-redact.ts";
 import type { JobWidgetAuthor } from "./author-types.ts";
 import type { LineMatcher } from "./matcher.ts";
 import { defaultLineMatcher } from "./re2-matcher.ts";
@@ -35,7 +35,7 @@ export interface JobWidgetRegistryOptions {
 	readonly author: JobWidgetAuthor;
 	readonly publish: (state: JobWidgetState) => void;
 	readonly limits?: Partial<JobWidgetRequestLimits>;
-	readonly obfuscate?: JobWidgetRedact;
+	readonly obfuscate?: JobWidgetObfuscator;
 	readonly matcher?: LineMatcher;
 }
 
@@ -50,8 +50,11 @@ export class JobWidgetRegistry {
 	readonly sessionId: string;
 	readonly #matcher: LineMatcher;
 	/** Handed to every job and the publisher; it calls the current redactor, so a re-bind reaches them. */
-	readonly #redact: JobWidgetRedact = (text) => this.#currentRedact(text);
-	#currentRedact: JobWidgetRedact;
+	readonly #redact: JobWidgetRedactor = {
+		text: (text) => this.#currentRedact.text(text),
+		source: () => this.#currentRedact.source(),
+	};
+	#currentRedact: JobWidgetRedactor;
 	readonly #controller: JobWidgetRequestController;
 	readonly #publisher: JobWidgetStatePublisher;
 	readonly #jobs = new Map<string, JobWidgetJob>();
@@ -70,7 +73,7 @@ export class JobWidgetRegistry {
 			...(options.limits === undefined ? {} : { limits: options.limits }),
 			...(options.obfuscate === undefined ? {} : { obfuscate: options.obfuscate }),
 		});
-		this.#publisher = new JobWidgetStatePublisher(options.publish, this.#redact);
+		this.#publisher = new JobWidgetStatePublisher(options.publish, this.#redact.text);
 	}
 
 	add(input: JobWidgetJobInput): JobWidgetSourceHandle {
@@ -115,8 +118,10 @@ export class JobWidgetRegistry {
 	}
 
 	/**
-	 * Applies settings re-read on a re-bind (a reload): the author's start delay and the session's
-	 * obfuscation reach every job from its next line and request on.
+	 * Applies settings re-read on a re-bind (a reload): the author's start delay from the next request
+	 * on, the session's obfuscation for every state sent, every author request and every runtime started
+	 * after it. A reader already running keeps its own stateful source redactor, so a key block it is
+	 * inside is never split between two redactors.
 	 */
 	configure(options: Pick<JobWidgetRegistryOptions, "limits" | "obfuscate">): void {
 		this.#currentRedact = createWidgetRedactor(options.obfuscate);

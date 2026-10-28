@@ -57,3 +57,23 @@ export function keyedFields(spec: JobWidgetSpec | undefined): Set<string> {
 	}
 	return keyed;
 }
+
+/** Keys the spec's blocks and headline name, per field: a field's key cap never evicts them. */
+export function pinnedKeys(spec: JobWidgetSpec | undefined): Map<string, Set<string>> {
+	const pinned = new Map<string, Set<string>>();
+	const pin = (ref: { field: string; key?: string } | undefined): void => {
+		if (ref?.key === undefined) return;
+		const keys = pinned.get(ref.field) ?? new Set<string>();
+		keys.add(ref.key);
+		pinned.set(ref.field, keys);
+	};
+	pin(spec?.headline);
+	for (const block of spec?.blocks ?? []) {
+		if (block.kind === "spark") pin(block);
+		else if (block.kind === "meter") {
+			pin(block);
+			if (typeof block.total !== "number") pin(block.total);
+		} else if (block.kind === "stat") for (const item of block.items) pin(item);
+	}
+	return pinned;
+}

@@ -1,8 +1,9 @@
 /**
  * The line-matching port. Widget patterns are model-written, so the production engine must run in
  * linear time (RE2 semantics); a JS `RegExp` can backtrack catastrophically and is not shipped as
- * an engine. {@link compilePatterns} rejects what RE2 cannot run (lookaround, backreferences) before
- * an engine sees a pattern, and hands it one group spelling, `(?<name>…)`.
+ * an engine. {@link compilePatterns} rejects what RE2 cannot run (lookaround, backreferences,
+ * recursion and subroutine calls, conditionals, backtracking verbs) in every spelling before an
+ * engine sees a pattern, and hands it one group spelling, `(?<name>…)`.
  */
 
 /** Span of one named group's capture in a line, in UTF-16 units. */
@@ -57,6 +58,38 @@ export interface PatternScan {
 const NAMED_GROUP_AT = /^\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/;
 
 /**
+ * Why the escape whose letter is at `at` (outside a class) needs a backtracking engine: `\1`-`\9`,
+ * `\k<n>`, `\k'n'`, `\k{n}`, `\g1`, `\g-1`, `\g{n}` refer back, `\g<n>` and `\g'n'` call a group.
+ */
+function escapeReference(pattern: string, at: number): string | undefined {
+	const letter = pattern.charAt(at);
+	const after = pattern.charAt(at + 1);
+	if (letter >= "1" && letter <= "9") return `backreference \\${letter} is not supported`;
+	if (letter === "k" && (after === "<" || after === "'" || after === "{")) {
+		return `named backreference \\k${after}… is not supported`;
+	}
+	if (letter === "g") {
+		if (after === "<" || after === "'") return `subroutine call (recursion) \\g${after}… is not supported`;
+		if (after === "{" || after === "-" || after === "+" || (after >= "0" && after <= "9")) {
+			return `backreference \\g${after}… is not supported`;
+		}
+	}
+	return undefined;
+}
+
+/** Why the `(?` construct starting at `at` (the `(`) needs a backtracking engine. */
+function groupConstruct(pattern: string, at: number): string | undefined {
+	const rest = pattern.slice(at + 2, at + 4);
+	if (/^(?:[=!*]|<[=!*])/.test(rest)) return "lookaround (?=, (?!, (?<=, (?<! is not supported";
+	if (rest.startsWith("P=")) return "named backreference (?P=…) is not supported";
+	if (rest.startsWith("P>") || rest.startsWith("&") || /^(?:R|[+-]?\d)/.test(rest)) {
+		return "recursion (?R), (?1), (?&…), (?P>…) is not supported";
+	}
+	if (rest.startsWith("(")) return "conditional (?(…) is not supported";
+	return undefined;
+}
+
+/**
  * Reads a pattern's named groups and constructs outside escapes, character classes and `\Q\E`
  * quoted text (literal in RE2, up to `\E` or the end of the pattern), so the groups it reports are
  * the ones RE2's `namedGroups()` reports.
@@ -77,10 +110,8 @@ export function scanPattern(pattern: string): PatternScan {
 				index = end - 1;
 				continue;
 			}
-			if (!inClass && next >= "1" && next <= "9") return fail(`backreference \\${next} is not supported`);
-			if (!inClass && next === "k" && pattern.charAt(index + 2) === "<") {
-				return fail("named backreference \\k<…> is not supported");
-			}
+			const reference = inClass ? undefined : escapeReference(pattern, index + 1);
+			if (reference !== undefined) return fail(reference);
 			normalized += char + next;
 			index += 1;
 			continue;
@@ -98,11 +129,12 @@ export function scanPattern(pattern: string): PatternScan {
 			if (pattern.charAt(index + 1) === "]") normalized += pattern.charAt(++index);
 			continue;
 		}
+		if (char === "(" && pattern.charAt(index + 1) === "*") {
+			return fail("backtracking verb or alpha assertion (*…) is not supported");
+		}
 		if (char === "(" && pattern.charAt(index + 1) === "?") {
-			const kind = pattern.slice(index + 2, index + 4);
-			if (kind.startsWith("=") || kind.startsWith("!") || kind === "<=" || kind === "<!") {
-				return fail("lookaround (?=, (?!, (?<=, (?<! is not supported");
-			}
+			const construct = groupConstruct(pattern, index);
+			if (construct !== undefined) return fail(construct);
 			const named = NAMED_GROUP_AT.exec(pattern.slice(index));
 			if (named) {
 				groups.push(named[1]);

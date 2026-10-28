@@ -84,7 +84,10 @@ describe("job widget author redaction", () => {
 
 	it("applies the session obfuscator to the brief and every sample line", async () => {
 		const { author, requests } = scriptedAuthor(RPS_SPEC);
-		const obfuscate = (text: string): string => text.replaceAll("hunter2-internal", "<secret>");
+		const obfuscate = () => ({
+			push: (text: string): string => text.replaceAll("hunter2-internal", "<secret>"),
+			finish: (): string => "",
+		});
 		const { controller } = controllerFor(author, {}, obfuscate);
 		const job = new FakeJob("bg_1", { kind: "bash", command: "./bench.sh --project hunter2-internal" });
 		job.sources = [outSample(["project hunter2-internal", "req 1 rps=40", "req 2 rps=44"])];

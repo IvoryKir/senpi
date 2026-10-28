@@ -95,7 +95,7 @@ describe("job widget sessions across reloads", () => {
 			authorAfterMs: 0,
 			author: pendingAuthor(calls),
 			publish: () => {},
-			obfuscate: (text) => text.replaceAll("bluefin", "[host]"),
+			obfuscate: () => ({ push: (text) => text.replaceAll("bluefin", "[host]"), finish: () => "" }),
 		});
 		await vi.advanceTimersByTimeAsync(1_000);
 		try {

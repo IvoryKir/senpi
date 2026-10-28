@@ -3,7 +3,7 @@
  * fresh one whenever a spec is installed), and where its spec request stands. A job joins the
  * session's `job_widget_state` once its first spec request starts; before that its row is plain.
  */
-import type { JobWidgetRedact } from "./author-redact.ts";
+import type { JobWidgetRedactor } from "./author-redact.ts";
 import type { JobWidgetBrief, JobWidgetJobKind } from "./author-types.ts";
 import type { LineMatcher } from "./matcher.ts";
 import type { JobWidgetRequestOutcome } from "./request-controller.ts";
@@ -34,12 +34,12 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 	runtime: JobWidgetRuntime;
 	settled = false;
 	readonly #matcher: LineMatcher;
-	readonly #redact: JobWidgetRedact;
+	readonly #redact: JobWidgetRedactor;
 	#asked = false;
 	#authoring = false;
 	#skippedAtMs: number | undefined;
 
-	constructor(input: JobWidgetJobInput, matcher: LineMatcher, redact: JobWidgetRedact) {
+	constructor(input: JobWidgetJobInput, matcher: LineMatcher, redact: JobWidgetRedactor) {
 		this.id = input.id;
 		this.kind = input.kind;
 		this.startTime = input.startedAtMs ?? Date.now();
@@ -55,7 +55,7 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 			spec,
 			matcher: this.#matcher,
 			startTime: this.startTime,
-			redactLine: this.#redact,
+			redactSource: () => this.#redact.source(),
 		});
 	}
 
@@ -85,8 +85,8 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 		if (!this.#asked) return undefined;
 		const brief = this.brief;
 		const derived = this.runtime.derive({
-			label: this.#redact(brief.intent ?? brief.task ?? brief.command ?? this.id),
-			...(brief.stage === undefined ? {} : { stage: this.#redact(brief.stage) }),
+			label: this.#redact.text(brief.intent ?? brief.task ?? brief.command ?? this.id),
+			...(brief.stage === undefined ? {} : { stage: this.#redact.text(brief.stage) }),
 			lineStage: this.kind === "bash",
 			authoring: this.#authoring,
 			settled: this.settled,
