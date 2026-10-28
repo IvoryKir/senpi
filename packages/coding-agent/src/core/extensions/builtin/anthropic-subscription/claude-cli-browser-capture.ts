@@ -22,10 +22,11 @@ function helperScript(mode: "capture" | "discard", sinkPath: string, platform: N
 	if (platform === "win32") {
 		// Delayed expansion keeps `&` and `?` in the URL literal; `echo(` prints even an empty argument. The CLI starts
 		// the helper in its own cwd (the account dir) and does not wait for it; Windows cannot delete a directory that a
-		// live process has as its cwd, so the helper leaves it before the URL becomes visible (senpi#4654).
+		// live process has as its cwd, so the helper leaves it before setlocal. The implicit endlocal restores %SystemRoot%,
+		// and the helper never holds the account dir after senpi sees the URL (senpi#4654).
 		return mode === "discard"
 			? "@exit /b 0\r\n"
-			: `@echo off\r\nsetlocal EnableDelayedExpansion\r\ncd /d "%SystemRoot%"\r\nset "u=%~1"\r\n>>"${sinkPath}" echo(!u!\r\n`;
+			: `@echo off\r\ncd /d "%SystemRoot%"\r\nsetlocal EnableDelayedExpansion\r\nset "u=%~1"\r\n>>"${sinkPath}" echo(!u!\r\n`;
 	}
 	return mode === "discard"
 		? "#!/bin/sh\nexit 0\n"
