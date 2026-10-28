@@ -38,6 +38,57 @@ const testRoot = join(import.meta.dirname, "..");
 const launchSource = join(testRoot, "..", "src", "modes", "rpc", "host-lifecycle-launch.ts");
 
 /**
+ * Names the host-child launch may write as a PLAIN key without carrying them in the hand-off list.
+ * Each row states why the spawned child is meant to keep that variable; anything else the launch
+ * writes - in any key shape - must be in `INTERNAL_HANDOFF_ENV_NAMES`, so a lane added as a bare
+ * literal (`SENPI_RPC_HOST_NEW_LANE: "x"`) fails this guard instead of slipping past a regex that
+ * only reads computed `[CONSTANT]:` keys (senpi#4618).
+ */
+const LAUNCH_ENV_KEY_EXEMPTIONS: readonly { readonly name: string; readonly reason: string }[] = [
+	{
+		name: "SENPI_CODING_AGENT_DIR",
+		reason: "the agent directory the child must claim; configuration the child keeps, not a supervisor hand-off",
+	},
+];
+
+/** `source` with its line comments removed, so a commented-out key is never collected as written. */
+function withoutLineComments(source: string): string {
+	return source.replaceAll(/^[ \t]*\/\/[^\n]*\n/gmu, "").replaceAll(/\/\/[^\n]*/gu, "");
+}
+
+/**
+ * The `env` object literal `spawnHostChild` builds, brace-matched from its `env: {`. Reading the
+ * whole function instead would collect the `stdio` block and the launch's own locals.
+ */
+function launchEnvLiteral(launchFunction: string): string {
+	const start = launchFunction.indexOf("env: {");
+	if (start < 0) throw new Error("spawnHostChild no longer builds its child environment as an `env` object literal");
+	let depth = 0;
+	for (let index = start; index < launchFunction.length; index += 1) {
+		const character = launchFunction[index];
+		if (character === "{") depth += 1;
+		if (character === "}") {
+			depth -= 1;
+			if (depth === 0) return launchFunction.slice(start, index + 1);
+		}
+	}
+	throw new Error("spawnHostChild's `env` object literal is unterminated");
+}
+
+/**
+ * Every key the launch's `env` literal writes, in EVERY shape it can take: a computed
+ * `[CONSTANT]:` key (reported as the identifier), a plain or quoted `NAME:` key, and a `NAME,`
+ * shorthand - at the literal's top level and inside the conditional spreads nested in it. A key is
+ * only ever preceded by `{` or `,`, which is what separates it from a value of the same spelling.
+ */
+function launchEnvKeys(envLiteral: string): { readonly computed: string[]; readonly literal: string[] } {
+	const source = withoutLineComments(envLiteral);
+	const computed = [...source.matchAll(/\[\s*([A-Za-z_$][\w$]*)\s*\]\s*:/gu)].map((match) => match[1] ?? "");
+	const literal = [...source.matchAll(/[{,]\s*"?([A-Z][A-Z0-9_]*)"?\s*[:,}]/gu)].map((match) => match[1] ?? "");
+	return { computed, literal: [...new Set(literal)] };
+}
+
+/**
  * Files that spawn a senpi CLI, host or supervisor. Each one inherits this process's environment,
  * so each must build the child's environment with `hostSpawnEnv()` rather than `process.env`:
  * a runner that is itself a host child otherwise hands the spawned host its supervisor's lane.
@@ -103,7 +154,8 @@ describe("a test that spawns a host builds its environment with hostSpawnEnv", (
 	it("carries every variable the supervisor's own host-child launch writes", () => {
 		const source = readFileSync(launchSource, "utf8");
 		const spawnChild = source.slice(source.indexOf("export function spawnHostChild"));
-		const written = [...spawnChild.matchAll(/\[([A-Z][A-Z0-9_]*_ENV)\]:/gu)].map((match) => match[1]);
+		const keys = launchEnvKeys(launchEnvLiteral(spawnChild));
+		const written = keys.computed;
 		expect(written.length).toBeGreaterThan(5);
 
 		// Every written identifier must resolve to a runtime value; an unresolved one is a FAILURE, not
@@ -119,6 +171,13 @@ describe("a test that spawns a host builds its environment with hostSpawnEnv", (
 		});
 
 		expect(missing).toEqual([]);
+
+		// A key written as a plain literal carries no constant to resolve, so it is matched by its own
+		// spelling: it must be in the hand-off list, or be an exempted name with a stated reason.
+		const exempt = new Set(LAUNCH_ENV_KEY_EXEMPTIONS.map((row) => row.name));
+		const uncarriedLiterals = keys.literal.filter((name) => !carried.has(name) && !exempt.has(name));
+
+		expect(uncarriedLiterals).toEqual([]);
 	});
 
 	it.each(["linux", "darwin", "win32"] as const)(
