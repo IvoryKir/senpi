@@ -2644,8 +2644,10 @@ export interface ExtensionAPI {
 	 * Register an MCP server for this session, with the same config as an `mcpServers` entry in
 	 * `mcp.json`. Servers registered while the extension loads connect on `session_start`; the
 	 * extension that handles `mcp_servers_change` connects later registrations right away.
-	 * Registering a name again replaces this extension's earlier registration; a name another
-	 * extension registered first is kept. The registration is not saved: register again on every load.
+	 * Registering a name again replaces this extension's earlier registration. When several extensions
+	 * register the same name, the declaration from the extension earliest in the session's extension
+	 * order is kept, regardless of which registered first (see `getMcpServers` in docs/extensions.md
+	 * for that order). The registration is not saved: register again on every load.
 	 * Throws for invalid configs.
 	 */
 	registerMcpServer(name: string, config: McpServerDeclaration): void;
