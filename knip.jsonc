@@ -1253,8 +1253,8 @@
       "packages/coding-agent/src/runtime-snapshot/layout.ts": ["RuntimeSnapshotLayoutError"],
       // pre-existing at origin main aceb1cc1d9: unused exports isProcessAlive
       "packages/coding-agent/src/runtime-snapshot/registry.ts": ["isProcessAlive"],
-      // pre-existing at origin main aceb1cc1d9: unused exports isCompiledBunExecutable, bundledBunDir
-      "packages/coding-agent/src/utils/bundled-bun.ts": ["bundledBunDir", "isCompiledBunExecutable"],
+      // pre-existing at origin main aceb1cc1d9: unused export isCompiledBunExecutable
+      "packages/coding-agent/src/utils/bundled-bun.ts": ["isCompiledBunExecutable"],
       // pre-existing at origin main aceb1cc1d9: unused exports compareVersions, getChangelogPath
       "packages/coding-agent/src/utils/changelog.ts": ["compareVersions", "getChangelogPath"],
       // pre-existing at origin main aceb1cc1d9: unused exports isWaylandSession, extensionForImageMimeType
