@@ -2065,9 +2065,11 @@ automatically and must call their own policy if they access the filesystem.
 
 Register an MCP server for the current session. Servers registered while the
 extension factory runs connect on `session_start`, together with the `mcp.json`
-servers; servers registered later reach the extension that connects registered
-servers right away (see `mcp_servers_change` below). Registrations are not
-saved: register again on every load.
+servers. Servers registered later reach an extension that handles
+`mcp_servers_change` right away (see below); when no extension handles it, the
+built-in MCP support picks them up at its next attach (`session_start` after a
+reload or session switch), and no error is reported meanwhile. Registrations are
+not saved: register again on every load.
 
 `config` accepts the same fields as `mcpServers.<name>` in `mcp.json` (see the
 [MCP server fields reference](mcp.md#server-fields-mcpserversname)): `type`,
@@ -2116,10 +2118,13 @@ extension are left alone.
 
 ### pi.getMcpServers()
 
-Every MCP server registered by extensions, in registration order, as
-`{ name, config, extensionPath }` copies (`RegisteredMcpServer`). For extensions
-that connect MCP servers themselves, such as `pi-mcp-adapter`: read it on
-`session_start` and handle `mcp_servers_change` for later changes.
+Every MCP server registered by the extensions of the current session, in
+extension load order, as `{ name, config, extensionPath }` copies
+(`RegisteredMcpServer`). Extensions the resource loader left out of the session
+(replaced, disabled, filtered) contribute nothing, and on a name clash the first
+loaded extension's registration wins. For extensions that connect MCP servers
+themselves, such as `pi-mcp-adapter`: read it on `session_start` and handle
+`mcp_servers_change` for later changes.
 
 ### mcp_servers_change
 
@@ -2133,7 +2138,10 @@ Handling this event marks an extension as the one that connects registered
 servers: the built-in MCP support then does not connect them (one connection per
 server) while it keeps connecting the `mcp.json` servers. When no loaded
 extension handles the event, the built-in MCP support connects registered
-servers as before.
+servers as before. Subscribe only if your extension connects them: the built-in
+support reads the rule when it attaches on `session_start`, so a handler that
+only observes leaves registered servers unconnected, and one subscribed after
+that attach connects them next to the built-in support.
 
 ```typescript
 pi.on("session_start", () => connect(pi.getMcpServers()));

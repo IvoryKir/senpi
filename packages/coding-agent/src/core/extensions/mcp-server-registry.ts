@@ -1,50 +1,70 @@
-import type { RegisteredMcpServer, RegisteredMcpServerDeclaration } from "./types.ts";
+import type { Extension, RegisteredMcpServer, RegisteredMcpServerDeclaration } from "./types.ts";
+
+type McpRegistrar = Pick<Extension, "path" | "mcpServers">;
 
 /**
- * MCP servers registered by the extensions of one runtime (`pi.registerMcpServer()`), in registration
- * order. The core only stores them; the built-in MCP gateway or an extension handling
- * `mcp_servers_change` connects them.
+ * The MCP servers extensions registered with `pi.registerMcpServer()`, read from the extension
+ * records themselves. Until a runner binds, every loaded extension counts, in load order; once it
+ * binds, only the runner's final extension set counts, in the runner's order, so an extension the
+ * resource loader dropped after loading (replaced, disabled after trust, filtered) registers nothing.
  */
 export class McpServerRegistry {
-	readonly #servers = new Map<string, RegisteredMcpServerDeclaration>();
+	readonly #loaded: McpRegistrar[] = [];
+	#bound: readonly McpRegistrar[] | undefined;
+	readonly #warnedClashes = new Set<string>();
 	#changeListener: (() => void) | undefined;
 
-	/** Register or replace the caller's own server. A name another extension registered first is kept (first wins). */
-	register(server: RegisteredMcpServerDeclaration): void {
-		const existing = this.#servers.get(server.name);
-		if (existing !== undefined && existing.extensionPath !== server.extensionPath) {
-			console.warn(
-				`MCP server '${server.name}' declared by both ${existing.extensionPath} and ${server.extensionPath}; keeping first declaration from ${existing.extensionPath}.`,
-			);
-			return;
-		}
-		this.#servers.set(server.name, server);
+	track(extension: McpRegistrar): void {
+		this.#loaded.push(extension);
+	}
+
+	untrack(extension: McpRegistrar): void {
+		const index = this.#loaded.indexOf(extension);
+		if (index >= 0) this.#loaded.splice(index, 1);
+	}
+
+	/** The runner's final extension set; registrations of any other extension are no longer visible. */
+	bind(extensions: readonly McpRegistrar[]): void {
+		this.#bound = extensions;
+	}
+
+	/** Notify the listener (set by the runner) that an extension registered or unregistered a server. */
+	changed(): void {
 		this.#changeListener?.();
 	}
 
-	/** Remove a server registered by `extensionPath`. Servers of other extensions are left alone. */
-	unregister(name: string, extensionPath: string): void {
-		if (this.#servers.get(name)?.extensionPath !== extensionPath) return;
-		this.#servers.delete(name);
-		this.#changeListener?.();
-	}
-
-	/** The stored declarations, for the built-in gateway. */
+	/** First declaration per name wins, in extension order. */
 	declarations(): readonly RegisteredMcpServerDeclaration[] {
-		return [...this.#servers.values()];
+		const byName = new Map<string, RegisteredMcpServerDeclaration>();
+		for (const extension of this.#bound ?? this.#loaded) {
+			for (const declaration of extension.mcpServers.values()) {
+				const existing = byName.get(declaration.name);
+				if (existing === undefined) byName.set(declaration.name, declaration);
+				else this.#warnClash(existing, declaration);
+			}
+		}
+		return [...byName.values()];
 	}
 
-	/** Copies of the registered servers in upstream's `RegisteredMcpServer` shape, for extensions. */
+	/** Copies in upstream's `RegisteredMcpServer` shape, for extensions. */
 	list(): RegisteredMcpServer[] {
-		return [...this.#servers.values()].map(({ name, config, extensionPath }) => ({
+		return this.declarations().map(({ name, config, extensionPath }) => ({
 			name,
 			config: structuredClone(config),
 			extensionPath,
 		}));
 	}
 
-	/** Called after every change. The runner sets it when it binds, to emit `mcp_servers_change`. */
 	setChangeListener(listener: (() => void) | undefined): void {
 		this.#changeListener = listener;
+	}
+
+	#warnClash(winner: RegisteredMcpServerDeclaration, loser: RegisteredMcpServerDeclaration): void {
+		const key = `${winner.name}\0${winner.extensionPath}\0${loser.extensionPath}`;
+		if (this.#warnedClashes.has(key)) return;
+		this.#warnedClashes.add(key);
+		console.warn(
+			`MCP server '${winner.name}' declared by both ${winner.extensionPath} and ${loser.extensionPath}; keeping first declaration from ${winner.extensionPath}.`,
+		);
 	}
 }

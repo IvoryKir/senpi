@@ -615,20 +615,18 @@ function createExtensionAPI(
 			if (error) {
 				throw new Error(error);
 			}
-			const server: RegisteredMcpServerDeclaration = {
+			extension.mcpServers.set(name, {
 				name,
 				config: structuredClone(config),
 				extensionPath: extension.path,
 				registrationCwd: extension.registrationCwd,
-			};
-			extension.mcpServers.set(name, server);
-			applyRuntimeChange(() => runtime.mcpServers.register(server));
+			});
+			runtime.mcpServers.changed();
 		},
 
 		unregisterMcpServer(name: string): void {
 			assertActive();
-			extension.mcpServers.delete(name);
-			applyRuntimeChange(() => runtime.mcpServers.unregister(name, extension.path));
+			if (extension.mcpServers.delete(name)) runtime.mcpServers.changed();
 		},
 
 		getMcpServers(): RegisteredMcpServer[] {
@@ -1014,6 +1012,7 @@ async function initializeExtension(
 ): Promise<Extension> {
 	const extension = createExtension(extensionPath, resolvedPath, cwd);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus, session);
+	runtime.mcpServers.track(extension);
 	try {
 		await runOwnedBy(extension, () => factory(load.api));
 		load.commit();
@@ -1023,6 +1022,7 @@ async function initializeExtension(
 			runtimeFactories.set(runtime, factories);
 		}
 	} catch (error) {
+		runtime.mcpServers.untrack(extension);
 		load.discard();
 		throw error;
 	}
