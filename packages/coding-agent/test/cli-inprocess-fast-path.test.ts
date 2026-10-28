@@ -49,12 +49,22 @@ function runCli(args: readonly string[], nodeOptionsPrefix = ""): RunResult {
 	const reportPath = join(hostDir, `report-${Math.random().toString(36).slice(2)}.jsonl`);
 	writeFileSync(hookPath, probeHookSource);
 	writeFileSync(reportPath, "");
-	const nodeOptions = `${nodeOptionsPrefix} --import=${pathToFileURL(hookPath).href} --import tsx`.trim();
+	// No `--import tsx`: the package requires Node >= 24, which runs this TypeScript entry natively,
+	// and every module of this repository is erasable syntax. A tsx loader would esbuild-transform the
+	// whole engine graph inside EVERY process launched here - and the `--inspect` case launches two -
+	// which is what pushed both cases past the 30 s budget on loaded containers (#4624, same cost class
+	// as #4554). Node's own transform is per-process cheap and `NODE_COMPILE_CACHE`, published by the
+	// launcher, carries across to the spawned child.
+	const nodeOptions = `${nodeOptionsPrefix} --import=${pathToFileURL(hookPath).href}`.trim();
 	const result = spawnSync(process.execPath, [CLI_PATH, ...args], {
 		encoding: "utf8",
 		env: {
 			...process.env,
 			NODE_OPTIONS: nodeOptions,
+			// Pin the runtime: an ambient `SENPI_RUNTIME=bun` (every senpi-launched shell exports it) makes
+			// `cli.ts` re-exec itself under Bun before the isolation decision, and Bun ignores the
+			// `NODE_OPTIONS --import` probe, so the records would stop counting the processes that run.
+			SENPI_RUNTIME: "node",
 			SENPI_FAST_PATH_REPORT: reportPath,
 			PI_OFFLINE: "1",
 		},
