@@ -71,7 +71,7 @@ describe("re2 line matcher", () => {
 			const line = `${"a".repeat(length)}b`;
 			return fastestMs(() => expect(compiled.matchLines([line])).toEqual([]));
 		};
-		// Both sizes sit above re2js's BitState cutoff (about 26k chars for this pattern), so both run on
+		// Both sizes sit above re2js's BitState cutoff (29,127 chars for this 9-instruction pattern), so both run on
 		// the same NFA/DFA engine and the ratio measures scaling, not an engine switch.
 		timeFor(50_000);
 		const short = timeFor(50_000);
