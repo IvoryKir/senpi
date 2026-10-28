@@ -36,12 +36,48 @@ export async function killAndWait(child: ChildProcess, timeoutMs = 20_000): Prom
  * through the fixture's own parent watch instead.
  */
 export async function reapProcessesUnder(root: string, timeoutMs = 20_000): Promise<number[]> {
+	return reapSpawnedHosts({ roots: [root] }, timeoutMs);
+}
+
+/** What one teardown owns: the handles it spawned itself and the sandbox directories they were started in. */
+export interface SpawnedHostScope {
+	readonly children?: readonly ChildProcess[];
+	readonly roots?: readonly string[];
+}
+
+/**
+ * Every pid this teardown must outlive, taken BEFORE anything is signalled.
+ *
+ * Order matters, not just membership: a supervisor's host child is named by its own private socket
+ * rather than by the sandbox, so argv cannot find it, and the moment its supervisor is killed it is
+ * re-parented away and stops being a descendant of anything the suite remembers. Killing first and
+ * looking afterwards therefore loses it - while it keeps writing INTO the sandbox (its agent
+ * directory) until it notices its supervisor is gone, which can land after the removal and recreate
+ * the directory that was just deleted (ENOTEMPTY).
+ */
+export function collectSpawnedHosts(scope: SpawnedHostScope): number[] {
 	if (process.platform === "win32") return [];
-	// Descendants first, and they must be included at all: a supervisor's host child is named by its
-	// own private socket rather than by this sandbox, yet it keeps writing INTO the sandbox (its agent
-	// directory) until it notices its supervisor is gone - which can land after the removal below and
-	// recreate the directory that was just deleted.
-	const pids = withDescendants(processesUnder(root));
+	const handles = (scope.children ?? [])
+		.map((child) => child.pid)
+		.filter((pid): pid is number => pid !== undefined && pid !== process.pid);
+	const named = (scope.roots ?? []).flatMap((root) => processesUnder(root));
+	return withDescendants([...handles, ...named]);
+}
+
+/**
+ * Kills a snapshot from `collectSpawnedHosts` - plus anything that appeared under the roots since -
+ * and waits for every pid to disappear, so the caller's removal cannot outrun a late writer.
+ */
+export async function reapCollectedHosts(
+	collected: readonly number[],
+	scope: SpawnedHostScope,
+	timeoutMs = 20_000,
+): Promise<number[]> {
+	if (process.platform === "win32") {
+		for (const child of scope.children ?? []) await killAndWait(child, timeoutMs);
+		return [];
+	}
+	const pids = [...new Set([...collected, ...collectSpawnedHosts(scope)])];
 	for (const pid of pids) {
 		try {
 			process.kill(pid, "SIGKILL");
@@ -49,8 +85,15 @@ export async function reapProcessesUnder(root: string, timeoutMs = 20_000): Prom
 			// Already gone.
 		}
 	}
+	// The handles the suite spawned publish an exit event; awaiting it also reaps them as children.
+	for (const child of scope.children ?? []) await killAndWait(child, timeoutMs);
 	for (const pid of pids) await waitForPidGone(pid, timeoutMs);
 	return pids;
+}
+
+/** Collect-then-kill in one step, for teardowns with nothing to do between the two halves. */
+export async function reapSpawnedHosts(scope: SpawnedHostScope, timeoutMs = 20_000): Promise<number[]> {
+	return reapCollectedHosts(collectSpawnedHosts(scope), scope, timeoutMs);
 }
 
 /** `pids` plus every process descending from them, children before parents. */
