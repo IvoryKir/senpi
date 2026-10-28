@@ -132,6 +132,18 @@ test("sampleProcessTree refuses a process that is not running", async () => {
 	await assert.rejects(sampleProcessTree(child.pid), /is not running/);
 });
 
+test("sampleProcessTree refuses to record 0 descriptors when the host's own open files could not be read", async () => {
+	const missingHost = async (pids) => new Map(pids.slice(1).map((pid) => [pid, []]));
+	await assert.rejects(
+		sampleProcessTree(process.pid, { openFiles: missingHost }),
+		new RegExp(`no open-file listing for host process ${process.pid}`),
+	);
+	const sample = await sampleProcessTree(process.pid, {
+		openFiles: async (pids) => new Map(pids.map((pid) => [pid, [{ fd: 0, name: "/dev/ptmx" }]])),
+	});
+	assert.equal(sample.fds, 1);
+});
+
 const HOUR = 3_600_000;
 const MIN = 60_000;
 

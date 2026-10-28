@@ -121,19 +121,23 @@ async function readOpenFiles(pids) {
  * - `fds`: the host process's open descriptors;
  * - `children`: live descendant processes; `mcp`: descendants whose command line contains `mcpMarker`;
  * - `ptys`: PTY masters open anywhere in the tree.
+ * It throws when the host's own open files could not be read (lsof or /proc failed): recording 0 would pass every leak
+ * check. `openFiles` replaces the live reader in tests.
  */
-export async function sampleProcessTree(rootPid, { mcpMarker } = {}) {
+export async function sampleProcessTree(rootPid, { mcpMarker, openFiles = readOpenFiles } = {}) {
 	const rows = await readProcessTable();
 	const root = rows.find((row) => row.pid === rootPid);
 	if (!root) throw new Error(`resource-sampler: process ${rootPid} is not running`);
 	const tree = descendants(rows, rootPid);
-	const files = await readOpenFiles([rootPid, ...tree.map((row) => row.pid)]);
+	const files = await openFiles([rootPid, ...tree.map((row) => row.pid)]);
+	if (!files.has(rootPid))
+		throw new Error(`resource-sampler: no open-file listing for host process ${rootPid} (lsof or /proc read failed)`);
 	let ptys = 0;
 	for (const list of files.values()) ptys += list.filter((file) => isPtyMaster(file.name)).length;
 	return {
 		rssMb: root.rssKb / 1024,
 		treeRssMb: (root.rssKb + tree.reduce((sum, row) => sum + row.rssKb, 0)) / 1024,
-		fds: files.get(rootPid)?.length ?? 0,
+		fds: files.get(rootPid).length,
 		children: tree.length,
 		mcp: mcpMarker ? tree.filter((row) => row.command.includes(mcpMarker)).length : 0,
 		ptys,
