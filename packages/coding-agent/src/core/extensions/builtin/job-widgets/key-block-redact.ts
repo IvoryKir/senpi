@@ -142,6 +142,7 @@ export class PrivateKeyLineFilter {
 		if (this.#block === undefined && startsWithEnd(line)) this.#held = [];
 		else out.push(...this.#releaseHeld());
 		// Blank and armor-header lines sit between a BEGIN marker line and its body, so they keep the gap mark.
+		const trimmed = line.trim();
 		if (trimmed !== "" && !ARMOR_HEADER.test(trimmed)) this.#gapBeforeHeld = false;
 		const kept = this.#scan(line);
 		if (kept !== undefined) out.push(kept);
