@@ -2118,11 +2118,14 @@ extension are left alone.
 
 ### pi.getMcpServers()
 
-Every MCP server registered by the extensions of the current session, in
-extension load order, as `{ name, config, extensionPath }` copies
-(`RegisteredMcpServer`). Extensions the resource loader left out of the session
-(replaced, disabled, filtered) contribute nothing, and on a name clash the first
-loaded extension's registration wins. For extensions that connect MCP servers
+Every MCP server registered by the extensions of the current session, in the
+session's extension order, as `{ name, config, extensionPath }` copies
+(`RegisteredMcpServer`). That order puts inline and built-in extension factories
+before file extensions, even though file extensions load first. Before the
+session binds its extensions (while extension factories run), the list follows
+load order. Extensions the resource loader left out of the session (replaced,
+disabled, filtered) contribute nothing, and on a name clash the registration
+from the extension earliest in that order wins. For extensions that connect MCP servers
 themselves, such as `pi-mcp-adapter`: read it on `session_start` and handle
 `mcp_servers_change` for later changes.
 
