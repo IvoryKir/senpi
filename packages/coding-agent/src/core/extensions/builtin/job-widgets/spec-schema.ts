@@ -48,6 +48,7 @@ export const JOB_WIDGET_SPEC_SCHEMA: Readonly<Record<string, unknown>> = {
 					field: STRING,
 					label: STRING,
 					key: STRING,
+					// Optional on purpose: the validator reads an absent bars or meter `agg` as "last".
 					agg: { enum: JOB_WIDGET_AGGS },
 					unit: STRING,
 					better: BETTER,

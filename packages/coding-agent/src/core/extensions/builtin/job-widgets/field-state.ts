@@ -7,6 +7,11 @@ import type { JobWidgetAgg } from "./spec-types.ts";
 
 /** Points a series keeps for sparks. */
 export const RING_POINTS = 240;
+/**
+ * Keys one field keeps a series for. Past it the oldest first-seen key that no spec block names is
+ * dropped, so a field keyed per test or per path stays bounded for the life of the job.
+ */
+export const MAX_FIELD_KEYS = 256;
 /** Window of `rate` and lines/s. */
 const RATE_WINDOW_MS = 60_000;
 
@@ -157,13 +162,19 @@ export function downsample(ring: readonly TimedValue[], points: number): TimedVa
 	return out;
 }
 
-/** Every field's series per key (`""` when its rules capture no key), plus every match merged. */
+/**
+ * Every field's series per key (`""` when its rules capture no key), plus every match merged.
+ * A field keeps at most {@link MAX_FIELD_KEYS} keys; `pinned` keys (the ones spec blocks name)
+ * are never evicted, so a keyed headline or spark never restarts its series.
+ */
 export class FieldStore {
 	readonly #fields = new Map<string, { keys: Map<string, WidgetSeries>; all: WidgetSeries }>();
 	readonly #keyed: ReadonlySet<string>;
+	readonly #pinned: ReadonlyMap<string, ReadonlySet<string>>;
 
-	constructor(keyed: ReadonlySet<string>) {
+	constructor(keyed: ReadonlySet<string>, pinned: ReadonlyMap<string, ReadonlySet<string>> = new Map()) {
 		this.#keyed = keyed;
+		this.#pinned = pinned;
 	}
 
 	push(name: string, key: string, match: SeriesMatch): void {
@@ -176,6 +187,7 @@ export class FieldStore {
 		}
 		let series = field.keys.get(key);
 		if (!series) {
+			if (field.keys.size >= MAX_FIELD_KEYS) this.#evictOldest(name, field.keys);
 			series = emptySeries();
 			field.keys.set(key, series);
 		}
@@ -191,8 +203,32 @@ export class FieldStore {
 		return field.keys.get(key) ?? emptySeries();
 	}
 
-	/** A field's keys in first-seen order with their series. */
-	keys(name: string): [string, WidgetSeries][] {
-		return [...(this.#fields.get(name)?.keys.entries() ?? [])];
+	/** How many keys a field holds a series for. */
+	keyCount(name: string): number {
+		return this.#fields.get(name)?.keys.size ?? 0;
+	}
+
+	/** A field's newest `limit` keys by first sight, oldest first, with their series. */
+	keys(name: string, limit: number): [string, WidgetSeries][] {
+		const keys = this.#fields.get(name)?.keys;
+		if (!keys || limit <= 0) return [];
+		let skip = keys.size - limit;
+		const out: [string, WidgetSeries][] = [];
+		// Insertion order is first-seen order; the map holds at most MAX_FIELD_KEYS entries.
+		for (const entry of keys) {
+			if (skip > 0) skip -= 1;
+			else out.push(entry);
+		}
+		return out;
+	}
+
+	/** Drops the oldest first-seen key no block names; pinned keys are few, so the walk is short. */
+	#evictOldest(name: string, keys: Map<string, WidgetSeries>): void {
+		const pinned = this.#pinned.get(name);
+		for (const key of keys.keys()) {
+			if (pinned?.has(key)) continue;
+			keys.delete(key);
+			return;
+		}
 	}
 }
