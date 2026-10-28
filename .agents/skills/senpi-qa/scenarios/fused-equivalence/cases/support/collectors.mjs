@@ -1,0 +1,142 @@
+// O1-O8 collectors (plan §6.2). Each reads only what a provider, an RPC client, the session store or the sandbox
+// can observe from outside the CLI; none looks at the pipeline witness (witness.mjs reads that separately).
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { readJsonl } from "../../../../scripts/lib/common.mjs";
+
+/** Credential-bearing headers: compared as hashes of their values only (O4). */
+const CREDENTIAL_HEADERS = new Set([
+	"authorization",
+	"x-api-key",
+	"proxy-authorization",
+	"cookie",
+	"api-key",
+	"x-goog-api-key",
+]);
+/** Framing headers derived from the O1 body bytes; the body itself is compared in O1. */
+const FRAMING_HEADERS = new Set(["content-length", "connection", "keep-alive", "transfer-encoding"]);
+const ROUTE_API = [
+	["/chat/completions", "openai-completions"],
+	["/messages", "anthropic-messages"],
+	["/responses", "openai-responses"],
+	["/agent.v1.AgentService/Run", "cursor-agent"],
+];
+/**
+ * Paths inside the work dir that are configuration a case wrote before the run (project `.senpi/`: hooks, trust
+ * records), not tool effects.
+ */
+const CONFIG_DIRS = [".senpi"];
+
+const TEXT_LIMIT = 8192;
+const fileContent = (bytes) => {
+	const text = bytes.toString("utf8");
+	return bytes.length <= TEXT_LIMIT && Buffer.from(text, "utf8").equals(bytes) ? { text } : { sha: sha(bytes) };
+};
+const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
+/**
+ * The session's lifecycle tracker writes its snapshots (`session-lifecycle`) and work-custody records, and the host
+ * announces loaded-surface changes (an MCP server connecting), on their own schedule beside the turn's events: where
+ * one lands between two turn events is a race (a background delivery or a connect settles a millisecond earlier or
+ * later). O6 and O7 keep each channel (lifecycle, surfaces) in its own ordered list, so its sequence is still compared
+ * in full while its interleave with the turn and with the other channel is not.
+ */
+const LIFECYCLE_CUSTOM_TYPES = new Set(["session-lifecycle", "work-custody"]);
+const isLifecycleEntry = (entry) => entry?.type === "custom" && LIFECYCLE_CUSTOM_TYPES.has(entry.customType);
+const isLifecycleEvent = (event) =>
+	event.type === "session_lifecycle" || (event.type === "entry_appended" && isLifecycleEntry(event.entry));
+const isSurfacesEvent = (event) => event.type === "loaded_surfaces_changed";
+/**
+ * A multi-session host's event-loop watchdog reports a stall when the machine is loaded (`host_stalled` with its drift):
+ * whether one fires depends on how loaded the machine is, not on the session, so it is not part of O6.
+ */
+const isHostHealthEvent = (event) => event.type === "host_stalled";
+
+/** Provider requests: the fake model server's, or those of the provider fixture a case serves itself (E19 Cursor). */
+const modelRequests = (run) =>
+	(run.providerRequests?.() ?? run.server.requests).filter((request) => request.method === "POST");
+
+export const collectors = {
+	O1: (run) =>
+		modelRequests(run).map((request) => ({ method: request.method, path: request.url, body: request.body })),
+	O2: (run) =>
+		modelRequests(run).map((request) => ({
+			api: ROUTE_API.find(([suffix]) => request.url.endsWith(suffix))?.[1] ?? "unknown",
+			route: request.url,
+			model: request.body?.model ?? null,
+		})),
+	O3: (run) => modelRequests(run).map((request) => request.tools ?? request.body?.tools ?? null),
+	O4: (run) =>
+		modelRequests(run).map((request) =>
+			Object.fromEntries(
+				Object.entries(request.headers ?? {})
+					.filter(([name]) => !FRAMING_HEADERS.has(name))
+					.sort(([a], [b]) => a.localeCompare(b))
+					.map(([name, value]) => [name, CREDENTIAL_HEADERS.has(name) ? sha(String(value)) : value]),
+			),
+		),
+	O5: (run) => ({ calls: effectCalls(run), tree: sandboxTree(run.box.cwd), extra: run.effects }),
+	O6: (run) =>
+		run.clients.map((client) => ({
+			turn: client.events.filter(
+				(event) => !isLifecycleEvent(event) && !isSurfacesEvent(event) && !isHostHealthEvent(event),
+			),
+			lifecycle: client.events.filter(isLifecycleEvent),
+			surfaces: client.events.filter(isSurfacesEvent),
+		})),
+	O7: (run) => {
+		const entries =
+			run.sessionFile && existsSync(run.sessionFile) ? readJsonl(readFileSync(run.sessionFile, "utf8")) : [];
+		return {
+			nonEmpty: entries.length > 0,
+			count: entries.length,
+			durableIdStable: run.sessionIds.length > 0 && run.sessionIds.every((id) => id === run.sessionIds[0]),
+			entries: entries.filter((entry) => !isLifecycleEntry(entry)),
+			lifecycleEntries: entries.filter(isLifecycleEntry),
+		};
+	},
+	O8: (run) => ({ headless: run.states }),
+};
+
+/**
+ * O5 calls: every dispatched tool call in dispatch (start) order, with the target it named, the machine it ran on and
+ * whether it finished. A case whose tools run concurrently holds their bodies on barriers, so completion order and
+ * every event after it stay deterministic and show up in O6.
+ */
+function effectCalls(run) {
+	const calls = [];
+	for (const client of run.clients) {
+		for (const event of client.events) {
+			if (event.type !== "tool_execution_start") continue;
+			const end = client.events.find((e) => e.type === "tool_execution_end" && e.toolCallId === event.toolCallId);
+			const outcome = end ? (end.isError === true ? "error" : "ok") : "unfinished";
+			calls.push({ machine: "local", op: event.toolName, path: targetOf(event.args ?? {}, run.box.cwd), outcome });
+		}
+	}
+	return calls;
+}
+
+function targetOf(args, cwd) {
+	const raw = args.path ?? args.file_path ?? args.filePath ?? args.cwd ?? null;
+	if (typeof raw !== "string") return null;
+	return raw.startsWith(cwd) ? relative(cwd, raw).split(sep).join("/") : raw;
+}
+
+/**
+ * O5 tree: every file under the sandbox work dir, sorted: small UTF-8 text files by content (normalized like everything
+ * else, so a file naming the sandbox compares equal across runs), anything else by content hash.
+ */
+function sandboxTree(root) {
+	const out = {};
+	const walk = (dir) => {
+		for (const name of readdirSync(dir).sort()) {
+			const full = join(dir, name);
+			const rel = relative(root, full).split(sep).join("/");
+			if (CONFIG_DIRS.includes(rel)) continue;
+			if (statSync(full).isDirectory()) walk(full);
+			else out[rel] = fileContent(readFileSync(full));
+		}
+	};
+	if (existsSync(root)) walk(root);
+	return out;
+}
