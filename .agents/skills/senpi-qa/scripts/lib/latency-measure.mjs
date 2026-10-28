@@ -12,7 +12,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 /** The two dispatch metrics (§6.5). Each is reported over all workloads and per workload (`E01.<metric>`). */
-export const DISPATCH_METRICS = ["dispatch_to_body_ms", "body_to_next_request_ms"];
+const DISPATCH_METRICS = ["dispatch_to_body_ms", "body_to_next_request_ms"];
 
 const QUANTILES = { p50: 0.5, p95: 0.95 };
 const round = (ms) => Math.round(ms * 100) / 100;
