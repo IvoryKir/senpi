@@ -5,6 +5,7 @@ export * from "./author-types.ts";
 export * from "./author-user-prompt.ts";
 export * from "./field-state.ts";
 export * from "./format.ts";
+export * from "./key-block-redact.ts";
 export * from "./line-reader.ts";
 export * from "./matcher.ts";
 export * from "./model-author.ts";
