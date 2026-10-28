@@ -229,6 +229,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 		activePreset = loadedSettings.preset;
 		const approved = loadedSettings.approved;
 		parserRegistry = createBuiltinParserRegistry();
+		const previous = service;
 		service = new PermissionService(
 			staticRuleset,
 			[...approved, ...sessionApproved],
@@ -238,6 +239,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 			agentDir,
 			sharedPathIdentityResolver(),
 		);
+		previous?.dispose();
 		if (cellSession) updateCellEnforcement(cellSession, staticRuleset, activePreset);
 	};
 
@@ -430,5 +432,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 		for (const pendingRequest of service.list()) {
 			service.reply({ requestID: pendingRequest.id, reply: "reject" });
 		}
+		// The shared resolver outlives this extension generation; release its hold on the service.
+		service.dispose();
 	});
 }
