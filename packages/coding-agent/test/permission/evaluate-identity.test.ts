@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SettingsManager } from "../../src/core/settings-manager.ts";
 import { findDenyProvenance } from "../../src/core/extensions/builtin/permission-system/deny-provenance.ts";
+import { evaluate, evaluateWithIdentity } from "../../src/core/extensions/builtin/permission-system/evaluate.ts";
 import { createLocalEventEmitter } from "../../src/core/extensions/builtin/permission-system/events.ts";
 import { createBuiltinParserRegistry } from "../../src/core/extensions/builtin/permission-system/parsers.ts";
 import { PATH_IDENTITY_VERSION } from "../../src/core/extensions/builtin/permission-system/path-identity.ts";
@@ -297,6 +298,15 @@ describe("path rules decide by file identity across spellings (design 11.1.2)", 
 		});
 		await asking.ask(request("r-ask", "real/other"), { executed: [`${real}/real/other`] });
 		expect(asking.requestIdentity("r-ask")).toBeUndefined();
+	});
+
+	it("external_directory keeps its own inode matcher under evaluateWithIdentity: identity is added, never substituted", () => {
+		const rule = deny(`${real}/real/secret`, "external_directory");
+		const alias = `${root}/link/secret`;
+		expect(evaluate("external_directory", alias, [rule])).toBe(rule);
+		expect(evaluateWithIdentity("external_directory", alias, [rule], undefined)).toBe(rule);
+		const service = serviceWith([allow("*", "external_directory"), rule]);
+		expect(service.dispatchDecision("external_directory", alias).action).toBe("deny");
 	});
 
 	it("zero path rules: nothing is canonicalized and decisions are unchanged", async () => {
