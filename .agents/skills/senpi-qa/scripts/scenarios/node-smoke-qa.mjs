@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { startCaseRun } from "../../scenarios/fused-equivalence/cases/support/case-run.mjs";
 import { writeCodemodeSettings } from "../../scenarios/fused-equivalence/cases/support/codemode.mjs";
 import { observe } from "../../scenarios/fused-equivalence/cases/support/observe.mjs";
+import { ownTsxCache } from "../../scenarios/fused-equivalence/cases/support/tsx-cache.mjs";
 import { childRuntime, evidenceDir, guardRealAuth, installCleanupHooks } from "../lib/common.mjs";
 import { diffNormalized } from "../lib/equivalence-normalize.mjs";
 
@@ -87,6 +88,16 @@ function driver(runtime, outFile) {
 }
 
 async function compare() {
+	// The Node runs' CLI children run through the tsx CLI; the comparing process owns their cache for the whole step.
+	const releaseTsxCache = ownTsxCache();
+	try {
+		await compareRuntimes();
+	} finally {
+		releaseTsxCache();
+	}
+}
+
+async function compareRuntimes() {
 	const guard = guardRealAuth();
 	const runtimes = (value("--runtimes") ?? "node,bun").split(",");
 	if (runtimes.length < 2 || runtimes.some((runtime) => !RUNTIMES.has(runtime)))

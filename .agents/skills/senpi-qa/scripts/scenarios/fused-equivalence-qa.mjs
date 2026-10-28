@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { cases } from "../../scenarios/fused-equivalence/cases/index.mjs";
 import { startCaseRun } from "../../scenarios/fused-equivalence/cases/support/case-run.mjs";
 import { baselineManifest, goldenDir, observe } from "../../scenarios/fused-equivalence/cases/support/observe.mjs";
+import { ownTsxCache } from "../../scenarios/fused-equivalence/cases/support/tsx-cache.mjs";
 import { expectedWitness, readWitness } from "../../scenarios/fused-equivalence/cases/support/witness.mjs";
 import { childRuntime, evidenceDir, guardRealAuth, installCleanupHooks, repoRoot } from "../lib/common.mjs";
 import { diffNormalized } from "../lib/equivalence-normalize.mjs";
@@ -86,6 +87,9 @@ async function main() {
 	const selected = cases.filter((c) => !options.selected || options.selected.includes(c.id));
 	const dir = goldenDir();
 	const command = `node .agents/skills/senpi-qa/scripts/scenarios/fused-equivalence-qa.mjs ${process.argv.slice(2).join(" ")}`;
+	// Read before any golden is written: the manifest names the tree the goldens were recorded from, so a record run's own
+	// output must not mark that tree dirty.
+	const manifest = baselineManifest({ repo: repoRoot(), childRuntime: childRuntime().label, command });
 	const results = [];
 	for (const testCase of selected) {
 		const runs = [];
@@ -141,7 +145,6 @@ async function main() {
 		results.push(result);
 	}
 	guard.assertUnchanged();
-	const manifest = baselineManifest({ repo: repoRoot(), childRuntime: childRuntime().label, command });
 	if (options.mode === "record") writeFileSync(join(dir, "baseline.json"), `${JSON.stringify(manifest, null, 1)}\n`);
 	const passed = results.filter((r) => r.pass).length;
 	process.stdout.write(
@@ -164,7 +167,10 @@ async function main() {
 	process.exitCode = passed === results.length && results.length > 0 ? 0 : 1;
 }
 
-main().catch((error) => {
-	process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-	process.exitCode = 2;
-});
+const releaseTsxCache = ownTsxCache();
+main()
+	.catch((error) => {
+		process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+		process.exitCode = 2;
+	})
+	.finally(releaseTsxCache);
