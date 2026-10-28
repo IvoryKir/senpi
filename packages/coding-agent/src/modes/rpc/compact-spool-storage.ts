@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { CompactReadError } from "./compact-read-lease.ts";
 import { createSpoolDir, removeSpoolDir } from "./compact-spool-dir.ts";
 import {
+	type CompactFileRange,
 	type CompactStorageFailure,
 	type CompactStorageIo,
 	type CompactStorageOperation,
@@ -79,11 +80,16 @@ export abstract class CompactSpoolStorage {
 		if (token !== undefined) await removeSpoolDir(this.dir, token);
 	}
 
-	/** Reads a committed file and rejects a missing, unreadable or short one. */
-	async readFile(path: string, bytes: number, operation: CompactStorageOperation): Promise<Buffer> {
+	/** Reads a committed file, or the `range` of it, and rejects a missing, unreadable or short one. */
+	async readFile(
+		path: string,
+		bytes: number,
+		operation: CompactStorageOperation,
+		range?: CompactFileRange,
+	): Promise<Buffer> {
 		const done = this.beginRead();
 		try {
-			const result = await this.readCommittedFile(path, bytes, operation);
+			const result = await this.readCommittedFile(path, bytes, operation, range);
 			this.assertReadable();
 			return result;
 		} finally {
@@ -91,10 +97,15 @@ export abstract class CompactSpoolStorage {
 		}
 	}
 
-	private async readCommittedFile(path: string, bytes: number, operation: CompactStorageOperation): Promise<Buffer> {
+	private async readCommittedFile(
+		path: string,
+		bytes: number,
+		operation: CompactStorageOperation,
+		range: CompactFileRange | undefined,
+	): Promise<Buffer> {
 		let data: Buffer;
 		try {
-			data = await this.io.readFile(path);
+			data = await this.io.readFile(path, range);
 		} catch (cause) {
 			throw this.readFailure(operation, path, cause);
 		}
@@ -112,7 +123,8 @@ export abstract class CompactSpoolStorage {
 	): Promise<string | undefined> {
 		const path = await this.ensureDir(retainedInMemoryBytes);
 		if (path === undefined) return undefined;
-		const file = join(path, `${operation === "spill_write" ? "leaf" : "page"}-${this.nextFile++}.bin`);
+		const prefix = operation === "spill_write" ? "leaf" : operation === "value_write" ? "value" : "page";
+		const file = join(path, `${prefix}-${this.nextFile++}.bin`);
 		this.pendingIoCopyBytes += data.byteLength;
 		try {
 			await this.io.writeFile(file, data);
@@ -206,7 +218,8 @@ export abstract class CompactSpoolStorage {
 	}
 
 	private fail(operation: CompactStorageOperation, path: string, cause: unknown, retained: number): void {
-		if (operation === "spill_write" || operation === "spool_create") this.halted = true;
+		if (operation === "spill_write" || operation === "value_write" || operation === "spool_create")
+			this.halted = true;
 		this.record({ operation, path, cause: describeCause(cause), retainedInMemoryBytes: retained });
 	}
 

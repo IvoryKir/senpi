@@ -185,6 +185,13 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
   between runs, a refresh while the last end is still bound may set or update that run's stop.
   Goal guards are captured during their bound end's own processing, never inherited from
   another run. Provider errors and policy rejections carry no `lastStop`, even if a deadline fired.
+- Wire-only `observedAt` is the host's ISO wall-clock time when it serializes or enqueues
+  that lifecycle delivery: push, `get_state`, `open_session`, classic stdio, worker-host,
+  TUI-control, and attach replay. Replay re-stamps a wire copy at send time. It is never
+  persisted and never changes `activityRevision.instanceId`, activity revision, `seq`, `epoch`,
+  `since`, completion identity, or activity content. Forwarding preserves the engine owner's
+  activity key, including absent activity; inspecting or replaying never mints a revision.
+  It is not a heartbeat or proof of liveness.
 - Optional `activity` is present only while `state` is `running` and a live activity is known:
   `{ kind: "tool", toolName, toolCallId, since, outstanding }` represents the oldest outstanding
   top-level tool operation, including preparation, approval and dependency waits. Nested calls
@@ -231,6 +238,19 @@ Clients must not notify or settle while `restoring` is true or `persisted` is fa
 Use `completionId` to deduplicate root completion/failure, not `agent_settled` or
 `agent_idle`: a queued result or background source can still own unfinished work.
 An ordinary reply completing is not itself a request to mark a thread Done.
+
+Clients order lifecycle content by session + `seq`, never by wall clock. An equal lifecycle
+`seq` may refresh receipt information and, under the activity ordering rule, the activity projection.
+It never re-runs ordinary state or completion effects. Activity revisions and `observedAt` never
+authorize replacing ordinary lifecycle content at an equal or older lifecycle `seq`.
+An older `seq` never replaces a newer one. Measure "last seen" age on the client's own receipt clock,
+not from `observedAt`. A disconnect never infers a terminal state and never erases a known
+`done`, `failed`, or `cancelled`. An old `running` means "last known running".
+
+Terminal child `lost` means the runner's FINAL loss of custody or contact for that reported
+run. It is not proof that the work or its side effects stopped. A transient transport failure
+must not publish terminal `lost`. Revival uses a higher `runEpoch`; a late same-epoch report
+never reopens a terminal. These delivery rules change no lifecycle transition.
 
 #### request_self_settle
 
@@ -5088,15 +5108,16 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | --- | --- |
 | `auth` | re-authenticate the provider |
 | `request_refused` | send the message again or choose another model; if it keeps failing, re-authenticate `<provider>` |
+| `model_unavailable` | choose another model, or check that your plan or key includes this model |
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
-| `invalid_request` | report it with the code |
+| `invalid_request` | send the message again; if it repeats, choose another model or start a new session |
 | `provider_unavailable` | retry or switch provider |
 | `network` | check connectivity |
-| `unknown` | retry once; if it repeats, switch the model or report the code |
+| `unknown` | send the message again; if it repeats, choose another model |
 
-`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` names the provider and the code or status, for example `the provider returned an error that could not be classified (openai, status 429)`. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. An `unknown` failure the provider answered with HTTP 404 is `model_unavailable` instead: a model endpoint returns 404 for a model id this account cannot use, as the ChatGPT subscription backend does for a model not yet rolled out to the plan. Retry and fallback decisions do not read `failure`.
 
 `request_refused` is an `auth` failure whose credential (same provider, endpoint and key) served a response within the last 10 minutes: the provider refused this one request, and the key may still be valid. If failures persist, re-authenticate the named provider: a recently working key may have been revoked. The failed assistant message carries `credentialServedRecently: true` and keeps the provider's own `errorMessage`. The in-memory record drops expired entries on each record/check and retains at most 1,024 credentials, evicting the least recently served first. Header-based, ADC and SigV4 authentication do not supply an `apiKey`, so their fingerprint reduces to provider + baseUrl; different credentials on that endpoint share the record.
 
@@ -5490,6 +5511,7 @@ Logins are fire-command-then-subscribe: the command answers as soon as the flow 
 
 - `login_start` `{provider}`: responds immediately with `success: true` (flow started). A second `login_start` for the same provider aborts the earlier attempt.
 - `auth_login_url` `{provider, url}`: the URL (or device-code verification URL) the user must open.
+- `auth_login_progress` `{provider, text}`: a status line while the login prepares or runs, for example an extension's `provider_login_start` handler reporting `Downloading Claude Code 2.1.306: 10% of 200 MB`. Zero or more per login, always before `auth_login_end`. Every provider progress and info line is forwarded as written, so `text` may name the local callback address a login listens on (for example `Listening for OpenRouter OAuth callback on http://<host>:<port>/<path>`), the same redirect address the `auth_login_url` already carries; the URL the user must open arrives only in `auth_login_url`. Built-in providers put no authorization code or token in these lines.
 - `auth_login_end` `{provider, success, error?, replaced?, backupPath?}`: exactly one per login; `error` is a non-secret message. When a successful login replaced the provider's credential of the other kind (an OAuth login over a stored API key), `replaced` names that kind (`"api_key"` or `"oauth"`) and `backupPath` is the copy of `auth.json` taken before it (absent when the credential store is not a file). A login of the same kind adds an account and carries neither field.
 - `login_cancel` `{provider}`: aborts the in-flight login; the client then sees `auth_login_end` with `success: false`.
 
