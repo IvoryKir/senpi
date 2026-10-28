@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { assertWorkspaceBuildPrerequisite } from "./support/workspace-build-prerequisite.ts";
 
 /**
  * `cli.ts` historically ran the real agent (`cli-main.ts`) as a spawned child so that an
@@ -21,7 +22,22 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
  * process count: no polling, no sleeps, no platform-specific process-tree walking.
  */
 
+// Without the tsx loader the spawned CLI resolves workspace packages the way a real child does,
+// through their built `dist`. An unbuilt checkout must say so here instead of letting the children
+// die at import, which would leave the status-1 cases passing on the wrong failure.
+assertWorkspaceBuildPrerequisite(import.meta.url);
+
 const CLI_PATH = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+
+/** Model id no catalog can hold, so resolution rejects it before any provider call. */
+const UNKNOWN_MODEL_ID = "definitely-not-a-real-model-id";
+
+/**
+ * The rejection the two status-1 cases are supposed to observe, worded as the product words it in
+ * `src/core/model-resolver.ts`. Asserting the text is what separates "the agent ran and refused the
+ * model" from "the process died of something else and also exited 1".
+ */
+const UNKNOWN_MODEL_ERROR = `Model "${UNKNOWN_MODEL_ID}" not found. Use --list-models to see available models.`;
 
 const probeHookSource = `import { appendFileSync } from "node:fs";
 const report = process.env.SENPI_FAST_PATH_REPORT;
@@ -98,9 +114,11 @@ describe("CLI in-process fast path", () => {
 		});
 
 		test("#when the CLI exits non-zero #then the launcher reports that exact code", () => {
-			const result = runCli(["--model", "definitely-not-a-real-model-id", "--print", "hi"]);
+			const result = runCli(["--model", UNKNOWN_MODEL_ID, "--print", "hi"]);
 
-			// Deterministic failure: an unknown model id is rejected before any provider call.
+			// Deterministic failure: an unknown model id is rejected before any provider call. The text
+			// pins WHICH failure produced the 1, so an import-time crash cannot stand in for it.
+			expect(result.stderr).toContain(UNKNOWN_MODEL_ERROR);
 			expect(result.status).toBe(1);
 			expect(result.records).toHaveLength(1);
 		});
@@ -111,8 +129,11 @@ describe("CLI in-process fast path", () => {
 			// Port 0 lets the OS pick a free port, so concurrent runs cannot collide. The launch must
 			// reach the agent: a cached `--help` is answered before the isolation decision, because no
 			// agent runs for a help screen and there is no socket to hand over.
-			const result = runCli(["--model", "definitely-not-a-real-model-id", "--print", "hi"], "--inspect=127.0.0.1:0");
+			const result = runCli(["--model", UNKNOWN_MODEL_ID, "--print", "hi"], "--inspect=127.0.0.1:0");
 
+			// The spawned child inherits this process's stderr, so the agent's rejection proves the child
+			// reached model resolution rather than dying at import with the same exit code.
+			expect(result.stderr).toContain(UNKNOWN_MODEL_ERROR);
 			expect(result.status).toBe(1);
 			expect(result.records).toHaveLength(2);
 			const entries = result.records.map((record) => record.entry);
