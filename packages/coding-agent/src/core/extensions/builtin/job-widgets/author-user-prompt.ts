@@ -9,8 +9,8 @@ import { JOB_WIDGET_RESPOND_TOOL } from "./author-system-prompt.ts";
 import type { JobWidgetAuthorRequest, JobWidgetBrief } from "./author-types.ts";
 import { truncateText } from "./format.ts";
 
-export const MAX_BRIEF_CHARS = 1500;
-export const MAX_REJECTED_ANSWER_CHARS = 4000;
+const MAX_BRIEF_CHARS = 1500;
+const MAX_REJECTED_ANSWER_CHARS = 4000;
 
 const FENCE = "```";
 
