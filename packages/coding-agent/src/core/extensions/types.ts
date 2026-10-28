@@ -2646,8 +2646,8 @@ export interface ExtensionAPI {
 	 * extension that handles `mcp_servers_change` connects later registrations right away.
 	 * Registering a name again replaces this extension's earlier registration. When several extensions
 	 * register the same name, the declaration from the extension earliest in the session's extension
-	 * order is kept (inline and built-in factories come before file extensions), whichever registered
-	 * first in time. The registration is not saved: register again on every load.
+	 * order is kept, regardless of which registered first (see `getMcpServers` in docs/extensions.md
+	 * for that order). The registration is not saved: register again on every load.
 	 * Throws for invalid configs.
 	 */
 	registerMcpServer(name: string, config: McpServerDeclaration): void;

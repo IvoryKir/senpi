@@ -2121,13 +2121,16 @@ extension are left alone.
 
 Every MCP server registered by the extensions of the current session, in the
 session's extension order, as `{ name, config, extensionPath }` copies
-(`RegisteredMcpServer`). That order puts inline and built-in extension factories
-before file extensions, whatever order they loaded in. Before the session binds
-its extensions (while extension factories run), the list holds only the
-extensions loaded so far, in load order. On the startup pass that resolves
-project trust, a trusted project's own extensions load after the factories, so
-a factory reading the list then does not see their servers; without that pass,
-every file extension loads before the factories. Extensions the resource loader
+(`RegisteredMcpServer`). That order puts inline extension factories and the
+default built-in extensions before file extensions, whatever order they loaded
+in; a built-in loaded by path with `-e builtin:<id>` is ordered with the file
+paths instead. Before the session binds its extensions (while extension
+factories run), the list holds only the extensions loaded so far, in load order.
+When a session is created with a pass that resolves project trust (at startup,
+or on a switch into a folder whose trust is not cached yet), a trusted project's
+own extensions load after the factories, so a factory reading the list then does
+not see their servers; without that pass, every file extension loads before the
+factories. Extensions the resource loader
 left out of the session (replaced, disabled, filtered) contribute nothing, and
 on a name clash the registration from the extension earliest in the session's
 extension order wins. For extensions that connect MCP servers
