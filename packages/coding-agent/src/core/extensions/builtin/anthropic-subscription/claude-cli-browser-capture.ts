@@ -1,4 +1,13 @@
-import { type FSWatcher, chmodSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import {
+	type FSWatcher,
+	chmodSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	watch,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,7 +73,15 @@ export function createClaudeCliBrowserCapture(
 		flush,
 		dispose: () => {
 			watcher?.close();
-			rmSync(dir, { recursive: true, force: true });
+			try {
+				// A browser helper can outlive the CLI even after its stdio closes. Revoke its
+				// absolute sink path before deletion: late opens fail, already-open files unlink safely.
+				const disposedDir = `${dir}-disposed`;
+				renameSync(dir, disposedDir);
+				rmSync(disposedDir, { recursive: true, force: true });
+			} catch {
+				// Private scratch cleanup must never prevent the login outcome from settling.
+			}
 		},
 	};
 }
