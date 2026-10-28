@@ -3,7 +3,7 @@
  * starts them; this leaf only records them, so a caller that must not remove an agent directory under
  * a running pass (a test teardown, senpi#4382) can join them without loading the gc module graph.
  */
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const passesRunning = new Map<string, Promise<void>>();
 
@@ -32,7 +32,9 @@ export async function settledOpportunisticHostGcWithin(path: string): Promise<vo
 	await Promise.all(opportunisticHostGcWithin(path).map(settledOpportunisticHostGc));
 }
 
+// Lexical containment: a removal through another spelling of the same directory (a symlinked alias such
+// as macOS /var vs /private/var) is not joined.
 function contains(parent: string, child: string): boolean {
 	const path = relative(resolve(parent), resolve(child));
-	return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+	return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }

@@ -28,6 +28,8 @@ interface RegistryHolder {
 
 // Every test file evaluates its own copy of the registry module, while `node:fs` is shared by the
 // whole worker: the patch is installed once and always asks the current file's registry.
+// After `vi.resetModules()`, a re-imported `host-gc-pass.ts` records its passes in a fresh registry this
+// guard does not see; a test that resets modules and then calls `ensureHost` must join explicitly.
 const HOLDER = Symbol.for("senpi.test.hostScratchRemovalGuard");
 
 function isRegistryHolder(value: unknown): value is RegistryHolder {
