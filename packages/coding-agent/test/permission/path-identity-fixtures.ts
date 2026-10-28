@@ -1,7 +1,4 @@
-import {
-	type MountSnapshot,
-	readMountTable,
-} from "../../src/core/extensions/builtin/permission-system/alias-detector.ts";
+import { type MountSnapshot, readMountTable } from "../../src/core/extensions/builtin/permission-system/mount-table.ts";
 import type { ResolverTransport } from "../../src/core/extensions/builtin/permission-system/path-identity-host.ts";
 import type {
 	ResolverRequest,

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseMountTable } from "../../src/core/extensions/builtin/permission-system/alias-detector.ts";
 import { createLocalEventEmitter } from "../../src/core/extensions/builtin/permission-system/events.ts";
+import { parseMountTable } from "../../src/core/extensions/builtin/permission-system/mount-table.ts";
 import { PATH_IDENTITY_VERSION } from "../../src/core/extensions/builtin/permission-system/path-identity.ts";
 import {
 	BREAKER_BACKOFF_MAX_MS,

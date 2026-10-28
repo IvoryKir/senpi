@@ -1,4 +1,5 @@
-import { createMountRewrite, type MountSnapshot, volumeKeyFor } from "./alias-detector.ts";
+import { createMountRewrite, volumeKeyFor } from "./alias-detector.ts";
+import type { MountSnapshot } from "./mount-table.ts";
 import type { CanonicalPath, CanonicalRule } from "./path-identity.ts";
 import {
 	type BreakerState,

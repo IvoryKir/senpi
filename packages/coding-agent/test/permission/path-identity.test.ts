@@ -27,17 +27,19 @@ import {
 	createMountRewrite,
 	DETECTOR_MAX_ENTRIES,
 	DETECTOR_MAX_READDIR,
-	type MountSnapshot,
 	mountAliasRoots,
 	oracle,
-	parseDarwinMountLine,
-	parseLinuxMountLine,
-	parseMountTable,
 	readFirmlinks,
-	readMountTable,
 	REAL_FS,
 	volumeKeyFor,
 } from "../../src/core/extensions/builtin/permission-system/alias-detector.ts";
+import {
+	type MountSnapshot,
+	parseDarwinMountLine,
+	parseLinuxMountLine,
+	parseMountTable,
+	readMountTable,
+} from "../../src/core/extensions/builtin/permission-system/mount-table.ts";
 import {
 	type CanonicalPath,
 	createPathIdentity,
@@ -352,14 +354,13 @@ describe("alias detector: mount table parser (design 5.5, R7-M1)", () => {
 		expect(parseLinuxMountLine("too-few")).toBeUndefined();
 	});
 
-	it("flags a snapshot with a broken line, a duplicate mount point or no root as degraded", () => {
+	it("flags a snapshot with a broken line or no root as degraded; a repeated darwin mount point is ambiguous", () => {
 		expect(parseMountTable("/dev/disk1 on / (apfs, local)\nbroken line", "darwin").degraded).toBe(true);
-		expect(parseMountTable("/dev/disk1 on / (apfs, local)\n/dev/disk2 on / (apfs, local)", "darwin").degraded).toBe(
-			true,
-		);
+		const repeated = parseMountTable("/dev/disk1 on / (apfs, local)\n/dev/disk2 on / (apfs, local)", "darwin");
+		expect(repeated).toMatchObject({ degraded: false, ambiguous: ["/"] });
 		expect(parseMountTable("/dev/disk1 on /Volumes/X (apfs, local)", "darwin").degraded).toBe(true);
 		const good = parseMountTable("/dev/disk1 on / (apfs, local)\n/dev/disk2 on /Volumes/X (apfs, local)", "darwin");
-		expect(good.degraded).toBe(false);
+		expect(good).toMatchObject({ degraded: false, ambiguous: [] });
 		expect(good.mounts.map((mount) => mount.on)).toEqual(["/Volumes/X", "/"]);
 	});
 
@@ -392,16 +393,19 @@ describe("alias detector: mount table parser (design 5.5, R7-M1)", () => {
 		expect([...REAL_FS].sort()).toEqual(["apfs", "btrfs", "nfs", "overlay", "tmpfs", "virtiofs"]);
 	});
 
-	it("importing the module performs no filesystem side effect (R7-L2)", () => {
-		const source = readFileSync(
-			resolve(here, "../../src/core/extensions/builtin/permission-system/alias-detector.ts"),
-			"utf8",
-		);
-		const topLevel = source
-			.split("\n")
-			.filter((line) => /^(const|let|var) .*=.*\(/.test(line) && !/^(const|let|var) \w+ = \//.test(line));
-		expect(topLevel.filter((line) => /Sync\(|spawn|readMountTable\(/.test(line))).toEqual([]);
-	});
+	it.each(["alias-detector.ts", "mount-table.ts"])(
+		"importing %s performs no filesystem side effect (R7-L2)",
+		(file) => {
+			const source = readFileSync(
+				resolve(here, "../../src/core/extensions/builtin/permission-system", file),
+				"utf8",
+			);
+			const topLevel = source
+				.split("\n")
+				.filter((line) => /^(const|let|var) .*=.*\(/.test(line) && !/^(const|let|var) \w+ = \//.test(line));
+			expect(topLevel.filter((line) => /Sync\(|spawn|readMountTable\(/.test(line))).toEqual([]);
+		},
+	);
 
 	it.skipIf(!linux)("the runner's own mount table is not degraded (R8-L1)", () => {
 		const snapshot = parseMountTable(readFileSync("/proc/self/mounts", "utf8"), "linux");
