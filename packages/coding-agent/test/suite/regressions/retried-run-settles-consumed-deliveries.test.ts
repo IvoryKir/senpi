@@ -4,9 +4,17 @@
  * (interrupted) run was settled there, and the retried run's `idle()` settled only itself: the first run's consumed
  * records stayed open and the session reported `waiting_background` with nothing running, forever.
  */
-import { expect, it } from "vitest";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
+import { afterEach, expect, it } from "vitest";
+import goalExtension from "../../../src/core/extensions/builtin/goal/index.ts";
 import { SessionLifecycleController } from "../../../src/core/session-lifecycle.ts";
 import { SessionManager } from "../../../src/core/session-manager.ts";
+import { createHarness, type Harness } from "../harness.ts";
+
+const harnesses: Harness[] = [];
+afterEach(() => {
+	for (const harness of harnesses.splice(0)) harness.cleanup();
+});
 
 function lifecycle(onCustodyWrite: () => void = () => {}): SessionLifecycleController {
 	const manager = SessionManager.inMemory();
@@ -59,15 +67,25 @@ it("settles the deliveries a provider-failed run consumed when its auto-retry st
 	expect(controller.snapshot.state).toBe("done");
 });
 
-it("a run that ends through idle() still settles its own consumed deliveries", () => {
-	const controller = lifecycle();
-	controller.restoreComplete();
-	controller.startRun();
-	consumeDeliveryIntoCurrentRun(controller, "delivery:omo-senpi:wake:1");
-	controller.idle();
+it("an AgentSession whose queued goal continuations replace each run leaves no consumed delivery open", async () => {
+	const harness = await createHarness({ persistSession: true, extensionFactories: [goalExtension] });
+	harnesses.push(harness);
+	await harness.session.bindExtensions({ mode: "rpc", shutdownHandler: () => {} });
+	harness.setResponses([
+		fauxAssistantMessage([fauxToolCall("create_goal", { objective: "Keep working" })], { stopReason: "toolUse" }),
+		fauxAssistantMessage([fauxText("Goal ready")]),
+	]);
 
-	expect(controller.obligations.activeCount).toBe(0);
-	expect(controller.snapshot.state).toBe("done");
+	await harness.session.prompt("set a goal");
+
+	const lastStateByDelivery = new Map<string, unknown>();
+	for (const entry of harness.sessionManager.getEntries()) {
+		if (entry.type !== "custom" || entry.customType !== "work-custody") continue;
+		const record = entry.data as { readonly key: string; readonly state: unknown };
+		lastStateByDelivery.set(record.key, record.state);
+	}
+	expect(lastStateByDelivery.size).toBeGreaterThan(1);
+	expect([...lastStateByDelivery.values()]).not.toContain("consumed");
 });
 
 it("writes no custody record when a run starts and there is nothing to settle", () => {
