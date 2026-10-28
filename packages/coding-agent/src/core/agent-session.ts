@@ -769,6 +769,11 @@ export type AgentSessionEvent =
 	// terminal result arrive here, because an interactive browser round-trip
 	// cannot fit inside the request timeout.
 	| { type: "auth_login_url"; provider: string; url: string }
+	/**
+	 * A login progress line, such as a `provider_login_start` handler's download status (senpi#4436). The line is
+	 * `text`, not `message`: event consumers detect chat-message events with `"message" in event`.
+	 */
+	| { type: "auth_login_progress"; provider: string; text: string }
 	| {
 			type: "auth_login_end";
 			provider: string;
@@ -12757,9 +12762,17 @@ export class AgentSession {
 		);
 		if (degraded.kind === "fail") {
 			const waitSeconds = Math.ceil(degraded.hintMs / 1000);
+			const until = new Date(Date.now() + degraded.hintMs).toLocaleString("en-US", {
+				year: "numeric",
+				month: "short",
+				day: "numeric",
+				hour: "numeric",
+				minute: "2-digit",
+				timeZoneName: "short",
+			});
 			finishRetryAttempt(
 				this._retryAttempt,
-				`Provider requested a ${waitSeconds}s wait before retrying and no usable fallback model is available. ${message.errorMessage ?? ""}`,
+				`The provider asked to wait ${waitSeconds}s (until ${until}) before the next request, and no fallback model can take the turn. Wait until then, or choose another model. Provider error: ${message.errorMessage ?? "none"}`,
 			);
 			return undefined;
 		}
