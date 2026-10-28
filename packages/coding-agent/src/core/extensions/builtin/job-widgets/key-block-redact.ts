@@ -48,6 +48,8 @@ export class PrivateKeyLineFilter {
 	#block: string | undefined;
 	/** The source skipped text inside the block: a line that cannot be key material proves the END was skipped. */
 	#blockCrossedGap = false;
+	/** Text was skipped since the last non-body line: a held run may be a key whose BEGIN marker was skipped. */
+	#gapBeforeHeld = false;
 	#held: string[] = [];
 
 	push(line: string): string[] {
@@ -61,7 +63,8 @@ export class PrivateKeyLineFilter {
 		}
 		const out: string[] = [];
 		if (this.#block === undefined && startsWithEnd(line)) this.#held = [];
-		else out.push(...this.#held.splice(0));
+		else out.push(...this.#releaseHeld());
+		this.#gapBeforeHeld = false;
 		const kept = this.#scan(line);
 		if (kept !== undefined) out.push(kept);
 		return out;
@@ -73,6 +76,7 @@ export class PrivateKeyLineFilter {
 	 */
 	cut(): string[] {
 		if (this.#block !== undefined) this.#blockCrossedGap = true;
+		this.#gapBeforeHeld = true;
 		if (this.#held.length === 0) return [];
 		this.#held = [];
 		return [PRIVATE_KEY_MARKER];
@@ -80,11 +84,19 @@ export class PrivateKeyLineFilter {
 
 	/** The source ended: a held run met no END marker, so it is released. The filter starts over. */
 	finish(): string[] {
-		const out = this.#held;
-		this.#held = [];
+		const out = this.#releaseHeld();
 		this.#block = undefined;
 		this.#blockCrossedGap = false;
+		this.#gapBeforeHeld = false;
 		return out;
+	}
+
+	/** The held run as output: a run that began after skipped text may be a key body, so it is redacted. */
+	#releaseHeld(): string[] {
+		const held = this.#held;
+		this.#held = [];
+		if (held.length === 0) return [];
+		return this.#gapBeforeHeld ? [PRIVATE_KEY_MARKER] : held;
 	}
 
 	/** What remains of `line` once key blocks are replaced, or `undefined` when nothing of it remains. */

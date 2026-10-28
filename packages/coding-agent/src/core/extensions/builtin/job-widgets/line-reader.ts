@@ -65,10 +65,10 @@ export class SourceLineReader {
 		}
 		this.#cursor = Math.max(this.#cursor, chunk.end);
 		if (this.#torn) {
-			const lineEnd = text.search(/[\r\n]/);
-			if (lineEnd === -1) text = "";
+			const lineEnd = /\r\n|\r|\n/.exec(text);
+			if (lineEnd === null) text = "";
 			else {
-				text = text.slice(lineEnd + 1);
+				text = text.slice(lineEnd.index + lineEnd[0].length);
 				this.#torn = false;
 			}
 		}
