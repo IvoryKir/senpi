@@ -32,7 +32,10 @@ export type JobWidgetRequestOutcome =
 	| { readonly kind: "skipped"; readonly reason: string }
 	/** Invalid twice (or once with no request left for the retry); without a spec in place the job falls back. */
 	| { readonly kind: "rejected"; readonly errors: readonly string[] }
-	/** The author has no model: the job is not asked again. */
+	/**
+	 * The author has no model: the call is not counted against the job or the hourly cap, and the
+	 * session asks again once {@link JobWidgetRequestLimits.noModelRetryMs} has passed.
+	 */
 	| { readonly kind: "unavailable" }
 	| { readonly kind: "failed"; readonly error: unknown }
 	| { readonly kind: "aborted" };
@@ -64,6 +67,8 @@ export class JobWidgetRequestController {
 	/** Start times of author calls in the last {@link REQUEST_WINDOW_MS}, oldest first. */
 	readonly #sent: number[] = [];
 	#inFlight = 0;
+	/** Until when no request starts, after the author last found no model. */
+	#noModelUntil = Number.NEGATIVE_INFINITY;
 
 	constructor(options: JobWidgetRequestControllerOptions) {
 		this.#author = options.author;
@@ -86,6 +91,7 @@ export class JobWidgetRequestController {
 	/** Starts the request `job` is due, or returns `undefined` when none is (or a session cap holds it back). */
 	maybeRequest(job: JobWidgetRequestJob): Promise<JobWidgetRequestOutcome> | undefined {
 		const now = this.#now();
+		if (now < this.#noModelUntil) return undefined;
 		if (this.#inFlight >= this.#limits.maxInFlight || !this.#windowHasRoom(now)) return undefined;
 		let state = this.#states.get(job.id);
 		if (!state) {
@@ -156,12 +162,17 @@ export class JobWidgetRequestController {
 		let errors: readonly string[] = [];
 		for (let round = 0; round < ROUNDS && this.#canSend(state); round++) {
 			state.requests += 1;
-			this.#sent.push(this.#now());
+			const sentAt = this.#now();
+			this.#sent.push(sentAt);
 			const request = rejected ? redactAuthorRequest({ ...raw, rejected }, this.#redact) : base;
 			const answer = await this.#author(request, signal);
 			if (signal.aborted) return { kind: "aborted" };
 			if (answer === undefined) {
-				state.stopped = true;
+				// No call was made: give back the job's request and the hourly slot reserved for it.
+				state.requests -= 1;
+				const slot = this.#sent.indexOf(sentAt);
+				if (slot !== -1) this.#sent.splice(slot, 1);
+				this.#noModelUntil = this.#now() + this.#limits.noModelRetryMs;
 				return { kind: "unavailable" };
 			}
 			const skip = jobWidgetSkip(answer);
