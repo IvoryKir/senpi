@@ -45,20 +45,77 @@ function substitutionEnd(text, index) {
 	if (text[index] === "`") return text.indexOf("`", index + 1);
 	if (text[index] !== "$" || text[index + 1] !== "(") return undefined;
 	let depth = 0;
+	const cases = [];
+	let commandStart = true;
 	for (let at = index + 1; at < text.length; at++) {
 		const char = text[at];
+		const currentCase = cases.at(-1);
+		const atCaseDepth = currentCase?.depth === depth;
 		if (char === "\\") {
+			if (text[at + 1] !== "\n") {
+				if (atCaseDepth && currentCase.header === 2) currentCase.header = 1;
+				if (atCaseDepth && currentCase.pattern) currentCase.patternStarted = true;
+				commandStart = false;
+			}
 			at++;
 		} else if (char === "#" && BEFORE_COMMENT.test(text[at - 1])) {
 			at = text.indexOf("\n", at);
 			if (at === -1) return -1;
-		} else if (char === "'" || char === '"') {
+			commandStart = true;
+		} else if (char === "'" || char === '"' || char === "`") {
+			if (atCaseDepth && currentCase.header === 2) currentCase.header = 1;
+			if (atCaseDepth && currentCase.pattern) currentCase.patternStarted = true;
 			at = closingQuote(text, at);
+			commandStart = false;
 		} else if (char === "(") {
-			depth++;
+			// A case pattern may open with "(", but its mandatory ")" never closes the substitution.
+			if (atCaseDepth && currentCase.pattern && !currentCase.patternStarted) currentCase.patternStarted = true;
+			else depth++;
+			commandStart = !currentCase?.pattern || text[at - 1] === "$";
 		} else if (char === ")") {
+			if (atCaseDepth && currentCase.pattern) {
+				currentCase.pattern = false;
+				commandStart = true;
+				continue;
+			}
 			depth--;
 			if (depth === 0) return at;
+			commandStart = false;
+		} else if (char === ";") {
+			const terminator = text.startsWith(";;&", at) ? 3 : text[at + 1] === ";" || text[at + 1] === "&" ? 2 : 0;
+			if (atCaseDepth && currentCase.header === 0 && !currentCase.pattern && terminator > 0) {
+				currentCase.pattern = true;
+				currentCase.patternStarted = false;
+				at += terminator - 1;
+			}
+			commandStart = true;
+		} else if (char === "\n" || char === "|" || char === "&") {
+			commandStart = true;
+		} else if (!WORD_END.test(char)) {
+			let end = at + 1;
+			while (end < text.length && !WORD_END.test(text[end]) && !["'", '"', "\\", "`"].includes(text[end])) end++;
+			const word = text.slice(at, end);
+			if (atCaseDepth && currentCase.header === 2) {
+				currentCase.header = 1;
+				commandStart = false;
+			} else if (atCaseDepth && currentCase.header === 1 && word === "in") {
+				currentCase.header = 0;
+				currentCase.pattern = true;
+				commandStart = false;
+			} else if (atCaseDepth && currentCase.pattern) {
+				if (word === "esac" && !currentCase.patternStarted) cases.pop();
+				else currentCase.patternStarted = true;
+				commandStart = false;
+			} else if (word === "case" && commandStart) {
+				cases.push({ depth, header: 2, pattern: false, patternStarted: false });
+				commandStart = false;
+			} else if (word === "esac" && commandStart && atCaseDepth) {
+				cases.pop();
+				commandStart = false;
+			} else {
+				commandStart = commandStart && /^(?:if|then|do|else|elif|while|until|!|\{)$/u.test(word);
+			}
+			at = end - 1;
 		}
 	}
 	return -1;
