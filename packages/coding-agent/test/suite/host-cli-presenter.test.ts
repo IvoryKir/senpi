@@ -64,13 +64,13 @@ async function busy(qa: Awaited<ReturnType<typeof hostCliSandbox>>) {
 			peer.deadlineMs,
 		),
 	);
-	const started = peer.waitFor((record) => record.type === "agent_start");
 	await acknowledgedRequest(
 		peer.socket,
 		{ id: "prompt", type: "prompt", sessionId, message: "hold this turn" },
 		peer.deadlineMs,
 	);
-	await started;
+	// Armed after the accepted prompt, not before it: waitFor also matches records already received.
+	await peer.waitFor((record) => record.type === "agent_start");
 	return { peer, sessionId };
 }
 
