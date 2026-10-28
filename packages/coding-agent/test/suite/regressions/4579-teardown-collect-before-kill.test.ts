@@ -1,10 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { processAlive, processesUnder, waitForPidGone } from "../../helpers/spawned-host-reaper.ts";
+import {
+	collectSpawnedHosts,
+	processAlive,
+	processesUnder,
+	waitForPidGone,
+} from "../../helpers/spawned-host-reaper.ts";
 import { teardown } from "../rpc-public-auth-harness.ts";
 
 const fixture = join(import.meta.dirname, "../../fixtures/reparented-grandchild.mjs");
@@ -54,5 +60,13 @@ describe.skipIf(process.platform === "win32")("teardown collects the process tre
 
 		expect(processAlive(descendant)).toBe(false);
 		expect(existsSync(root)).toBe(false);
+	}, 60_000);
+
+	it("never collects a handle that has already exited, whose pid another process may now hold", async () => {
+		const exited = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+		await once(exited, "exit");
+		expect(exited.pid).toBeTypeOf("number");
+
+		expect(collectSpawnedHosts({ children: [exited] })).not.toContain(exited.pid);
 	}, 60_000);
 });

@@ -57,7 +57,10 @@ export interface SpawnedHostScope {
  */
 export function collectSpawnedHosts(scope: SpawnedHostScope): number[] {
 	if (process.platform === "win32") return [];
+	// An already-exited handle is skipped, never collected: its pid can have been reused by an
+	// unrelated process on a shared host, and the kill below would take that tree down instead.
 	const handles = (scope.children ?? [])
+		.filter((child) => child.exitCode === null && child.signalCode === null)
 		.map((child) => child.pid)
 		.filter((pid): pid is number => pid !== undefined && pid !== process.pid);
 	const named = (scope.roots ?? []).flatMap((root) => processesUnder(root));
