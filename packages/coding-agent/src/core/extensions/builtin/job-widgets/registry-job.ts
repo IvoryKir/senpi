@@ -3,6 +3,7 @@
  * fresh one whenever a spec is installed), and where its spec request stands. A job joins the
  * session's `job_widget_state` once its first spec request starts; before that its row is plain.
  */
+import type { JobWidgetRedact } from "./author-redact.ts";
 import type { JobWidgetBrief, JobWidgetJobKind } from "./author-types.ts";
 import type { LineMatcher } from "./matcher.ts";
 import type { JobWidgetRequestOutcome } from "./request-controller.ts";
@@ -33,18 +34,29 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 	runtime: JobWidgetRuntime;
 	settled = false;
 	readonly #matcher: LineMatcher;
+	readonly #redact: JobWidgetRedact;
 	#asked = false;
 	#authoring = false;
 	#skippedAtMs: number | undefined;
 
-	constructor(input: JobWidgetJobInput, matcher: LineMatcher) {
+	constructor(input: JobWidgetJobInput, matcher: LineMatcher, redact: JobWidgetRedact) {
 		this.id = input.id;
 		this.kind = input.kind;
 		this.startTime = input.startedAtMs ?? Date.now();
 		this.sources = input.sources;
 		this.brief = { ...input.brief, kind: input.kind };
 		this.#matcher = matcher;
-		this.runtime = new JobWidgetRuntime({ spec: undefined, matcher, startTime: this.startTime });
+		this.#redact = redact;
+		this.runtime = this.#newRuntime(undefined);
+	}
+
+	#newRuntime(spec: JobWidgetRuntime["spec"]): JobWidgetRuntime {
+		return new JobWidgetRuntime({
+			spec,
+			matcher: this.#matcher,
+			startTime: this.startTime,
+			redactLine: this.#redact,
+		});
 	}
 
 	ingest(): void {
@@ -59,7 +71,7 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 	requestSettled(outcome: JobWidgetRequestOutcome): void {
 		this.#authoring = false;
 		if (outcome.kind === "installed") {
-			this.runtime = new JobWidgetRuntime({ spec: outcome.spec, matcher: this.#matcher, startTime: this.startTime });
+			this.runtime = this.#newRuntime(outcome.spec);
 			this.ingest();
 		} else if (outcome.kind === "skipped" && !this.runtime.spec) {
 			this.#skippedAtMs = Date.now();
@@ -73,8 +85,8 @@ export class JobWidgetJob implements JobWidgetRequestJob {
 		if (!this.#asked) return undefined;
 		const brief = this.brief;
 		const derived = this.runtime.derive({
-			label: brief.intent ?? brief.task ?? brief.command ?? this.id,
-			...(brief.stage === undefined ? {} : { stage: brief.stage }),
+			label: this.#redact(brief.intent ?? brief.task ?? brief.command ?? this.id),
+			...(brief.stage === undefined ? {} : { stage: this.#redact(brief.stage) }),
 			lineStage: this.kind === "bash",
 			authoring: this.#authoring,
 			settled: this.settled,

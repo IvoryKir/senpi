@@ -25,4 +25,5 @@ export * from "./state-publisher.ts";
 export * from "./text-tap.ts";
 export * from "./value-parse.ts";
 export * from "./view-build.ts";
+export * from "./view-redact.ts";
 export * from "./view-types.ts";

@@ -5,7 +5,7 @@
  * enough to author) and runs only while some job is still open. Every refresh offers the session's
  * state to the publisher, which sends it only when it changed and at most once a second.
  */
-import type { JobWidgetRedact } from "./author-redact.ts";
+import { createWidgetRedactor, type JobWidgetRedact } from "./author-redact.ts";
 import type { JobWidgetAuthor } from "./author-types.ts";
 import type { LineMatcher } from "./matcher.ts";
 import { defaultLineMatcher } from "./re2-matcher.ts";
@@ -49,6 +49,7 @@ const INERT_HANDLE: JobWidgetSourceHandle = {
 export class JobWidgetRegistry {
 	readonly sessionId: string;
 	readonly #matcher: LineMatcher;
+	readonly #redact: JobWidgetRedact;
 	readonly #controller: JobWidgetRequestController;
 	readonly #publisher: JobWidgetStatePublisher;
 	readonly #jobs = new Map<string, JobWidgetJob>();
@@ -60,20 +61,21 @@ export class JobWidgetRegistry {
 	constructor(options: JobWidgetRegistryOptions) {
 		this.sessionId = options.sessionId;
 		this.#matcher = options.matcher ?? defaultLineMatcher;
+		this.#redact = createWidgetRedactor(options.obfuscate);
 		this.#controller = new JobWidgetRequestController({
 			author: options.author,
 			matcher: this.#matcher,
 			...(options.limits === undefined ? {} : { limits: options.limits }),
 			...(options.obfuscate === undefined ? {} : { obfuscate: options.obfuscate }),
 		});
-		this.#publisher = new JobWidgetStatePublisher(options.publish);
+		this.#publisher = new JobWidgetStatePublisher(options.publish, this.#redact);
 	}
 
 	add(input: JobWidgetJobInput): JobWidgetSourceHandle {
 		if (this.#disposed) return INERT_HANDLE;
 		const previous = this.#jobs.get(input.id);
 		if (previous) this.#forget(previous);
-		const job = new JobWidgetJob(input, this.#matcher);
+		const job = new JobWidgetJob(input, this.#matcher, this.#redact);
 		this.#jobs.set(job.id, job);
 		this.#refresh(job);
 		this.#ensureTicker();
@@ -94,6 +96,11 @@ export class JobWidgetRegistry {
 				if (live()) this.#forget(job);
 			},
 		};
+	}
+
+	/** The session's state as clients receive it: every view redacted. */
+	state(): JobWidgetState {
+		return this.#publisher.redacted(this.snapshot());
 	}
 
 	snapshot(): JobWidgetState {

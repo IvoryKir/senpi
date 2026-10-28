@@ -49,6 +49,7 @@ describe("job widgets on background bash sessions", () => {
 		const sent = JSON.stringify(authorRequests[0]?.context);
 		expect(sent).toContain("Time: 00:03.90 (Saving");
 		expect(sent).not.toContain(PRINTED_TOKEN);
+		expect(JSON.stringify(log.states)).not.toContain(PRINTED_TOKEN);
 	}, 30_000);
 
 	it("sends job_widget_state to RPC clients through the extension event path", async () => {

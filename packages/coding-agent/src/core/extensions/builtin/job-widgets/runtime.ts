@@ -51,6 +51,11 @@ export interface JobWidgetRuntimeOptions {
 	matcher: LineMatcher;
 	startTime: number;
 	now?: () => number;
+	/**
+	 * Applied to every complete line before it is matched or kept. Views cut long text, and a cut
+	 * token no longer looks like one to a redactor, so secrets are removed before any cut.
+	 */
+	redactLine?: (line: string) => string;
 }
 
 export class JobWidgetRuntime {
@@ -58,6 +63,7 @@ export class JobWidgetRuntime {
 	readonly #matcher: LineMatcher;
 	readonly #startTime: number;
 	readonly #now: () => number;
+	readonly #redactLine: ((line: string) => string) | undefined;
 	readonly #readers = new Map<string, SourceLineReader>();
 	readonly #stats = new Map<string, SourceStats>();
 	readonly #matchers = new Map<string, SourceMatcher | null>();
@@ -73,6 +79,7 @@ export class JobWidgetRuntime {
 		this.#matcher = options.matcher;
 		this.#startTime = options.startTime;
 		this.#now = options.now ?? Date.now;
+		this.#redactLine = options.redactLine;
 		this.#store = new FieldStore(keyedFields(options.spec));
 	}
 
@@ -108,7 +115,9 @@ export class JobWidgetRuntime {
 				reader = new SourceLineReader(source);
 				this.#readers.set(source.id, reader);
 			}
-			const { lines, end } = reader.read(flush);
+			const { lines: read, end } = reader.read(flush);
+			const redactLine = this.#redactLine;
+			const lines = redactLine ? read.map((line) => redactLine(line)) : read;
 			let stats = this.#stats.get(source.id);
 			if (!stats) {
 				stats = newSourceStats(source.id, source.label);

@@ -80,9 +80,9 @@ export function registerJobWidgetSource(registration: JobWidgetSourceRegistratio
 	return sessions.get(sessionId)?.registry.add(input);
 }
 
-/** The session's current widget state, or `undefined` when the session has no widgets. */
+/** The session's current widget state (views redacted), or `undefined` when the session has no widgets. */
 export function getJobWidgetState(sessionId: string): JobWidgetState | undefined {
-	return sessions.get(sessionId)?.registry.snapshot();
+	return sessions.get(sessionId)?.registry.state();
 }
 
 /**
