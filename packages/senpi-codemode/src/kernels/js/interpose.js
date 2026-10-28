@@ -50,9 +50,9 @@ const cleanupExecFile = (...args) => {
 };
 const { dirname } = process.getBuiltinModule("node:path");
 const permissionIO = {
-	read(raw, actual) { checkPath(authorize, "read", raw); return originals.readFile(actual, "utf8"); },
+	read(raw, actual) { checkPath(authorize, "read", raw, { executed: actual }); return originals.readFile(actual, "utf8"); },
 	async write(raw, actual, data) {
-		checkPath(authorize, "write", raw);
+		checkPath(authorize, "write", raw, { executed: actual });
 		await originals.mkdir(dirname(actual), { recursive: true });
 		await originals.writeFile(actual, data);
 	},

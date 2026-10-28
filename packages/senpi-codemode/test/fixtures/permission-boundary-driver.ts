@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { JavaScriptKernel } from "../../src/kernels/js/context-manager.ts";
+import { createIdentityDecider } from "./path-identity.ts";
 import { capabilityCases, resourceCases } from "./permission-boundary-cases.ts";
 
 const root = mkdtempSync(join(tmpdir(), "permission-boundaries-"));
@@ -18,7 +19,6 @@ try {
 			writeFileSync(p, "{}");
 			writeFileSync(addon, "");
 			const denied = new Set<string>();
-			const calls: { tool: string; path?: string }[] = [];
 			const kernel = new JavaScriptKernel({
 				sessionId: crypto.randomUUID(),
 				cwd: root,
@@ -27,13 +27,9 @@ try {
 				permissions: {
 					checkDeadlineMs: 120_000,
 					state: () => ({ active, epoch: 1, rules: [{ permission: "read", pattern: "boundary", layer: "user" }] }),
-					decide: (_token, call) => {
-						calls.push({ tool: call.tool, ...(call.input.path ? { path: call.input.path } : {}) });
-						return (call.input.path && denied.has(call.input.path)) ||
-							(call.input.command && [...denied].some((path) => call.input.command?.includes(path)))
-							? { action: "deny", rule: { permission: call.tool, pattern: "boundary", layer: "user" } }
-							: { action: "pass" };
-					},
+					// Design 6.6: the fixture decides by file identity, so a symlinked TMPDIR (CI runs this with
+					// TMPDIR=/tmp on macOS) names the same denied file under every spelling.
+					decide: createIdentityDecider(denied),
 				},
 			});
 			const run = (code: string) => kernel.run({ cellId: crypto.randomUUID(), code, timeoutMs: 120_000 });
