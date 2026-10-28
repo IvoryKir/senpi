@@ -401,6 +401,10 @@ export async function linkedWorktreeMainCheckoutDir(cwd: string): Promise<string
 	}
 	const commonDir = await realPathOf(resolve(adminDir, commonDirPointer));
 	if (commonDir === undefined || basename(commonDir) !== ".git") return undefined;
+	// The pointers above only agree with each other; a folder that is not this repository's worktree can carry its own
+	// consistent set. Git keeps a linked worktree's admin dir in `<common dir>/worktrees/`, inside the repository.
+	const adminRealPath = await realPathOf(adminDir);
+	if (adminRealPath === undefined || dirname(adminRealPath) !== join(commonDir, "worktrees")) return undefined;
 	const mainCheckout = dirname(commonDir);
 	const mainMarker = join(mainCheckout, ".git");
 	if ((await entryKind(mainMarker)) !== "directory" || (await realPathOf(mainMarker)) !== commonDir) return undefined;

@@ -7,7 +7,7 @@
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_DIR_NAME } from "../../src/config.ts";
 import type { ProjectTrustContext } from "../../src/core/extensions/types.ts";
@@ -113,16 +113,18 @@ describe("a linked git worktree inherits its main checkout's project trust", () 
 
 	it("a worktree whose admin directory does not point back at it inherits nothing", async () => {
 		const { main, worktree, admin } = linkedWorktree();
-		writeFileSync(join(admin, "gitdir"), `${join(scratch, "elsewhere", ".git")}\n`);
 		store.set(main, true);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
+		writeFileSync(join(admin, "gitdir"), `${join(scratch, "elsewhere", ".git")}\n`);
 
 		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
 
 	it("a submodule-style gitdir without a commondir inherits nothing", async () => {
 		const { main, worktree, admin } = linkedWorktree();
-		rmSync(join(admin, "commondir"));
 		store.set(main, true);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
+		rmSync(join(admin, "commondir"));
 
 		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
@@ -143,12 +145,40 @@ describe("a linked git worktree inherits its main checkout's project trust", () 
 
 	it("a main checkout whose .git is not the common dir is not trusted through it", async () => {
 		const { main, worktree } = linkedWorktree();
+		store.set(main, true);
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
 		rmSync(join(main, ".git"), { recursive: true });
 		writeFileSync(join(main, ".git"), "gitdir: /somewhere/else\n");
-		store.set(main, true);
 
 		expect(await getSavedProjectTrust(store, worktree)).toBeNull();
 	});
+
+	it.each([
+		["an absolute", true],
+		["a relative", false],
+	])(
+		"a folder outside the repository whose own admin dir names a trusted repository's .git through %s commondir is not trusted",
+		async (_label, absolute) => {
+			const { main, worktree } = linkedWorktree();
+			store.set(main, true);
+			expect(await getSavedProjectTrust(store, worktree)).toBe(true);
+			const outside = join(scratch, "downloads", "archive");
+			const admin = join(scratch, "downloads", "admin", "wt");
+			mkdirSync(admin, { recursive: true });
+			mkdirSync(join(outside, CONFIG_DIR_NAME), { recursive: true });
+			writeFileSync(join(outside, CONFIG_DIR_NAME, "settings.json"), "{}");
+			const commonDir = join(main, ".git");
+			writeFileSync(join(admin, "commondir"), `${absolute ? commonDir : relative(admin, commonDir)}\n`);
+			writeFileSync(join(admin, "gitdir"), `${join(outside, ".git")}\n`);
+			writeFileSync(join(outside, ".git"), `gitdir: ${admin}\n`);
+
+			const spy = promptSpy();
+			await expect(
+				resolveProjectTrusted({ cwd: outside, trustStore: store, projectTrustContext: spy.context }),
+			).resolves.toBe(false);
+			expect(spy.prompts).toHaveLength(1);
+		},
+	);
 
 	it("starting in a worktree of a trusted repository does not ask, and an untrusted one still asks", async () => {
 		const { main, worktree } = linkedWorktree();
