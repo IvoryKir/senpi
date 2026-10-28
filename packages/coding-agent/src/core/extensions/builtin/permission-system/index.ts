@@ -229,6 +229,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 		activePreset = loadedSettings.preset;
 		const approved = loadedSettings.approved;
 		parserRegistry = createBuiltinParserRegistry();
+		const previous = service;
 		service = new PermissionService(
 			staticRuleset,
 			[...approved, ...sessionApproved],
@@ -238,6 +239,7 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 			agentDir,
 			sharedPathIdentityResolver(),
 		);
+		previous?.dispose();
 		if (cellSession) updateCellEnforcement(cellSession, staticRuleset, activePreset);
 	};
 
@@ -420,15 +422,21 @@ export default function permissionSystemExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const approved = service
-			.getSessionApproved()
-			.filter((rule) => !persistedAtAnswer.has(`${rule.permission}:${rule.pattern}`));
-		if (approved.length > 0) {
-			appendApproved(ctx.agentDir, ctx.cwd, approved);
-		}
+		// The shared resolver outlives this extension generation, so its hold on the service is released
+		// whatever persisting the answers or rejecting the open requests does.
+		try {
+			const approved = service
+				.getSessionApproved()
+				.filter((rule) => !persistedAtAnswer.has(`${rule.permission}:${rule.pattern}`));
+			if (approved.length > 0) {
+				appendApproved(ctx.agentDir, ctx.cwd, approved);
+			}
 
-		for (const pendingRequest of service.list()) {
-			service.reply({ requestID: pendingRequest.id, reply: "reject" });
+			for (const pendingRequest of service.list()) {
+				service.reply({ requestID: pendingRequest.id, reply: "reject" });
+			}
+		} finally {
+			service.dispose();
 		}
 	});
 }

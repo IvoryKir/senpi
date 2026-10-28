@@ -59,7 +59,10 @@ export class PermissionService {
 		this.preset = preset;
 		this.resolver = resolver;
 		this.mountRewrite = createMountRewrite(readFirmlinks());
-		resolver?.onState((event) => this.emitter.emitResolverState(event));
+		// The resolver is shared by every session of the process and outlives this service, so the
+		// subscription is released by dispose(); an unreleased one keeps the service's emitter and
+		// its extension generation reachable across every reload.
+		this.releaseResolverState = resolver?.onState((event) => this.emitter.emitResolverState(event)) ?? (() => {});
 		this.ruleIdentities = new RuleIdentityCache(resolver, projectDir, () => this.pathRules(), emitter);
 		this.ruleIdentities.fillAll();
 		this.pendingRequests = new PendingRequests({
@@ -87,6 +90,12 @@ export class PermissionService {
 	private readonly resolver?: PathIdentityResolver;
 	private readonly mountRewrite: (value: string) => string;
 	private readonly ruleIdentities: RuleIdentityCache;
+	private readonly releaseResolverState: () => void;
+
+	/** Stops forwarding resolver state to this service's emitter; decisions keep working. */
+	dispose(): void {
+		this.releaseResolverState();
+	}
 
 	identityWanted(permission: string, kernel?: KernelCanonical): boolean {
 		return identityWanted(this.resolver, [...this.staticRuleset, ...this.approved], permission, kernel);
