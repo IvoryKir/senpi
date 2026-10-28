@@ -56,6 +56,8 @@ export interface PathIdentityResolver {
 	volumeKey(path: string): string;
 	breakerState(key: string): BreakerState;
 	onState(handler: (event: ResolverStateEvent) => void): () => void;
+	/** How many state subscriptions are live; a retired service must not be among them. */
+	readonly listenerCount: number;
 	/** Spawn the worker now (it is otherwise started by the first request). */
 	start(): void;
 	/** Set once a worker failed to START (never from a stall): path rules then match by spelling only. */
@@ -228,6 +230,9 @@ export function createPathIdentityResolver(options: ResolverHostOptions = {}): P
 		onState: (handler) => {
 			listeners.add(handler);
 			return () => listeners.delete(handler);
+		},
+		get listenerCount() {
+			return listeners.size;
 		},
 		get leaked() {
 			return abandoned.count;
