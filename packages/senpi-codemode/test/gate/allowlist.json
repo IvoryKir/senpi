@@ -110,9 +110,12 @@
 				"legacyContracts/test/kernel-invocation-token.test.ts/kernel invocation tokens drops an invoker binding once its retained continuation ends",
 				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) keeps waiting when a park ends on something other than the answer",
 				"legacyContracts/test/js-kernel-permission-module-surface.test.ts/hands a cell the engine's own worker_threads module unless the decision refuses it",
-				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) parks again on the slot the host claimed before answering"
+				"legacyContracts/test/permission-slots.test.ts/permission slot ownership (#4309) parks again on the slot the host claimed before answering",
+				"imports/firstKernel/packages/senpi-codemode/src/kernels/shared/path-identity.mjs",
+				"legacyContracts/test/js-kernel-permission-path-identity.test.ts/decides path rules by file identity across spellings and reports written plus executed paths",
+				"legacyContracts/test/js-kernel-permission-module-chain.test.ts/decides nested imports and module bodies under the importing cell's authority"
 			],
-			"reason": "senpi#4391: operation interposition and engine file helpers are new first-kernel modules; the operation, boundary, lexical-eval, numeric-open and native-loader proof contracts exercise the added JS enforcement. The bootstrap/engine contract added while restacking onto #4390 proves the worker bootstrap and the engine hooks stay separate runtime arguments and that dropping either one is caught. Inherited imports and contracts belong to the earlier stack PRs and are not approved here."
+			"reason": "senpi#4391: operation interposition and engine file helpers are new first-kernel modules; the operation, boundary, lexical-eval, numeric-open and native-loader proof contracts exercise the added JS enforcement. The bootstrap/engine contract added while restacking onto #4390 proves the worker bootstrap and the engine hooks stay separate runtime arguments and that dropping either one is caught. Inherited imports and contracts belong to the earlier stack PRs and are not approved here. The shared path-identity module is the kernel thread's canonicalizer for the executed path it now reports beside the written one; the path-identity and module-chain contracts prove identity decisions across spellings and nested-import attribution."
 		},
 		"senpi#3612": {
 			"additions": [

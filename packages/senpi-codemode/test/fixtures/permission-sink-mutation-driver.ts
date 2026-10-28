@@ -15,6 +15,8 @@ let passed = 0;
 function mutate(sink: string): URL {
 	const dir = mkdtempSync(join(root, "mutant-"));
 	cpSync(kernelDir, dir, { recursive: true });
+	// The copied interposition imports the shared path-identity module through `../shared/`.
+	cpSync(join(kernelDir, "..", "shared", "path-identity.mjs"), join(root, "shared", "path-identity.mjs"));
 	for (const file of ["interpose-bun.js", "interpose-process.js"]) {
 		const path = join(dir, file);
 		const kept = readFileSync(path, "utf8")
