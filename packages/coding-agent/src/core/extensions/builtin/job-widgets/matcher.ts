@@ -56,7 +56,11 @@ export interface PatternScan {
 
 const NAMED_GROUP_AT = /^\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/;
 
-/** Reads a pattern's named groups and constructs outside escapes and character classes. */
+/**
+ * Reads a pattern's named groups and constructs outside escapes, character classes and `\Q\E`
+ * quoted text (literal in RE2, up to `\E` or the end of the pattern), so the groups it reports are
+ * the ones RE2's `namedGroups()` reports.
+ */
 export function scanPattern(pattern: string): PatternScan {
 	const groups: string[] = [];
 	let normalized = "";
@@ -66,6 +70,13 @@ export function scanPattern(pattern: string): PatternScan {
 		const char = pattern.charAt(index);
 		if (char === "\\") {
 			const next = pattern.charAt(index + 1);
+			if (!inClass && next === "Q") {
+				const close = pattern.indexOf("\\E", index + 2);
+				const end = close < 0 ? pattern.length : close + 2;
+				normalized += pattern.slice(index, end);
+				index = end - 1;
+				continue;
+			}
 			if (!inClass && next >= "1" && next <= "9") return fail(`backreference \\${next} is not supported`);
 			if (!inClass && next === "k" && pattern.charAt(index + 2) === "<") {
 				return fail("named backreference \\k<…> is not supported");

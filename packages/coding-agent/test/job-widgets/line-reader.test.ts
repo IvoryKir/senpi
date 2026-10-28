@@ -34,6 +34,35 @@ describe("source line reader", () => {
 		expect(readAll(chunks, close)).toEqual(expected);
 	});
 
+	it("offers the newest CR segment of the line in progress as progress, never as a line", () => {
+		const source = new ScriptedSource("out");
+		const reader = new SourceLineReader(source);
+		const step = (text: string): [string[], string | undefined] => {
+			source.append(text);
+			return [reader.read(false).lines, reader.progress];
+		};
+		expect(step("\r10%\r20%\r30%")).toEqual([["", "10%", "20%"], "30%"]);
+		expect(step("\x1b[32m\r[####  ] 31%\x1b[3")).toEqual([["30%"], "[####  ] 31%"]);
+		expect(step("2m\n")).toEqual([["[####  ] 31%"], undefined]);
+		expect(step("a line still being wri")).toEqual([[], undefined]);
+		// A long token-shaped tail may be a secret cut mid-write: held back until the segment completes.
+		const token = "abcdefghij0123456789";
+		expect(step(`tten\rtoken ${token}`)).toEqual([["a line still being written"], "token"]);
+		expect(step(`\rtoken ${token} ok`)).toEqual([[`token ${token}`], `token ${token} ok`]);
+	});
+
+	it("stages a CR progress bar at its current step, and the complete lines once it ends", () => {
+		const out = new ScriptedSource("out");
+		const h = harness(undefined, out);
+		out.append("Downloading\n\r 10%\r 20%\r 99%");
+		h.ingest();
+		expect(h.derive({ authoring: true }).view.stage).toBe("99%");
+		expect(h.derive().view).toMatchObject({ stage: "99%", lines: 3 });
+		out.append("\rdone\n");
+		h.ingest();
+		expect(h.derive().view).toMatchObject({ stage: "done", lines: 5 });
+	});
+
 	it("cuts lines at the line limit", () => {
 		const [[line]] = readAll([`${"x".repeat(MAX_LINE_CHARS + 10)}\n`]);
 		expect(line).toHaveLength(MAX_LINE_CHARS);

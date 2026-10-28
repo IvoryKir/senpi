@@ -49,7 +49,9 @@ const INERT_HANDLE: JobWidgetSourceHandle = {
 export class JobWidgetRegistry {
 	readonly sessionId: string;
 	readonly #matcher: LineMatcher;
-	readonly #redact: JobWidgetRedact;
+	/** Handed to every job and the publisher; it calls the current redactor, so a re-bind reaches them. */
+	readonly #redact: JobWidgetRedact = (text) => this.#currentRedact(text);
+	#currentRedact: JobWidgetRedact;
 	readonly #controller: JobWidgetRequestController;
 	readonly #publisher: JobWidgetStatePublisher;
 	readonly #jobs = new Map<string, JobWidgetJob>();
@@ -61,7 +63,7 @@ export class JobWidgetRegistry {
 	constructor(options: JobWidgetRegistryOptions) {
 		this.sessionId = options.sessionId;
 		this.#matcher = options.matcher ?? defaultLineMatcher;
-		this.#redact = createWidgetRedactor(options.obfuscate);
+		this.#currentRedact = createWidgetRedactor(options.obfuscate);
 		this.#controller = new JobWidgetRequestController({
 			author: options.author,
 			matcher: this.#matcher,
@@ -110,6 +112,15 @@ export class JobWidgetRegistry {
 			if (entry) jobs.push(entry);
 		}
 		return { v: 1, sessionId: this.sessionId, jobs };
+	}
+
+	/**
+	 * Applies settings re-read on a re-bind (a reload): the author's start delay and the session's
+	 * obfuscation reach every job from its next line and request on.
+	 */
+	configure(options: Pick<JobWidgetRegistryOptions, "limits" | "obfuscate">): void {
+		this.#currentRedact = createWidgetRedactor(options.obfuscate);
+		this.#controller.configure(options);
 	}
 
 	/** Sends the current state on the next offer even if unchanged, for a listener that just bound. */

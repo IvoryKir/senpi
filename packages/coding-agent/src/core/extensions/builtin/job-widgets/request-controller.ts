@@ -52,8 +52,8 @@ export class JobWidgetRequestController {
 	readonly #author: JobWidgetAuthor;
 	readonly #matcher: LineMatcher;
 	readonly #now: () => number;
-	readonly #limits: JobWidgetRequestLimits;
-	readonly #redact: JobWidgetRedact;
+	#limits: JobWidgetRequestLimits;
+	#redact: JobWidgetRedact;
 	readonly #states = new Map<string, JobWidgetAuthoringState>();
 	readonly #aborts = new Map<string, AbortController>();
 	/** Start times of author calls in the last {@link REQUEST_WINDOW_MS}, oldest first. */
@@ -64,6 +64,12 @@ export class JobWidgetRequestController {
 		this.#author = options.author;
 		this.#matcher = options.matcher;
 		this.#now = options.now ?? Date.now;
+		this.#limits = { ...JOB_WIDGET_REQUEST_LIMITS, ...options.limits };
+		this.#redact = createWidgetRedactor(options.obfuscate);
+	}
+
+	/** Settings re-read on a re-bind: they apply from the next request on; caps already spent stay spent. */
+	configure(options: Pick<JobWidgetRequestControllerOptions, "limits" | "obfuscate">): void {
 		this.#limits = { ...JOB_WIDGET_REQUEST_LIMITS, ...options.limits };
 		this.#redact = createWidgetRedactor(options.obfuscate);
 	}

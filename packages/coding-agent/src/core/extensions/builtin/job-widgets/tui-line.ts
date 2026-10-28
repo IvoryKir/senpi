@@ -69,7 +69,7 @@ function styled(segments: readonly Segment[], style: JobWidgetLineStyle): string
 }
 
 /** `truncateToWidth` closes every cut with SGR resets; text that carried no styling keeps none. */
-function cutPlain(text: string, columns: number): string {
+export function cutPlain(text: string, columns: number): string {
 	return truncateToWidth(text, columns, ELLIPSIS).replaceAll(SGR_RESET, "");
 }
 

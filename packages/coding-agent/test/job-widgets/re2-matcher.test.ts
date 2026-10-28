@@ -54,6 +54,17 @@ describe("re2 line matcher", () => {
 		expect(error).toMatchObject({ pattern: 1, reason: expect.stringContaining("error parsing regexp") });
 	});
 
+	it("reads a class opening with ] as literal members, so lookaround text inside it is plain text", () => {
+		const lines = ["]", "(?=a)", "a", "b", "]b"];
+		const compiled = compilePatterns(defaultLineMatcher, ["^[](?=a)]+$", "^[^](?=a)]+$"]);
+		expect(compiled.matchLines(lines).map(({ line, pattern }) => [line, pattern])).toEqual([
+			[0, 0],
+			[1, 0],
+			[2, 0],
+			[3, 1],
+		]);
+	});
+
 	it("matches a catastrophic-backtracking pattern in time linear in the line", () => {
 		const compiled = compilePatterns(defaultLineMatcher, ["^(a+)+$"]);
 		const timeFor = (length: number) => {

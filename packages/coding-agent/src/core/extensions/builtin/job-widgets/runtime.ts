@@ -73,6 +73,8 @@ export class JobWidgetRuntime {
 	#unmatchedLines = 0;
 	/** Newest non-empty line no rule matched: a live widget's stage when the spec names none. */
 	#lastUnmatchedLine: string | undefined;
+	/** Newest CR progress segment of a line still in progress (redacted); it stands for the stage. */
+	#progress: string | undefined;
 
 	constructor(options: JobWidgetRuntimeOptions) {
 		this.spec = options.spec;
@@ -118,6 +120,10 @@ export class JobWidgetRuntime {
 			const { lines: read, end } = reader.read(flush);
 			const redactLine = this.#redactLine;
 			const lines = redactLine ? read.map((line) => redactLine(line)) : read;
+			const progress = reader.progress;
+			if (progress !== undefined) {
+				this.#progress = truncateText((redactLine ? redactLine(progress) : progress).trim(), MAX_STAGE_CHARS);
+			} else if (lines.length > 0) this.#progress = undefined;
 			let stats = this.#stats.get(source.id);
 			if (!stats) {
 				stats = newSourceStats(source.id, source.label);
@@ -174,7 +180,7 @@ export class JobWidgetRuntime {
 		const lineStage = context.lineStage === true;
 		const spec = this.spec;
 		if (!spec) {
-			const stage = context.stage ?? (lineStage ? latestLine(this.#stats.values()) : undefined);
+			const stage = context.stage ?? (lineStage ? (this.#progress ?? latestLine(this.#stats.values())) : undefined);
 			const title = truncateText(context.label.replace(/\s+/g, " ").trim(), MAX_TITLE_CHARS);
 			return {
 				state: context.authoring ? "pending" : "fallback",
@@ -187,7 +193,7 @@ export class JobWidgetRuntime {
 		const stage =
 			(spec.stage ? this.#specStage(spec.stage) : undefined) ??
 			context.stage ??
-			(lineStage ? this.#lastUnmatchedLine : undefined);
+			(lineStage ? (this.#progress ?? this.#lastUnmatchedLine) : undefined);
 		return {
 			state: context.settled ? "done" : "live",
 			view: {
