@@ -17,6 +17,19 @@ export function evaluate(permission: string, pattern: string | readonly string[]
 	return evaluatePatterns(permission, pattern, rulesets, matchesExternalPath);
 }
 
+/** A rule matches when it covers a pattern as written, as executed, or by file identity of the request. */
+export type IdentityMatcher = (rulePattern: string) => boolean;
+
+/** `evaluate` with the identity route (design 6.2): the predicate takes the RULE only and tests every canonical path of the request. */
+export function evaluateWithIdentity(
+	permission: string,
+	pattern: string | readonly string[],
+	ruleset: Ruleset,
+	matchesIdentity: IdentityMatcher | undefined,
+): Rule {
+	return evaluatePatterns(permission, pattern, [ruleset], undefined, matchesIdentity);
+}
+
 /** Evaluate a lexical spelling without letting a resolved rule erase its ancestry. */
 export function evaluateExternalSpelling(
 	pattern: string | readonly string[],
@@ -31,12 +44,14 @@ function evaluatePatterns(
 	pattern: string | readonly string[],
 	rulesets: Ruleset[],
 	matchesExternalPath?: (value: string, pattern: string) => boolean,
+	matchesIdentity?: IdentityMatcher,
 ): Rule {
 	const patterns = typeof pattern === "string" ? [pattern] : pattern;
 	const matchedRule = rulesets.flat().findLast((rule) => {
 		return (
 			Wildcard.match(permission, rule.permission) &&
-			patterns.some((value) => matchesPattern(value, rule.pattern) || matchesExternalPath?.(value, rule.pattern))
+			(patterns.some((value) => matchesPattern(value, rule.pattern) || matchesExternalPath?.(value, rule.pattern)) ||
+				(matchesIdentity?.(rule.pattern) ?? false))
 		);
 	});
 
