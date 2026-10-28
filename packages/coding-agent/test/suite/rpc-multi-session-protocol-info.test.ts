@@ -86,7 +86,7 @@ describe("multi-session RPC protocol info", () => {
 				agentDir: resolve(getAgentDir()),
 				memory_pressure: false,
 				path_identity_resolver: {
-					state: expect.stringMatching(/^(ready|unavailable)$/),
+					state: expect.stringMatching(/^(not_started|ready|unavailable)$/),
 					detail: expect.toSatisfy((value: unknown) => value === null || typeof value === "string"),
 				},
 			},

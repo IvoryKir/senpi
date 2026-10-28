@@ -72,7 +72,7 @@ export interface HostStatusReport {
 	 * `SENPI_RPC_HOST_RSS_WARN_MB`); `null` when nothing answers or the host predates the field.
 	 */
 	readonly memory_pressure: boolean | null;
-	/** The answering host's path identity resolver (`unavailable` names why its worker could not start); `null` when nothing answers or the host predates the field. */
+	/** The answering host's path identity resolver (`not_started`, `ready`, or `unavailable` naming why its worker could not start); `null` when nothing answers or the host predates the field. */
 	readonly path_identity_resolver: PathIdentityResolverStatus | null;
 	/** Environment NAMES the daemon was granted, never values. */
 	readonly env_keys: readonly string[];

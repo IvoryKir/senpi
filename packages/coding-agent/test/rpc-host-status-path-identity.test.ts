@@ -21,9 +21,11 @@ describe("host status reports the path identity resolver", () => {
 		for (const resolver of resolvers.splice(0)) await resolver.close();
 	});
 
-	it("derives ready and unavailable from the resolver", async () => {
+	it("derives not_started, ready and unavailable from the resolver", async () => {
 		const ready = createPathIdentityResolver({ spawn: () => fixtureTransport(), log: () => {} });
 		resolvers.push(ready);
+		expect(pathIdentityResolverStatus(ready)).toEqual({ state: "not_started", detail: null });
+		await ready.walk(tmpdir());
 		expect(pathIdentityResolverStatus(ready)).toEqual({ state: "ready", detail: null });
 		const broken = createPathIdentityResolver({
 			spawn: () => fixtureTransport({ startupError: "ERR_MODULE_NOT_FOUND" }),
@@ -48,7 +50,12 @@ describe("host status reports the path identity resolver", () => {
 		const response = await router.handle({ id: "probe", type: "get_protocol_info" });
 		if (typeof response !== "object" || response === null || !("data" in response)) throw new Error("no data");
 		const data = response.data as { path_identity_resolver?: unknown };
-		expect(data.path_identity_resolver).toMatchObject({ state: expect.stringMatching(/^(ready|unavailable)$/) });
+		expect(data.path_identity_resolver).toMatchObject({
+			state: expect.stringMatching(/^(not_started|ready|unavailable)$/),
+		});
+		expect(parseHostProtocolInfo({ ...data, path_identity_resolver: { state: "not_started" } })?.path_identity_resolver).toEqual(
+			{ state: "not_started", detail: null },
+		);
 		const parsed = parseHostProtocolInfo({
 			...data,
 			path_identity_resolver: { state: "unavailable", detail: "ERR_MODULE_NOT_FOUND" },
