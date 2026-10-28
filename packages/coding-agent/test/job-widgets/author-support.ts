@@ -3,6 +3,7 @@ import {
 	type JobWidgetAuthoringSource,
 	type JobWidgetAuthorRequest,
 	type JobWidgetBrief,
+	type JobWidgetObfuscator,
 	JobWidgetRequestController,
 	type JobWidgetRequestJob,
 	type JobWidgetRequestLimits,
@@ -67,7 +68,7 @@ export function scriptedAuthor(...answers: unknown[]) {
 export function controllerFor(
 	author: JobWidgetAuthor,
 	limits: Partial<JobWidgetRequestLimits> = {},
-	obfuscate?: (text: string) => string,
+	obfuscate?: JobWidgetObfuscator,
 ) {
 	let now = START + 15_000;
 	const controller = new JobWidgetRequestController({

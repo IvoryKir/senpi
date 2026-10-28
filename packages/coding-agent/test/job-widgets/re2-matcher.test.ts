@@ -60,11 +60,13 @@ describe("re2 line matcher", () => {
 			const line = `${"a".repeat(length)}b`;
 			return fastestMs(() => expect(compiled.matchLines([line])).toEqual([]));
 		};
-		timeFor(1_000);
-		const short = timeFor(10_000);
-		const long = timeFor(50_000);
-		// 5x the input: linear stays near 5x; quadratic would be 25x and backtracking never ends.
-		expect(long / Math.max(short, 0.05)).toBeLessThan(12);
-		expect(long).toBeLessThan(2_000);
+		// Both sizes sit above re2js's BitState cutoff (about 26k chars for this pattern), so both run on
+		// the same NFA/DFA engine and the ratio measures scaling, not an engine switch.
+		timeFor(50_000);
+		const short = timeFor(50_000);
+		const long = timeFor(250_000);
+		// 5x the input: linear is about 5x; quadratic would be 25x and backtracking never ends.
+		expect(long / Math.max(short, 0.05)).toBeLessThan(10);
+		expect(long).toBeLessThan(5_000);
 	});
 });

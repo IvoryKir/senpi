@@ -7,7 +7,7 @@
  */
 import { FieldStore, windowRate } from "./field-state.ts";
 import { truncateText } from "./format.ts";
-import { SourceLineReader } from "./line-reader.ts";
+import { type SourceLineRedactor, SourceLineReader } from "./line-reader.ts";
 import type { LineMatcher } from "./matcher.ts";
 import { applyMatches, compileSourceMatcher, type SourceMatcher } from "./rule-match.ts";
 import {
@@ -20,7 +20,7 @@ import {
 	sourceSample,
 } from "./source-stats.ts";
 import type { JobTextSource } from "./source-types.ts";
-import { keyedFields } from "./spec-rules.ts";
+import { keyedFields, pinnedKeys } from "./spec-rules.ts";
 import { type JobWidgetSpec, MAX_TITLE_CHARS } from "./spec-types.ts";
 import { buildBlock, buildHeadline, hasData } from "./view-build.ts";
 import type { JobWidgetEntryState, JobWidgetView } from "./view-types.ts";
@@ -52,10 +52,11 @@ export interface JobWidgetRuntimeOptions {
 	startTime: number;
 	now?: () => number;
 	/**
-	 * Applied to every complete line before it is matched or kept. Views cut long text, and a cut
-	 * token no longer looks like one to a redactor, so secrets are removed before any cut.
+	 * A fresh redactor per source, fed that source's complete lines in order before they are cut,
+	 * matched or kept: views cut long text, a cut token no longer looks like one to a redactor, and
+	 * a private key spans lines, so redaction is stateful per source and runs before any cut.
 	 */
-	redactLine?: (line: string) => string;
+	redactSource?: () => SourceLineRedactor;
 }
 
 export class JobWidgetRuntime {
@@ -63,7 +64,7 @@ export class JobWidgetRuntime {
 	readonly #matcher: LineMatcher;
 	readonly #startTime: number;
 	readonly #now: () => number;
-	readonly #redactLine: ((line: string) => string) | undefined;
+	readonly #redactSource: (() => SourceLineRedactor) | undefined;
 	readonly #readers = new Map<string, SourceLineReader>();
 	readonly #stats = new Map<string, SourceStats>();
 	readonly #matchers = new Map<string, SourceMatcher | null>();
@@ -79,8 +80,8 @@ export class JobWidgetRuntime {
 		this.#matcher = options.matcher;
 		this.#startTime = options.startTime;
 		this.#now = options.now ?? Date.now;
-		this.#redactLine = options.redactLine;
-		this.#store = new FieldStore(keyedFields(options.spec));
+		this.#redactSource = options.redactSource;
+		this.#store = new FieldStore(keyedFields(options.spec), pinnedKeys(options.spec));
 	}
 
 	/** Non-empty lines seen since the last match on a source some rule reads: the drift signal. */
@@ -112,12 +113,10 @@ export class JobWidgetRuntime {
 		for (const source of sources) {
 			let reader = this.#readers.get(source.id);
 			if (!reader || reader.source !== source) {
-				reader = new SourceLineReader(source);
+				reader = new SourceLineReader(source, this.#redactSource?.());
 				this.#readers.set(source.id, reader);
 			}
-			const { lines: read, end } = reader.read(flush);
-			const redactLine = this.#redactLine;
-			const lines = redactLine ? read.map((line) => redactLine(line)) : read;
+			const { lines, end } = reader.read(flush);
 			let stats = this.#stats.get(source.id);
 			if (!stats) {
 				stats = newSourceStats(source.id, source.label);

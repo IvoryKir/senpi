@@ -80,7 +80,14 @@ export function readFieldName(value: unknown, where: string, errors: string[]): 
 	return name;
 }
 
-export function readAgg(value: unknown, where: string, errors: string[]): JobWidgetAgg | undefined {
+/** An absent `agg` is `fallback` when one is given (bars and meters); an unknown one is an error. */
+export function readAgg(
+	value: unknown,
+	where: string,
+	errors: string[],
+	fallback?: JobWidgetAgg,
+): JobWidgetAgg | undefined {
+	if ((value === undefined || value === null) && fallback !== undefined) return fallback;
 	const agg = JOB_WIDGET_AGGS.find((candidate) => candidate === value);
 	if (agg === undefined) errors.push(`${where}: expected one of ${JOB_WIDGET_AGGS.join(", ")}`);
 	return agg;
