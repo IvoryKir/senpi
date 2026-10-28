@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { opportunisticHostGcWithin, trackOpportunisticHostGc } from "../src/modes/rpc/host-gc-pass-registry.ts";
+import { opportunisticHostGcWithin, trackOpportunisticHostGc } from "../../src/modes/rpc/host-gc-pass-registry.ts";
 
 // senpi#4382: a removal joins the in-flight passes whose `<agentDir>/rpc-host-daemon` lies inside it.
 describe("opportunisticHostGcWithin", () => {
