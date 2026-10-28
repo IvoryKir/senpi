@@ -2101,8 +2101,9 @@ Same-name precedence:
   `project`) wins over an extension-declared server, including `enabled: false`.
 - An extension-declared server replaces an untrusted placeholder from an
   untrusted project config and records a diagnostic.
-- Across extensions, the first loaded extension wins; later collisions log a
-  warning naming both extension paths.
+- Across extensions, the extension earliest in the session's extension order
+  wins (see `pi.getMcpServers()` below); later collisions log a warning naming
+  both extension paths.
 
 A stdio declaration that omits `cwd` defaults to the extension's registration
 cwd (the cwd passed to the factory), not the ambient `process.cwd()`.
@@ -2121,9 +2122,10 @@ extension are left alone.
 Every MCP server registered by the extensions of the current session, in the
 session's extension order, as `{ name, config, extensionPath }` copies
 (`RegisteredMcpServer`). That order puts inline and built-in extension factories
-before file extensions, even though file extensions load first. Before the
-session binds its extensions (while extension factories run), the list follows
-load order. Extensions the resource loader left out of the session (replaced,
+before file extensions, whatever order they loaded in. Before the session binds
+its extensions (while extension factories run), the list holds only the
+extensions loaded so far, in load order; a trusted project's own extensions load
+after the factories, so a factory reading it then does not see their servers. Extensions the resource loader left out of the session (replaced,
 disabled, filtered) contribute nothing, and on a name clash the registration
 from the extension earliest in that order wins. For extensions that connect MCP servers
 themselves, such as `pi-mcp-adapter`: read it on `session_start` and handle
