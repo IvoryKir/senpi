@@ -98,6 +98,40 @@ describe("job widget lines", () => {
 		expect(narrow).not.toContain("per-frame time");
 	});
 
+	const cjkSpark: JobWidgetEntry = {
+		...spark,
+		id: "bash_12",
+		view: {
+			title: "ブレンダーのレンダリング処理",
+			headline: { text: "120", label: "rendered", trend: { text: "▲ 3%", tone: "success" } },
+			blocks: spark.view?.blocks ?? [],
+		},
+	};
+	const meterWithHeadline: JobWidgetEntry = {
+		...meter,
+		view: {
+			title: "eval run",
+			headline: { text: "186 tok/s", label: "decode", trend: { text: "▲ 15%", tone: "success" } },
+			blocks: meter.view?.blocks ?? [],
+		},
+	};
+	const narrowRows: Array<[string, JobWidgetEntry, number, string[]]> = [
+		["CJK-titled spark", cjkSpark, 38, ["bash_12", "120 ▲ 3%", "4.20 s"]],
+		["meter with a labelled, trended headline", meterWithHeadline, 40, ["bash_4", "120/250", "186 tok/s ▲ 15%"]],
+		["meter with a labelled, trended headline", meterWithHeadline, 38, ["bash_4", "120/250", "186 tok/s ▲ 15%"]],
+		["meter with a labelled, trended headline", meterWithHeadline, 30, ["bash_4", "120/250", "186 tok/s ▲ 15%"]],
+		["meter-only job", meter, 30, ["bash_4", "eval run", "120/250"]],
+	];
+	for (const [name, entry, width, wanted] of narrowRows) {
+		it(`keeps the numbers of a ${name} at ${width} columns`, () => {
+			for (const style of [PLAIN_LINE_STYLE, jobWidgetLineStyle(theme, {})]) {
+				const line = formatJobWidgetLine(entry, width, style) ?? "";
+				expect(visibleWidth(line), `${name} at ${width}: ${strip(line)}`).toBeLessThanOrEqual(width);
+				for (const part of wanted) expect(strip(line), `${name} at ${width}`).toContain(part);
+			}
+		});
+	}
+
 	it("draws nothing for a skipped job", () => {
 		expect(formatJobWidgetLine(skipped, 80, PLAIN_LINE_STYLE)).toBeUndefined();
 	});

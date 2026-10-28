@@ -2,8 +2,10 @@
  * One terminal line per job widget: `bash_3  Blender render · per frame  ▁▂▃▅▆▇▆▅  rendered 120 · 4.20 s`.
  * A spark draws as 8-level block glyphs, a meter as `[██████░░░░] 120/250`, any other primary block
  * leaves only the headline; a pending job shows how much output was read, a fallback its latest
- * line. The line never exceeds the width it is given: the block label goes first, then the title
- * shrinks, then the chart, and only then is the whole line cut.
+ * line. The line never exceeds the width it is given, and the numbers are the last thing to go: the
+ * block label goes first, then the title shrinks to 8 columns, then the chart (a meter keeps its
+ * count), then the headline label; then the title shrinks further or goes, the gaps narrow to one
+ * space, and only then is the whole line cut.
  * The look follows oh-my-pi 9df0457b31 (MIT, Copyright Can Boluk et al.), adapted to senpi's widget surface.
  */
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -82,16 +84,21 @@ function oneLine(text: string): string {
 interface LineParts {
 	/** Block label shown after the title; dropped first when the line is too wide. */
 	label?: string;
-	/** The chart (spark or meter); dropped after the title has shrunk as far as it may. */
+	/** The chart drawing (spark glyphs or meter bar); dropped once the title is down to 8 columns. */
 	chart: Segment[];
-	metrics: Segment[];
+	/** A meter's own count (`120/250`): drawn after the bar, and kept with the metrics without it. */
+	count?: Segment;
+	/** The headline and extra numbers, with or without the headline's label. */
+	metrics(withHeadlineLabel: boolean): Segment[];
 }
 
-function metricSegments(view: JobWidgetView, extra?: string): Segment[] {
+function metricSegments(view: JobWidgetView, withHeadlineLabel: boolean, extra?: string): Segment[] {
 	const segments: Segment[] = [];
 	const headline = view.headline;
 	if (headline) {
-		if (headline.label) segments.push({ text: `${oneLine(headline.label)} `, token: "muted" });
+		if (headline.label && withHeadlineLabel) {
+			segments.push({ text: `${oneLine(headline.label)} `, token: "muted" });
+		}
 		segments.push({ text: oneLine(headline.text) });
 		if (headline.trend) segments.push({ text: ` ${headline.trend.text}`, token: trendToken(headline.trend.tone) });
 	}
@@ -105,13 +112,14 @@ function metricSegments(view: JobWidgetView, extra?: string): Segment[] {
 function viewParts(entry: JobWidgetEntry, view: JobWidgetView, width: number): LineParts {
 	if (entry.state === "pending") {
 		const lines = view.lines ?? 0;
-		return {
-			chart: [],
-			metrics: [{ text: `reading output · ${lines} ${lines === 1 ? "line" : "lines"}`, token: "muted" }],
-		};
+		const metrics: Segment[] = [
+			{ text: `reading output · ${lines} ${lines === 1 ? "line" : "lines"}`, token: "muted" },
+		];
+		return { chart: [], metrics: () => metrics };
 	}
 	if (entry.state === "fallback") {
-		return { chart: [], metrics: view.stage ? [{ text: oneLine(view.stage), token: "muted" }] : [] };
+		const metrics: Segment[] = view.stage ? [{ text: oneLine(view.stage), token: "muted" }] : [];
+		return { chart: [], metrics: () => metrics };
 	}
 	const primary = view.blocks[0];
 	const chartToken: JobWidgetLineToken = entry.state === "done" ? "muted" : "accent";
@@ -121,7 +129,7 @@ function viewParts(entry: JobWidgetEntry, view: JobWidgetView, width: number): L
 			chart: [
 				{ text: sparkGlyphs(primary.values, primary.min, primary.max, sparkColumns(width)), token: chartToken },
 			],
-			metrics: metricSegments(view, primary.last),
+			metrics: (withHeadlineLabel) => metricSegments(view, withHeadlineLabel, primary.last),
 		};
 	}
 	if (primary?.kind === "meter") {
@@ -133,13 +141,13 @@ function viewParts(entry: JobWidgetEntry, view: JobWidgetView, width: number): L
 				{ text: "[", token: "muted" },
 				{ text: "█".repeat(filled), token: chartToken },
 				{ text: "░".repeat(cells - filled), token: "muted" },
-				{ text: "] ", token: "muted" },
-				{ text: oneLine(primary.text) },
+				{ text: "]", token: "muted" },
 			],
-			metrics: metricSegments(view),
+			count: { text: oneLine(primary.text) },
+			metrics: (withHeadlineLabel) => metricSegments(view, withHeadlineLabel),
 		};
 	}
-	return { chart: [], metrics: metricSegments(view) };
+	return { chart: [], metrics: (withHeadlineLabel) => metricSegments(view, withHeadlineLabel) };
 }
 
 function idToken(entry: JobWidgetEntry): JobWidgetLineToken {
@@ -166,31 +174,69 @@ export function formatJobWidgetLine(
 	const view = entry.view;
 	if (entry.state === "skipped" || view === undefined || width <= 0) return undefined;
 	const parts = viewParts(entry, view, width);
-	const idSegments: Segment[] =
-		options.showId === false ? [] : [{ text: entry.id, token: idToken(entry) }, { text: GAP }];
 	const title = oneLine(view.title);
+	const titleWidth = visibleWidth(title);
 
-	const compose = (titleText: string, withLabel: boolean, withChart: boolean): Segment[] => {
-		const tail: Segment[] = [];
-		if (withChart && parts.chart.length > 0) tail.push({ text: GAP }, ...parts.chart);
-		if (parts.metrics.length > 0) tail.push({ text: GAP }, ...parts.metrics);
-		const label = withLabel && parts.label ? [{ text: ` · ${oneLine(parts.label)}`, token: "muted" as const }] : [];
-		return [...idSegments, { text: titleText }, ...label, ...tail];
+	interface Shape {
+		title: string;
+		blockLabel: boolean;
+		chart: boolean;
+		headlineLabel: boolean;
+		gap: string;
+	}
+	/** The pieces present (id, title, chart/count, metrics), joined by the gap. */
+	const compose = (shape: Shape): Segment[] => {
+		const pieces: Segment[][] = [];
+		if (options.showId !== false) pieces.push([{ text: entry.id, token: idToken(entry) }]);
+		if (shape.title.length > 0) {
+			const label = shape.blockLabel && parts.label ? ` · ${oneLine(parts.label)}` : "";
+			pieces.push([{ text: shape.title }, ...(label ? [{ text: label, token: "muted" as const }] : [])]);
+		}
+		const bar = shape.chart ? parts.chart : [];
+		const chart = [...bar, ...(parts.count ? [...(bar.length > 0 ? [{ text: " " }] : []), parts.count] : [])];
+		if (chart.length > 0) pieces.push(chart);
+		const metrics = parts.metrics(shape.headlineLabel);
+		if (metrics.length > 0) pieces.push(metrics);
+		return pieces.flatMap((piece, index) => (index === 0 ? piece : [{ text: shape.gap }, ...piece]));
 	};
 	const fits = (segments: readonly Segment[]): boolean => visibleWidth(plain(segments)) <= width;
+	/** The line with the title cut to whatever room is left, if that leaves it at least `minTitle` columns. */
+	const shrunk = (shape: Omit<Shape, "title" | "blockLabel">, minTitle: number): Segment[] | undefined => {
+		const without = compose({ ...shape, title: "", blockLabel: false });
+		const room = width - visibleWidth(plain(without)) - visibleWidth(shape.gap);
+		if (room >= Math.min(minTitle, titleWidth)) {
+			const cut = titleWidth <= room ? title : cutPlain(title, room);
+			if (cut.length > 0 && cut !== ELLIPSIS) {
+				const candidate = compose({ ...shape, title: cut, blockLabel: false });
+				if (fits(candidate)) return candidate;
+			}
+		}
+		return minTitle === 0 && fits(without) ? without : undefined;
+	};
 
-	for (const withLabel of [true, false]) {
-		const candidate = compose(title, withLabel, true);
+	for (const blockLabel of [true, false]) {
+		const candidate = compose({ title, blockLabel, chart: true, headlineLabel: true, gap: GAP });
 		if (fits(candidate)) return styled(candidate, style);
 	}
-	for (const withChart of [true, false]) {
-		const rest = visibleWidth(plain(compose("", false, withChart)));
-		const room = width - rest;
-		if (room >= Math.min(MIN_TITLE_COLUMNS, visibleWidth(title))) {
-			return styled(compose(cutPlain(title, room), false, withChart), style);
+	for (const headlineLabel of [true, false]) {
+		for (const chart of [true, false]) {
+			const candidate = shrunk({ chart, headlineLabel, gap: GAP }, MIN_TITLE_COLUMNS);
+			if (candidate) return styled(candidate, style);
 		}
 	}
-	const narrow = compose(title, false, false);
+	for (const gap of [GAP, " "]) {
+		const candidate = shrunk({ chart: false, headlineLabel: false, gap }, 0);
+		if (candidate) return styled(candidate, style);
+	}
+	// Nothing fits whole: cut from the end, with the numbers leading when there are any.
+	const hasNumbers = parts.count !== undefined || parts.metrics(false).length > 0;
+	const narrow = compose({
+		title: hasNumbers ? "" : title,
+		blockLabel: false,
+		chart: false,
+		headlineLabel: false,
+		gap: " ",
+	});
 	return style === PLAIN_LINE_STYLE
 		? cutPlain(plain(narrow), width)
 		: truncateToWidth(styled(narrow, style), width, ELLIPSIS);
