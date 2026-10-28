@@ -11,7 +11,7 @@ import { formatJobWidgetLine, type JobWidgetLineStyle, jobWidgetLineStyle } from
 import type { JobWidgetEntry, JobWidgetState } from "./view-types.ts";
 
 export const JOB_WIDGET_TUI_KEY = "job-widgets";
-export const MAX_JOB_WIDGET_LINES = 3;
+const MAX_JOB_WIDGET_LINES = 3;
 export const DONE_LINGER_MS = 10_000;
 const PAD = " ";
 
