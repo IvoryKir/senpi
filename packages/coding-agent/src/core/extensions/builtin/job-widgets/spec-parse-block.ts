@@ -16,6 +16,7 @@ import {
 } from "./spec-parse-primitives.ts";
 import { readMeterTotal } from "./spec-repair.ts";
 import {
+	type JobWidgetAgg,
 	type JobWidgetBlockSpec,
 	type JobWidgetStatItemSpec,
 	type JobWidgetValueRef,
@@ -26,6 +27,9 @@ import {
 	MAX_UNIT_CHARS,
 } from "./spec-types.ts";
 import type { JobWidgetTone } from "./view-types.ts";
+
+/** What a bars or meter block without `agg` reduces its field with. */
+const DEFAULT_BLOCK_AGG: JobWidgetAgg = "last";
 
 export function parseBlock(value: unknown, where: string, errors: string[]): JobWidgetBlockSpec | undefined {
 	if (!isRecord(value)) {
@@ -51,7 +55,9 @@ function parseBlockKind(
 		optional(readString(value.key, `${where}.key`, errors, { max: MAX_KEY_CHARS }), "key");
 	const better = (): Record<string, "higher" | "lower"> =>
 		optional(readBetter(value.better, `${where}.better`, errors), "better");
-	const agg = () => readAgg(value.agg, `${where}.agg`, errors) ?? "last";
+	// The schema leaves a block's `agg` optional: an absent one is `last` rather than a retry. An
+	// unknown one is an error, which drops the block, so the `?? DEFAULT_BLOCK_AGG` never reaches a spec.
+	const agg = () => readAgg(value.agg, `${where}.agg`, errors, DEFAULT_BLOCK_AGG) ?? DEFAULT_BLOCK_AGG;
 	switch (value.kind) {
 		case "spark":
 			return {
@@ -109,7 +115,7 @@ function parseMeter(
 ): JobWidgetBlockSpec | undefined {
 	const whole = readMeterTotal(value.total);
 	if (whole.kind === "unknown") {
-		const ref = parseValueRef(value, where, errors);
+		const ref = parseValueRef(value, where, errors, DEFAULT_BLOCK_AGG);
 		return ref && { kind: "stat", items: [{ ...ref, label: read.label() }] };
 	}
 	let total: number | JobWidgetValueRef | undefined;

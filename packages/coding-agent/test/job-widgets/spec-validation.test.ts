@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+	JOB_WIDGET_SPEC_SCHEMA,
 	jobWidgetSkip,
 	type JobWidgetSampleLines,
 	validateJobWidgetSpec,
@@ -149,6 +150,49 @@ describe("job widget spec local repairs", () => {
 			blocks: [{ kind: "meter", field: "rps", agg: "count", label: "req", total: "96" }],
 		});
 		expect(spec.blocks[0]).toEqual({ kind: "meter", field: "rps", agg: "count", total: 96, label: "req" });
+	});
+
+	// The schema requires only `kind` on a block, so an absent bars or meter `agg` must not cost a retry.
+	const aggDefaults: [string, Record<string, unknown>, unknown][] = [
+		[
+			"bars without agg",
+			{ kind: "bars", field: "rps", label: "rps" },
+			{ kind: "bars", field: "rps", agg: "last", label: "rps" },
+		],
+		[
+			"bars with a null agg",
+			{ kind: "bars", field: "rps", agg: null, label: "rps" },
+			{ kind: "bars", field: "rps", agg: "last", label: "rps" },
+		],
+		[
+			"a meter without agg",
+			{ kind: "meter", field: "rps", total: { field: "rps", agg: "max" }, label: "rps" },
+			{ kind: "meter", field: "rps", agg: "last", total: { field: "rps", agg: "max" }, label: "rps" },
+		],
+		[
+			"a meter without agg or a known total",
+			{ kind: "meter", field: "rps", label: "rps" },
+			{ kind: "stat", items: [{ field: "rps", agg: "last", label: "rps" }] },
+		],
+	];
+
+	it.each(aggDefaults)("reads %s as agg last", (_name, authored, parsed) => {
+		const blockSchema = (JOB_WIDGET_SPEC_SCHEMA.properties as { blocks: { items: { required: string[] } } }).blocks
+			.items;
+		expect(blockSchema.required).not.toContain("agg");
+		const rules = [{ from: "out", match: String.raw`(?P<host>\S+) rps=(?P<rps>\d+)`, key: "host" }];
+		expect(validSpec({ ...base, rules, blocks: [authored] }).blocks).toEqual([parsed]);
+	});
+
+	it("still rejects an agg outside the contract, and an absent agg where the schema requires one", () => {
+		expect(errorsOf({ ...base, blocks: [{ kind: "bars", field: "rps", agg: "avg", label: "rps" }] })).toEqual([
+			"blocks[0].agg: expected one of last, first, min, max, mean, sum, count, rate, delta, change",
+		]);
+		const refSchema = (JOB_WIDGET_SPEC_SCHEMA.properties as { headline: { required: string[] } }).headline;
+		expect(refSchema.required).toContain("agg");
+		expect(errorsOf({ ...base, headline: { field: "rps" } })).toEqual([
+			"headline.agg: expected one of last, first, min, max, mean, sum, count, rate, delta, change",
+		]);
 	});
 
 	it("wraps a groupless pattern in its `text` group and drops roles naming missing groups", () => {
