@@ -1,91 +1,13 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, sep } from "node:path";
 import { realpathWithoutOpenStrict } from "../../../../utils/paths.ts";
+import type { MountSnapshot } from "./mount-table.ts";
 import { foldCaseText } from "./path-identity.ts";
-
-export type MountEntry = { readonly dev: string; readonly on: string; readonly type: string };
-export type MountSnapshot = { readonly mounts: MountEntry[]; readonly degraded: boolean; readonly rejected: string[] };
 
 /** Filesystem types whose names a positive confirmation may trust: only types with a measured set. */
 export const REAL_FS: ReadonlySet<string> = new Set(["apfs", "btrfs", "overlay", "virtiofs", "tmpfs", "nfs"]);
 export const DETECTOR_MAX_READDIR = 256;
 export const DETECTOR_MAX_ENTRIES = 5000;
-
-const TYPE_TOKEN = /^[a-z0-9_.-]+$/i;
-
-function validMountPoint(on: string): boolean {
-	return on.length > 0 && isAbsolute(on) && !on.includes("//") && (on === "/" || !on.endsWith("/"));
-}
-
-/**
- * darwin `mount` line `<dev> on <mountpoint> (<type>[, opts...])`, parsed from the RIGHT: the type
- * parenthetical is the last `(...)` at end of line and cannot contain parentheses; the mount point is
- * everything between the FIRST ` on ` and it (device names never contain ` on `; mount points may).
- */
-export function parseDarwinMountLine(line: string): MountEntry | undefined {
-	const match = /^(.*) \(([^()]*)\)$/.exec(line);
-	if (!match) return undefined;
-	const type = (match[2] ?? "").split(",")[0]?.trim() ?? "";
-	if (!TYPE_TOKEN.test(type)) return undefined;
-	const head = match[1] ?? "";
-	const onIndex = head.indexOf(" on ");
-	if (onIndex <= 0) return undefined;
-	const dev = head.slice(0, onIndex);
-	const on = head.slice(onIndex + 4);
-	if (!dev || !validMountPoint(on)) return undefined;
-	return { dev, on, type };
-}
-
-function unescapeLinuxMountField(value: string): string {
-	return value.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
-}
-
-/** linux `/proc/self/mounts` line `<dev> <mountpoint> <type> <opts> <dump> <pass>`, octal-escaped. */
-export function parseLinuxMountLine(line: string): MountEntry | undefined {
-	const parts = line.split(" ");
-	if (parts.length < 3) return undefined;
-	const on = unescapeLinuxMountField(parts[1] ?? "");
-	const type = parts[2] ?? "";
-	const dev = unescapeLinuxMountField(parts[0] ?? "");
-	if (!dev || !validMountPoint(on) || !TYPE_TOKEN.test(type)) return undefined;
-	return { dev, on, type };
-}
-
-/**
- * Every line parsed and validated, or the snapshot is DEGRADED and confirms nothing: a rejected line,
- * a duplicate mount point or a missing root entry all degrade it.
- */
-export function parseMountTable(text: string, platform: string = process.platform): MountSnapshot {
-	const mounts: MountEntry[] = [];
-	const rejected: string[] = [];
-	for (const line of text.split("\n")) {
-		if (line.trim().length === 0) continue;
-		const entry = platform === "darwin" ? parseDarwinMountLine(line) : parseLinuxMountLine(line);
-		if (entry) mounts.push(entry);
-		else rejected.push(line);
-	}
-	mounts.sort((a, b) => b.on.length - a.on.length);
-	const seen = new Set<string>();
-	let duplicate = false;
-	for (const mount of mounts) {
-		if (seen.has(mount.on)) duplicate = true;
-		seen.add(mount.on);
-	}
-	const degraded = rejected.length > 0 || duplicate || !mounts.some((mount) => mount.on === "/");
-	return { mounts, degraded, rejected };
-}
-
-export function readMountTable(platform: string = process.platform): MountSnapshot {
-	if (platform === "darwin") {
-		const result = spawnSync("mount", [], { encoding: "utf8" });
-		if (result.error || result.status !== 0)
-			return { mounts: [], degraded: true, rejected: ["mount command failed"] };
-		return parseMountTable(result.stdout, "darwin");
-	}
-	if (existsSync("/proc/self/mounts")) return parseMountTable(readFileSync("/proc/self/mounts", "utf8"), "linux");
-	return { mounts: [], degraded: true, rejected: ["no mount table source"] };
-}
 
 /** Mount points that are aliases of the darwin Data volume: the Data mount and every mount of its device. */
 export function mountAliasRoots(snapshot: MountSnapshot, platform: string = process.platform): string[] {
@@ -236,9 +158,16 @@ export function createDetector(
 	platform: string = process.platform,
 ): (value: string) => Verdict {
 	const mounts = [...snapshot.mounts].sort((a, b) => b.on.length - a.on.length);
+	const ambiguous = new Set(snapshot.ambiguous);
 	const roots = mountAliasRoots(snapshot, platform);
 	const mountFor = (value: string) =>
 		mounts.find((mount) => value === mount.on || value.startsWith(mount.on === "/" ? "/" : `${mount.on}/`));
+	/** The reason a component's mount cannot confirm it: no entry, a type outside the allowlist, or an ambiguous point. */
+	const unconfirmedBy = (value: string): string | undefined => {
+		const mount = mountFor(value);
+		if (!mount || !REAL_FS.has(mount.type)) return `fs-type:${mount?.type ?? "no-mount-entry"}`;
+		return ambiguous.has(mount.on) ? `mount-point-ambiguous:${mount.on}` : undefined;
+	};
 	const mountAliased = (value: string) => roots.some((root) => value === root || value.startsWith(`${root}/`));
 	return (value) => {
 		const reasons: string[] = [];
@@ -261,16 +190,16 @@ export function createDetector(
 		const root = parse(walked).root;
 		const parts = walked.slice(root.length).split(sep).filter(Boolean);
 		let parent = root;
-		const rootMount = mountFor(root);
-		if (!rootMount || !REAL_FS.has(rootMount.type)) {
-			reasons.push(`fs-type:${rootMount?.type ?? "no-mount-entry"}`);
+		const rootReason = unconfirmedBy(root);
+		if (rootReason !== undefined) {
+			reasons.push(rootReason);
 			return { alias: true, reasons, readdirs };
 		}
 		for (const part of parts) {
 			const here = join(parent, part);
-			const mount = mountFor(here);
-			if (!mount || !REAL_FS.has(mount.type)) {
-				reasons.push(`fs-type:${mount?.type ?? "no-mount-entry"}@${here}`);
+			const reason = unconfirmedBy(here);
+			if (reason !== undefined) {
+				reasons.push(`${reason}@${here}`);
 				break;
 			}
 			let entries: string[];

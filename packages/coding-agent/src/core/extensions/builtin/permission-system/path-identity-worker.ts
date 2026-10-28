@@ -2,7 +2,8 @@ import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, sep, win32 } from "node:path";
 import { parentPort } from "node:worker_threads";
 import { realpathWithoutOpenStrict } from "../../../../utils/paths.ts";
-import { createDetector, type MountSnapshot, readFirmlinks, readMountTable } from "./alias-detector.ts";
+import { createDetector, readFirmlinks } from "./alias-detector.ts";
+import { type MountSnapshot, readMountTable } from "./mount-table.ts";
 import { createPathIdentity } from "./path-identity.ts";
 import type { ResolverReply, ResolverRequest, ResolverSnapshotMessage } from "./path-identity-protocol.ts";
 

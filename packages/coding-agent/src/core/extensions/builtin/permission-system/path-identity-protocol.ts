@@ -1,4 +1,4 @@
-import type { MountSnapshot } from "./alias-detector.ts";
+import type { MountSnapshot } from "./mount-table.ts";
 import type { CanonicalPath, CanonicalRule } from "./path-identity.ts";
 
 export type ResolverRequest =
