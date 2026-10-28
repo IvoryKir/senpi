@@ -2124,10 +2124,13 @@ session's extension order, as `{ name, config, extensionPath }` copies
 (`RegisteredMcpServer`). That order puts inline and built-in extension factories
 before file extensions, whatever order they loaded in. Before the session binds
 its extensions (while extension factories run), the list holds only the
-extensions loaded so far, in load order; a trusted project's own extensions load
-after the factories, so a factory reading it then does not see their servers. Extensions the resource loader left out of the session (replaced,
-disabled, filtered) contribute nothing, and on a name clash the registration
-from the extension earliest in that order wins. For extensions that connect MCP servers
+extensions loaded so far, in load order. On the startup pass that resolves
+project trust, a trusted project's own extensions load after the factories, so
+a factory reading the list then does not see their servers; without that pass,
+every file extension loads before the factories. Extensions the resource loader
+left out of the session (replaced, disabled, filtered) contribute nothing, and
+on a name clash the registration from the extension earliest in the session's
+extension order wins. For extensions that connect MCP servers
 themselves, such as `pi-mcp-adapter`: read it on `session_start` and handle
 `mcp_servers_change` for later changes.
 
