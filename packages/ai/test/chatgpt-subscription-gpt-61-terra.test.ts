@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimple as streamSimpleOpenAICodexResponses } from "../src/api/openai-codex-responses.ts";
 import { getModel } from "../src/compat.ts";
@@ -5,6 +6,11 @@ import type { AssistantMessage, Model } from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 const ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+const READ_TOOL = {
+	name: "read",
+	description: "Read a file",
+	parameters: Type.Object({ path: Type.String() }),
+};
 
 function mockToken(): string {
 	const payload = Buffer.from(
@@ -32,7 +38,10 @@ async function sendAgainst404(
 			return new Response(null, { status: 404 });
 		}),
 	);
-	const context = normalizeContext({ messages: [{ role: "user", content: "Say hello", timestamp: 0 }] });
+	const context = normalizeContext({
+		messages: [{ role: "user", content: "Say hello", timestamp: 0 }],
+		tools: [READ_TOOL],
+	});
 	const result = await streamSimpleOpenAICodexResponses(model, context, {
 		apiKey: mockToken(),
 		transport: "sse",
@@ -71,6 +80,14 @@ describe("GPT-6.1 Terra on the ChatGPT subscription (senpi#4578)", () => {
 			cacheRead: api.cost.cacheRead,
 		});
 		expect(terra.thinkingLevelMap).toMatchObject({ off: "none", minimal: null, max: "max" });
+		expect(terra.compat).toEqual({
+			supportsOpenAIGrammarTools: true,
+			supportsAdditionalTools: true,
+			supportsToolSearch: true,
+			supportsMidConvoSystemMessages: true,
+		});
+		const { supportsConfigurationUpdate: _solOnly, ...solToolCompat } = sol.compat ?? {};
+		expect(terra.compat).toEqual(solToolCompat);
 	});
 
 	it("sends the same request shape as GPT-6.1 Sol to the Codex responses endpoint", async () => {
@@ -82,6 +99,8 @@ describe("GPT-6.1 Terra on the ChatGPT subscription (senpi#4578)", () => {
 		expect(terra.request.body.model).toBe("gpt-6.1-terra");
 		expect(Object.keys(terra.request.body).sort()).toEqual(Object.keys(sol.request.body).sort());
 		expect(terra.request.body.reasoning).toEqual(sol.request.body.reasoning);
+		expect(terra.request.body.tools).toEqual(sol.request.body.tools);
+		expect(terra.request.body.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "read" })]));
 	});
 
 	it("sends reasoning effort none when thinking is off, which Terra accepts", async () => {
@@ -89,7 +108,7 @@ describe("GPT-6.1 Terra on the ChatGPT subscription (senpi#4578)", () => {
 		expect(request.body.reasoning).toMatchObject({ effort: "none" });
 	});
 
-	it("reports a bodiless 404 from the Codex backend as a status-only diagnostic", async () => {
+	it("a Terra request answered with a bodiless 404 carries the status-only diagnostic model_unavailable reads", async () => {
 		const { result } = await sendAgainst404(getModel("chatgpt-subscription", "gpt-6.1-terra"), "high");
 		expect(result.stopReason).toBe("error");
 		expect(result.providerDiagnostic).toEqual({

@@ -513,12 +513,15 @@ const OPENAI_TOOL_SEARCH_MODEL_IDS = new Set([
 ]);
 const OPENAI_ADDITIONAL_TOOLS_MODEL_IDS = OPENAI_TOOL_SEARCH_MODEL_IDS;
 const OPENAI_MID_CONVO_SYSTEM_MESSAGE_MODEL_IDS = OPENAI_TOOL_SEARCH_MODEL_IDS;
+// GPT-6.1 Terra is listed for the subscription only, as in upstream pi's Codex rows (#4578); the API-key row
+// keeps its current flags until it is verified separately.
 const CHATGPT_SUBSCRIPTION_ADDITIONAL_TOOLS_MODEL_IDS = new Set([
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
 	"gpt-6-astra",
 	"gpt-6.1-sol",
+	"gpt-6.1-terra",
 	"gpt-6-sol",
 	"gpt-6-luna",
 ]);
@@ -1296,7 +1299,11 @@ function applyOpenAIGrammarToolCompatMetadata(model: Model<Api>): void {
 function applyOpenAIToolSearchMetadata(model: Model<Api>): void {
 	const isOpenAIResponses = model.provider === "openai" && model.api === "openai-responses";
 	const isChatGptSubscription = model.provider === "chatgpt-subscription" && model.api === "openai-codex-responses";
-	if (!(isOpenAIResponses || isChatGptSubscription) || !OPENAI_TOOL_SEARCH_MODEL_IDS.has(model.id)) return;
+	const supportsToolSearch =
+		(isOpenAIResponses && OPENAI_TOOL_SEARCH_MODEL_IDS.has(model.id)) ||
+		(isChatGptSubscription &&
+			(OPENAI_TOOL_SEARCH_MODEL_IDS.has(model.id) || CHATGPT_SUBSCRIPTION_ADDITIONAL_TOOLS_MODEL_IDS.has(model.id)));
+	if (!supportsToolSearch) return;
 	const supportsAdditionalTools =
 		(isOpenAIResponses && OPENAI_ADDITIONAL_TOOLS_MODEL_IDS.has(model.id)) ||
 		(isChatGptSubscription && CHATGPT_SUBSCRIPTION_ADDITIONAL_TOOLS_MODEL_IDS.has(model.id));
@@ -1347,10 +1354,10 @@ function applyOpenAIResponsesTranscriptMetadata(model: Model<Api>): void {
 	const isChatGptSubscription = model.provider === "chatgpt-subscription" && model.api === "openai-codex-responses";
 	const isProxiedResponses =
 		OPENAI_RESPONSES_PROXY_PROVIDERS.has(model.provider) && model.api === "openai-responses";
-	if (
-		!(isOpenAIResponses || isChatGptSubscription || isProxiedResponses) ||
-		!OPENAI_MID_CONVO_SYSTEM_MESSAGE_MODEL_IDS.has(model.id)
-	) {
+	const supportsMidConvo =
+		OPENAI_MID_CONVO_SYSTEM_MESSAGE_MODEL_IDS.has(model.id) ||
+		(isChatGptSubscription && CHATGPT_SUBSCRIPTION_ADDITIONAL_TOOLS_MODEL_IDS.has(model.id));
+	if (!(isOpenAIResponses || isChatGptSubscription || isProxiedResponses) || !supportsMidConvo) {
 		return;
 	}
 	model.compat = {
