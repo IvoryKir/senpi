@@ -29,8 +29,11 @@ export async function killAndWait(child: ChildProcess, timeoutMs = 20_000): Prom
 }
 
 /**
- * Kills every process whose command line names `root` and waits for each to disappear. A per-test
- * `mkdtemp` directory appears in no other process's argv, so this is exact rather than pattern-lucky.
+ * Kills every process whose command line names `root` - AND every descendant of those processes -
+ * then waits for each to disappear. A per-test `mkdtemp` directory appears in no other process's
+ * argv, so the argv half is exact rather than pattern-lucky; the descendant half catches the
+ * children those processes spawned under names of their own (a supervisor's host child binds its
+ * own private socket, so the sandbox never appears in its argv).
  *
  * POSIX only: `pgrep` does not exist on win32, where these hosts serve named pipes and are reaped
  * through the fixture's own parent watch instead.
