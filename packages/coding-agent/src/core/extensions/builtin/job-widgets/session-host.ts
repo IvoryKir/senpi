@@ -6,7 +6,7 @@
  */
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "../../types.ts";
-import type { JobWidgetRedact } from "./author-redact.ts";
+import type { JobWidgetObfuscator } from "./author-redact.ts";
 import type { JobWidgetAuthor } from "./author-types.ts";
 import { JobWidgetRegistry, type JobWidgetSourceHandle } from "./registry.ts";
 import type { JobWidgetJobInput } from "./registry-job.ts";
@@ -24,7 +24,7 @@ export interface JobWidgetSessionOptions {
 	readonly authorAfterMs: number;
 	readonly author: JobWidgetAuthor;
 	readonly publish: (state: JobWidgetState) => void;
-	readonly obfuscate?: JobWidgetRedact;
+	readonly obfuscate?: JobWidgetObfuscator;
 }
 
 interface SessionSlot {

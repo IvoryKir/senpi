@@ -10,11 +10,11 @@ import {
 	secretOutputObfuscator,
 } from "../../src/core/extensions/builtin/job-widgets/index.ts";
 import { controllerFor, FakeJob, RPS_SPEC, scriptedAuthor, UNMATCHED_SPEC } from "./author-support.ts";
+import { KEY_FORMS, type Key, leakedSlices, makeKey } from "./key-fixtures.ts";
 
 // Security contract (P2 review): a private key a job prints, or names in its brief, label or retry
 // text, never reaches an author, whatever the session's secret setting and wherever the sample
-// windows cut the key. Key text is assembled at runtime from parts and synthetic base64, so no
-// literal key marker or key-shaped body is checked in.
+// windows cut the key.
 
 const WIDGET_MODEL: Model<Api> = {
 	id: "widget-model",
@@ -28,74 +28,6 @@ const WIDGET_MODEL: Model<Api> = {
 	contextWindow: 32_000,
 	maxTokens: 4096,
 };
-
-const DASHES = "-".repeat(5);
-const PRIVATE_KEY = ["PRIV", "ATE", " KEY"].join("");
-
-function armor(edge: "BEGIN" | "END", label: string): string {
-	return `${DASHES}${edge} ${label}${DASHES}`;
-}
-
-/** Deterministic synthetic base64 (mulberry32), so a failure reproduces. */
-function base64Source(seed: number): (length: number) => string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	let state = seed >>> 0;
-	const next = (): number => {
-		state = (state + 0x6d2b79f5) >>> 0;
-		let t = state;
-		t = Math.imul(t ^ (t >>> 15), t | 1);
-		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-	};
-	return (length) => Array.from({ length }, () => alphabet[Math.floor(next() * alphabet.length)]).join("");
-}
-
-interface KeyForm {
-	readonly name: string;
-	readonly label: string;
-	readonly width: number;
-	/** Armor lines between the BEGIN line and the body. */
-	readonly headers: readonly string[];
-	/** A PGP armor checksum line after the body. */
-	readonly checksum: boolean;
-}
-
-const FORMS: readonly KeyForm[] = [
-	{ name: "RSA", label: `RSA ${PRIVATE_KEY}`, width: 64, headers: [], checksum: false },
-	{ name: "EC", label: `EC ${PRIVATE_KEY}`, width: 64, headers: [], checksum: false },
-	{ name: "OPENSSH", label: `OPENSSH ${PRIVATE_KEY}`, width: 70, headers: [], checksum: false },
-	{ name: "PKCS#8", label: PRIVATE_KEY, width: 64, headers: [], checksum: false },
-	{ name: "ENCRYPTED PKCS#8", label: `ENCRYPTED ${PRIVATE_KEY}`, width: 64, headers: [], checksum: false },
-	{
-		name: "legacy encrypted RSA",
-		label: `RSA ${PRIVATE_KEY}`,
-		width: 64,
-		headers: ["Proc-Type: 4,ENCRYPTED", `DEK-Info: AES-128-CBC,${"0F".repeat(16)}`, ""],
-		checksum: false,
-	},
-	{ name: "PGP", label: `PGP ${PRIVATE_KEY} BLOCK`, width: 64, headers: [""], checksum: true },
-];
-
-interface Key {
-	readonly lines: readonly string[];
-	/** The secret: every body line. */
-	readonly body: readonly string[];
-	/** Index in `lines` of the first body line. */
-	readonly bodyStart: number;
-}
-
-function makeKey(form: KeyForm, seed: number): Key {
-	const random = base64Source(seed);
-	const body = [...Array.from({ length: 12 }, () => random(form.width)), `${random(30)}==`];
-	const lines = [
-		armor("BEGIN", form.label),
-		...form.headers,
-		...body,
-		...(form.checksum ? [`=${random(4)}`] : []),
-		armor("END", form.label),
-	];
-	return { lines, body, bodyStart: 1 + form.headers.length };
-}
 
 const PRE = ["req 1 rps=40", "req 2 rps=44", "req 3 rps=51"];
 const POST = "req 4 rps=52";
@@ -143,22 +75,7 @@ function sample(lines: { head: string[]; tail: string[] }, cr: string, label: st
 	return { id: "out", label, size: 4096, lines: head.length + tail.length + 40, head, tail };
 }
 
-/** Every 16-character slice of a body line found in `text`. */
-function leakedSlices(text: string, body: readonly string[]): string[] {
-	const found: string[] = [];
-	for (const line of body) {
-		for (let at = 0; at + 16 <= line.length; at++) {
-			const slice = line.slice(at, at + 16);
-			if (text.includes(slice)) {
-				found.push(slice);
-				break;
-			}
-		}
-	}
-	return found;
-}
-
-const CASES = FORMS.flatMap((form, formIndex) =>
+const CASES = KEY_FORMS.flatMap((form, formIndex) =>
 	PLACEMENTS.flatMap((placement) =>
 		ENDINGS.flatMap(([ending, cr]) =>
 			SETTINGS.map(
