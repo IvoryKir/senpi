@@ -303,7 +303,7 @@ jobs:
 
       - name: Restore the workspace build
         shell: bash
-        run: tar -xzf "$RUNNER_TEMP/workspace-dist.tar.gz"
+        run: tar -xzmf "$RUNNER_TEMP/workspace-dist.tar.gz"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
