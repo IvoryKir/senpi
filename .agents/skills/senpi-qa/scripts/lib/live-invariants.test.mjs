@@ -134,6 +134,17 @@ test("a call that started and never ended is dangling", () => {
 	assert.equal(checkNoDanglingCall(started("c1")).pass, true);
 });
 
+test("an end without a matching start is a violation and does not close another running call", () => {
+	const events = [
+		{ type: "tool_execution_start", toolCallId: "ev1" },
+		{ type: "tool_execution_end", toolCallId: "ghost" },
+		{ type: "tool_hook_status", toolCallId: "cm-1", toolName: "bash" },
+		{ type: "tool_execution_end", toolCallId: "ev1" },
+	];
+	assert.deepEqual(checkNoDanglingCall(events).detail, ["call ghost ended without a start"]);
+	assert.deepEqual(nestedCalls(events), [{ id: "cm-1", name: "bash", parentId: "ev1" }]);
+});
+
 test("G1: a hook missing, firing twice, or firing for an unknown call fails; nested calls count", () => {
 	const entries = [assistant("a", [["c1", "read"]]), result("r1", "c1")];
 	assert.equal(checkHooksOncePerCall(hooks("c1"), entries, []).pass, true);

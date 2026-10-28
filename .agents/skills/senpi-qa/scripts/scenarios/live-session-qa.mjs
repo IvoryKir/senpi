@@ -32,7 +32,7 @@ const NOT_AVAILABLE = {
 	"hosted-do": "GATED(C6): hosted placements run only in LIVE-P7, after the C6 custody pick",
 	"hosted-bun": "GATED(C6): hosted placements run only in LIVE-P7, after the C6 custody pick",
 };
-export const LIVE_OPT_IN = "SENPI_LIVE_SESSION_QA";
+const LIVE_OPT_IN = "SENPI_LIVE_SESSION_QA";
 const LIVE_PROMPT_TIMEOUT_MS = 30 * 60_000;
 
 function parseArgs(argv) {

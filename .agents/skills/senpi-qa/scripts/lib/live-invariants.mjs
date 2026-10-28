@@ -3,14 +3,14 @@
 // model or a process, so the checks are unit-tested on synthetic records (live-invariants.test.mjs).
 import { diffNormalized } from "./equivalence-normalize.mjs";
 
-export const MIN_TOOL_CALLS = 30;
-export const MIN_TURNS = 8;
+const MIN_TOOL_CALLS = 30;
+const MIN_TURNS = 8;
 export const MAX_BUDGET = 1_000_000;
-export const QUESTION_TOOLS = new Set(["ask_user_question", "request_user_input"]);
+const QUESTION_TOOLS = new Set(["ask_user_question", "request_user_input"]);
 /** RPC events that report an engine failure (plus any assistant message that stopped with "error"). */
-export const ENGINE_ERROR_EVENTS = new Set(["extension_error", "continuation_error", "model_config_error"]);
+const ENGINE_ERROR_EVENTS = new Set(["extension_error", "continuation_error", "model_config_error"]);
 /** Placements on which no uncertain / hand_restarted / abort marker may appear (plan §3.4). */
-export const MARKER_FREE_PLACEMENTS = new Set(["fused", "split-local"]);
+const MARKER_FREE_PLACEMENTS = new Set(["fused", "split-local"]);
 const MARKER_VALUES = new Set(["uncertain", "hand_restarted"]);
 /** Free-text fields a model writes: a marker word inside them is prose, not an engine state. */
 const PROSE_KEYS = new Set(["text", "thinking", "arguments", "input", "content", "delta", "partialJson", "message"]);
@@ -23,7 +23,7 @@ const check = (id, failures, detail) => ({
 const messages = (entries) => entries.filter((entry) => entry?.type === "message" && entry.message);
 
 /** Every tool call in the transcript, in source order: { id, name, messageIndex }. */
-export function transcriptCalls(entries) {
+function transcriptCalls(entries) {
 	return messages(entries).flatMap(({ message }, messageIndex) =>
 		message.role === "assistant" && Array.isArray(message.content)
 			? message.content
@@ -44,8 +44,11 @@ export function nestedCalls(events) {
 	const nested = new Map();
 	for (const event of events) {
 		if (event.type === "tool_execution_start") open.push(event.toolCallId);
-		else if (event.type === "tool_execution_end") open.splice(open.lastIndexOf(event.toolCallId), 1);
-		else if (event.type === "tool_hook_status" && !topLevel.has(event.toolCallId) && !nested.has(event.toolCallId))
+		else if (event.type === "tool_execution_end") {
+			// An end with no matching start must not close another running call; checkNoDanglingCall reports it.
+			const index = open.lastIndexOf(event.toolCallId);
+			if (index !== -1) open.splice(index, 1);
+		} else if (event.type === "tool_hook_status" && !topLevel.has(event.toolCallId) && !nested.has(event.toolCallId))
 			nested.set(event.toolCallId, { id: event.toolCallId, name: event.toolName, parentId: open.at(-1) });
 	}
 	return [...nested.values()];
@@ -94,12 +97,22 @@ export function checkNoEngineError(events, entries) {
 	return check("engine.no-error", failures, "no engine error event");
 }
 
-/** Every started tool execution (the session's and nested ones) has ended. */
+/** Every started tool execution (the session's and nested ones) has ended, and every end follows its start. */
 export function checkNoDanglingCall(events) {
-	const ended = new Set(events.filter((e) => e.type === "tool_execution_end").map((e) => e.toolCallId));
-	const started = events.filter((e) => e.type === "tool_execution_start").map((e) => e.toolCallId);
-	const failures = started.filter((id) => !ended.has(id)).map((id) => `call ${id} started and never ended`);
-	return check("engine.no-dangling-call", failures, `${started.length} started, all ended`);
+	const failures = [];
+	const open = new Map();
+	let started = 0;
+	for (const { type, toolCallId: id } of events) {
+		if (type === "tool_execution_start") {
+			started++;
+			open.set(id, (open.get(id) ?? 0) + 1);
+		} else if (type === "tool_execution_end") {
+			if (open.get(id)) open.set(id, open.get(id) - 1);
+			else failures.push(`call ${id} ended without a start`);
+		}
+	}
+	for (const [id, count] of open) if (count > 0) failures.push(`call ${id} started and never ended`);
+	return check("engine.no-dangling-call", failures, `${started} started, all ended`);
 }
 
 /** G1: PreToolUse and PostToolUse fire exactly once per call (top-level, nested-agent and eval-run calls alike). */
