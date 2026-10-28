@@ -93,6 +93,7 @@ import type {
 	OffloadOptions,
 	ProjectTrustContext,
 	ProjectTrustEvent,
+	ProviderLoginStartEvent,
 	ProjectTrustEventResult,
 	ProviderConfig,
 	ProviderRequestPreparation,
@@ -624,6 +625,8 @@ export class ExtensionRunner {
 		this.extensions = extensions;
 		registerRunnerExtensions(this, extensions);
 		this.runtime = runtime;
+		runtime.mcpServers.bind(extensions);
+		runtime.emitProviderLoginStart = (event) => this.emitProviderLoginStart(event);
 		this.uiContext = noOpUIContext;
 		this.cwd = cwd;
 		this.sessionManager = sessionManager;
@@ -743,6 +746,11 @@ export class ExtensionRunner {
 		this.onUserActivityFn = contextActions.onUserActivity;
 		this.executeToolFn = contextActions.executeTool;
 		this.getCallableToolsFn = contextActions.getCallableTools ?? (() => []);
+		// Servers registered from now on reach the extension that connects them right away. Servers
+		// registered during loading are read on session_start.
+		this.runtime.mcpServers.setChangeListener(() => {
+			void this.emit({ type: "mcp_servers_change", servers: this.runtime.mcpServers.list() });
+		});
 
 		for (const extension of this.extensions) {
 			for (const [name, hint] of extension.removedToolHints ?? []) {
@@ -1039,20 +1047,12 @@ export class ExtensionRunner {
 
 	/** Get extension-declared MCP servers (first declaration per name wins). */
 	getRegisteredMcpServers(): readonly RegisteredMcpServerDeclaration[] {
-		const serversByName = new Map<string, RegisteredMcpServerDeclaration>();
-		for (const ext of this.extensions) {
-			for (const decl of ext.mcpServers.values()) {
-				const existing = serversByName.get(decl.name);
-				if (existing === undefined) {
-					serversByName.set(decl.name, decl);
-				} else {
-					console.warn(
-						`MCP server '${decl.name}' declared by both ${existing.extensionPath} and ${ext.path}; keeping first declaration from ${existing.extensionPath}.`,
-					);
-				}
-			}
-		}
-		return Array.from(serversByName.values());
+		return this.runtime.mcpServers.declarations();
+	}
+
+	/** Whether a loaded extension handles `mcp_servers_change`, which makes it the one connecting registered servers. */
+	extensionConnectsMcpServers(): boolean {
+		return this.hasHandlers("mcp_servers_change");
 	}
 
 	/** Get a tool definition by name. Returns undefined if not found. */
@@ -1723,6 +1723,10 @@ export class ExtensionRunner {
 			getRegisteredMcpServers: () => {
 				runner.assertActive();
 				return runner.getRegisteredMcpServers();
+			},
+			extensionConnectsMcpServers: () => {
+				runner.assertActive();
+				return runner.extensionConnectsMcpServers();
 			},
 		};
 		if (this.questionInput) {
@@ -2561,6 +2565,17 @@ export class ExtensionRunner {
 		}
 
 		return { skillPaths, promptPaths, themePaths, hookPaths };
+	}
+
+	/** Awaits every `provider_login_start` handler in order; a failing handler is reported and the login goes on. */
+	async emitProviderLoginStart(event: ProviderLoginStartEvent): Promise<void> {
+		for (const { path, handler } of flattenHandlers(this.extensions, event.type)) {
+			try {
+				await handler(event, this.createContext(path));
+			} catch (err) {
+				this.reportHandlerFailure(path, event.type, err);
+			}
+		}
 	}
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
