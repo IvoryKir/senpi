@@ -35,6 +35,13 @@ const fileContent = (bytes) => {
 };
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 /**
+ * The MCP inventory announcement is emitted on the extension's own schedule: in E11 (darwin-arm64, today's code) it
+ * landed before the startup `pi-websearch` status events in one run and after them in another, and with the servers
+ * connected one at a time through `/mcp reconnect` it landed before or after that command's own notice and
+ * `command_invocation`. No case input orders it, so this one type is compared as its own list.
+ */
+const isSurfacesEvent = (event) => event.type === "loaded_surfaces_changed";
+/**
  * A multi-session host's event-loop watchdog reports a stall when the machine is loaded (`host_stalled` with its drift):
  * whether one fires depends on how loaded the machine is, not on the session, so it is not part of O6.
  */
@@ -64,9 +71,14 @@ export const collectors = {
 			),
 		),
 	O5: (run) => ({ calls: effectCalls(run), tree: sandboxTree(run.box.cwd), extra: run.effects }),
-	// One interleaved stream per client: lifecycle snapshots and surface changes are compared where they land among the
-	// turn's events, as a TUI or desktop client receives them.
-	O6: (run) => run.clients.map((client) => ({ events: client.events.filter((event) => !isHostHealthEvent(event)) })),
+	// One interleaved stream per client, as a TUI or desktop client receives it. The one exception is the event type whose
+	// position was measured to differ between runs of the same code: `loaded_surfaces_changed` (see isSurfacesEvent). It
+	// keeps its own ordered list, compared in full; only its position among the other events is not compared.
+	O6: (run) =>
+		run.clients.map((client) => ({
+			events: client.events.filter((event) => !isHostHealthEvent(event) && !isSurfacesEvent(event)),
+			surfaces: client.events.filter(isSurfacesEvent),
+		})),
 	O7: (run) => {
 		const entries =
 			run.sessionFile && existsSync(run.sessionFile) ? readJsonl(readFileSync(run.sessionFile, "utf8")) : [];
