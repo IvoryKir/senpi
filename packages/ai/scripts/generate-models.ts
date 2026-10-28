@@ -539,7 +539,8 @@ const OPENAI_MAX_CONTEXT_INPUT_CAP = 922000;
 const GPT_6_ASTRA_DEFAULT_CONTEXT_WINDOW = 600000;
 const GPT_6_SOL_DEFAULT_CONTEXT_WINDOW = 400000;
 // Live Codex catalog, 2026-10-12T00:15Z: subscription default only; API budgets stay unchanged (#3150).
-const CHATGPT_SUBSCRIPTION_GPT_61_SOL_CONTEXT_WINDOW = 500000;
+// GPT-6.1 Terra ships with the same 500k on the subscription, as upstream pi's Codex list does (#4578).
+const CHATGPT_SUBSCRIPTION_GPT_61_CONTEXT_WINDOW = 500000;
 const GPT_6_LUNA_DEFAULT_CONTEXT_WINDOW = OPENAI_MAX_CONTEXT_INPUT_CAP;
 const OPENAI_FLAGSHIP_DEFAULT_CONTEXT_WINDOWS: ReadonlyMap<string, number> = new Map([
 	["gpt-5.6-sol", 650000],
@@ -628,6 +629,9 @@ function withOpenAiLongContextPricing(cost: Model<Api>["cost"]): Model<Api>["cos
 // GPT-6 Sol / Luna list prices (developers.openai.com/api/docs/models/gpt-6-sol, gpt-6-luna).
 // GPT-6.1 Sol (2026-09-29) keeps Sol's input/output rates and halves cached input to 0.10
 // (developers.openai.com/api/docs/models/gpt-6.1-sol).
+// GPT-6.1 Terra list price (models.dev, matches upstream pi). Only the subscription row reads it here;
+// the API row keeps its models.dev metadata.
+const CHATGPT_SUBSCRIPTION_GPT_61_TERRA_COST: ModelCost = { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 };
 const OPENAI_GPT_6_STANDARD_COSTS: Record<string, ModelCost> = {
 	"gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 	"gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
@@ -1400,7 +1404,7 @@ function applyOpenAIConfigurationUpdateMetadata(model: Model<Api>): void {
 // changed with the provider that routed the request.
 function applyGpt6ContextWindow(model: Model<Api>): void {
 	if (model.provider === "chatgpt-subscription" && model.id === "gpt-6.1-sol") {
-		model.contextWindow = CHATGPT_SUBSCRIPTION_GPT_61_SOL_CONTEXT_WINDOW;
+		model.contextWindow = CHATGPT_SUBSCRIPTION_GPT_61_CONTEXT_WINDOW;
 		return;
 	}
 	const contextWindow = gpt6FamilyDefaultContextWindow(model.id);
@@ -4202,8 +4206,30 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: withOpenAiLongContextPricing(OPENAI_GPT_6_STANDARD_COSTS["gpt-6.1-sol"]),
-			contextWindow: CHATGPT_SUBSCRIPTION_GPT_61_SOL_CONTEXT_WINDOW,
+			contextWindow: CHATGPT_SUBSCRIPTION_GPT_61_CONTEXT_WINDOW,
 			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-6.1-terra",
+			name: "GPT-6.1 Terra",
+			api: "openai-codex-responses",
+			provider: "chatgpt-subscription",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: withOpenAiLongContextPricing(CHATGPT_SUBSCRIPTION_GPT_61_TERRA_COST),
+			contextWindow: CHATGPT_SUBSCRIPTION_GPT_61_CONTEXT_WINDOW,
+			maxTokens: CODEX_MAX_TOKENS,
+			// Terra accepts reasoning.effort "none" and rejects "minimal" (upstream pi, verified on Codex Oct 2026).
+			thinkingLevelMap: {
+				off: "none",
+				minimal: null,
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "xhigh",
+				max: "max",
+			},
 		},
 		{
 			id: "gpt-6-sol",
