@@ -119,6 +119,12 @@ function getV41CatalogModels(): Model<Api>[] {
 	);
 }
 
+function expectShipped1017Row(model: Model<Api>): void {
+	expect(model.reasoning).toBe(true);
+	expect(model.input).toContain("image");
+	expect(resolvePresetName(model, AUTO)).toBe("deepseek-v4-1-flash");
+}
+
 describe("DeepSeek V4.1 Flash prompt preset", () => {
 	it.each(V41_FLASH_MODEL_IDS)("resolves %s on %s to the deepseek-v4-1-flash preset", (modelId, provider) => {
 		// when
@@ -186,10 +192,15 @@ describe("DeepSeek V4.1 Flash prompt preset", () => {
 	});
 
 	it.each(SHIPPED_1017_ROWS)("ships the 1017 snapshot row on %s (%s) on the V4.1 preset", (_provider, _id, model) => {
+		expectShipped1017Row(model);
+	});
+
+	it("accepts a text-only 1017 row as the release's catalog regeneration can add one", () => {
+		// given models.dev's mistral row, served text-only upstream
+		const model = { ...createModel("deepseek-v4-1-flash-1017", "mistral"), input: ["text"] } satisfies Model<Api>;
+
 		// then
-		expect(model.reasoning).toBe(true);
-		expect(model.input).toContain("image");
-		expect(resolvePresetName(model, AUTO)).toBe("deepseek-v4-1-flash");
+		expectShipped1017Row(model);
 	});
 
 	it.each(KNOWN_1017_ROWS)("still ships the 1017 snapshot row on %s (%s)", (provider, id) => {
