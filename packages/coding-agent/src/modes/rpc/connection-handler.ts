@@ -378,7 +378,11 @@ export function createRpcConnectionHandler(
 	// already learns the new identity from its command response.
 	let replacementIssuedHere = false;
 	let session = runtimeHost.session;
-	const rpcOwners = new ExtensionOwnerLifetime(options.sessionId === undefined, options.rpcOwner, options.retireRpcBinding);
+	const rpcOwners = new ExtensionOwnerLifetime(
+		options.sessionId === undefined,
+		options.rpcOwner,
+		options.retireRpcBinding,
+	);
 	let sessionControl: HostSessionControl | undefined;
 	let relocation: RpcSessionRelocation | undefined;
 	const promptCalls = new Set<Promise<unknown>>();
@@ -1153,7 +1157,10 @@ export function createRpcConnectionHandler(
 	});
 
 	// Handle a single command
-	const handleCommand = async (command: RpcCommand, requestContext?: ExtensionRpcRequestContext): Promise<RpcResponse | undefined> => {
+	const handleCommand = async (
+		command: RpcCommand,
+		requestContext?: ExtensionRpcRequestContext,
+	): Promise<RpcResponse | undefined> => {
 		const id = command.id;
 
 		switch (command.type) {

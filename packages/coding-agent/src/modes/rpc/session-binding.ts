@@ -1,6 +1,6 @@
 import { bindToProviderScope, runWithProviderScope } from "@earendil-works/pi-ai/node/provider-scope";
 import { randomUUID } from "node:crypto";
-import type { ExtensionOwner } from "./extension-owner.ts";
+import { carriesExtensionOwner, type ExtensionOwner } from "./extension-owner.ts";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import { recoveryCarrier, setSessionRecoveryEpoch } from "../../core/session-recovery-identity.ts";
 import {
@@ -156,7 +156,7 @@ export async function createRpcSessionBinding(
 		handle: (command) => {
 			if (writer.handleMcpForm(command)) return Promise.resolve();
 			const invoke = () => runWithProviderScope(entry.scope, () => handler.handleInputLine(JSON.stringify(command)));
-			return command.type === "extension_request" || command.type.startsWith("eval_cells.")
+			return carriesExtensionOwner(command)
 				? writer.connectionContext.withBinding(rpcBindingGeneration, invoke)
 				: invoke();
 		},

@@ -1430,11 +1430,7 @@ export class ExtensionRunner {
 		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
 	}
 
-	async requestRpc(
-		name: string,
-		data: unknown,
-		context?: ExtensionRpcRequestContext,
-	): Promise<unknown> {
+	async requestRpc(name: string, data: unknown, context?: ExtensionRpcRequestContext): Promise<unknown> {
 		return requestExtensionRpc(this.extensions, name, data, context, () => this.assertActive());
 	}
 

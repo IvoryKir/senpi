@@ -7,11 +7,12 @@ export class ExtensionOwnerLifetime {
 	private generation = randomUUID();
 	private readonly captures = new Set<ExtensionOwner>();
 
-	constructor(
-		isClassic: boolean,
-		private readonly source?: () => ExtensionOwner | undefined,
-		private readonly onRetireBinding?: () => void,
-	) {
+	private readonly source: (() => ExtensionOwner | undefined) | undefined;
+	private readonly onRetireBinding: (() => void) | undefined;
+
+	constructor(isClassic: boolean, source?: () => ExtensionOwner | undefined, onRetireBinding?: () => void) {
+		this.source = source;
+		this.onRetireBinding = onRetireBinding;
 		this.classic = isClassic && source === undefined ? new ExtensionTransportOwner() : undefined;
 	}
 

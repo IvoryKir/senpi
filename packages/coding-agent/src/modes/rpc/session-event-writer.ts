@@ -428,7 +428,8 @@ export class SessionEventWriter {
 			(record.type === "extension_ui_request" &&
 				["select", "confirm", "input", "editor"].includes(String(record.method)));
 		// A stale reply is consumed, not a session failure: the worker still gets its output credit.
-		if (isTargeted && !this.connectionContext.isCurrent()) return true;
+		const current = isTargeted ? this.connectionContext.currentGuard() : undefined;
+		if (current?.() === false) return true;
 		const tagged = { ...observeLifecycleDelivery(record), sessionId } as RpcRecord;
 		const line = serializeJsonLine(tagged);
 		// Observation records are per-subscription opt-ins on the subscriber's own actor FIFO: never attachments,
@@ -487,6 +488,7 @@ export class SessionEventWriter {
 					undefined,
 					keyed ? serializeJsonLine(demoteToDeltaOnly(tagged)) : undefined,
 					isCorrelatedReply(tagged),
+					current,
 				);
 			} else this.appendSessionRecord(sessionId, wants ? (redacted as RpcRecord) : tagged, target);
 		}

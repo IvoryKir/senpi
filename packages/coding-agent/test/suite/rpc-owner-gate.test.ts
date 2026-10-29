@@ -18,7 +18,10 @@ it("makes retirement visible across isolates before the detach message arrives",
 		worker.postMessage("dispatch");
 		// Then: the shared gate prevents dispatch even though the local signal is not yet aborted.
 		expect((await result)[0]).toEqual({
-			type: "result", dispatched: 0, aborted: false, error: "AbortError",
+			type: "result",
+			dispatched: 0,
+			aborted: false,
+			error: "AbortError",
 		});
 		const detached = once(worker, "message", { signal: AbortSignal.timeout(30_000) });
 		worker.postMessage("detach");

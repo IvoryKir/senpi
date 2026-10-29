@@ -70,9 +70,7 @@ it("retires captured ownership during an asynchronous handler without waiting fo
 	const opened = await host.open("client-a", { sessionPath });
 	const sessionId = String(opened.sessionId);
 	await host.open("client-b", { sessionPath });
-	const ready = host.waitFor(
-		(record) => record.type === "extension_event" && record.name === "probe.waiting",
-	);
+	const ready = host.waitFor((record) => record.type === "extension_event" && record.name === "probe.waiting");
 	const waiting = host.send("client-a", {
 		type: "extension_request",
 		sessionId,

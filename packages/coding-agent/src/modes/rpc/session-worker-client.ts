@@ -25,6 +25,7 @@ import type {
 import { subscriptionLimits } from "../../core/subscription-limits/limit-store.ts";
 import { SessionWorkerRequests, type WorkerRequestInput } from "./session-worker-requests.ts";
 import { acknowledge, acknowledgeGrant } from "./session-worker-signals.ts";
+import { WorkerOwnerGates } from "./session-worker-owners.ts";
 import { randomUUID } from "node:crypto";
 import type { McpFormBinding } from "../../core/mcp-form-types.ts";
 
@@ -86,6 +87,7 @@ export class SessionWorkerClient {
 	/** The host's ordered acceptance lane for this worker incarnation, present only while the flag is on. */
 	readonly acceptance = compactUpdatesEnabled() ? new SessionAcceptanceLane() : undefined;
 	private expectedOrdinal = 0;
+	private readonly owners = new WorkerOwnerGates();
 
 	private readonly callbacks: SessionWorkerCallbacks;
 
@@ -95,6 +97,7 @@ export class SessionWorkerClient {
 			this.worker.once("exit", () => {
 				this.stopPrivateBinding?.();
 				this.privateBinding?.dispose();
+				this.owners.retireAll();
 				for (const operation of this.privateOperations.values()) operation.operation.abort();
 				this.privateOperations.clear();
 				if (!this.stopped && !this.closeTimer) this.fail("session_worker_exited");
@@ -195,6 +198,7 @@ export class SessionWorkerClient {
 			handle: async (command) => {
 				if (writer.handleMcpForm(command)) return;
 				const connection = writer.currentConnection();
+				const owner = this.owners.capture(writer.connectionContext, connection, command);
 				const grantAnswer =
 					"type" in command && command.type === "extension_ui_response"
 						? answeredUiRequestId(command as RpcExtensionUIResponse)
@@ -209,10 +213,13 @@ export class SessionWorkerClient {
 					command,
 					connection,
 					roles: options.connectionRoles?.rolesOf(roleConnection(connection)),
+					...(owner === undefined ? {} : { owner }),
 				});
 			},
 			cancelPendingExtensionUiRequests: () => this.post({ type: "cancel_ui" }),
+			connectionDetached: (connection) => this.postRetired(this.owners.detach(writer.connectionContext, connection)),
 			dispose: async () => {
+				this.postRetired(this.owners.retireAll());
 				this.post({ type: "cancel_ui" });
 			},
 		};
@@ -247,6 +254,10 @@ export class SessionWorkerClient {
 
 	private request(message: WorkerRequestInput): ReturnType<SessionWorkerRequests["request"]> {
 		return this.requests.request(message);
+	}
+
+	private postRetired(owners: ReturnType<WorkerOwnerGates["retireAll"]>): void {
+		if (owners.length > 0) this.post({ type: "owners_retired", owners });
 	}
 
 	private post(message: HostToSessionWorker): void {
@@ -466,9 +477,13 @@ export class SessionWorkerClient {
 				};
 				const consumed = Promise.resolve(
 					message.snapshot ? this.callbacks.reconcile(message.snapshot.liveSessionPaths) : undefined,
-				).then(() =>
-					outputConnection === undefined ? enqueue() : writer.withConnection(outputConnection, enqueue),
-				);
+				).then(() => {
+					// Resolved after reconciliation: a retired or replaced destination consumes the frame normally.
+					if (outputConnection === undefined) return enqueue();
+					return message.owner === undefined || outputConnection !== message.connection
+						? writer.withConnection(outputConnection, enqueue)
+						: writer.connectionContext.runCaptured(outputConnection, message.owner, enqueue);
+				});
 				void consumed.then(
 					() => acknowledge(message.signal, true),
 					(cause: unknown) => {

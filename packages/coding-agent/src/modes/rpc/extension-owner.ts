@@ -8,21 +8,31 @@ export interface ExtensionOwnerWire {
 	readonly retirement: SharedArrayBuffer;
 }
 
+/** The identity a targeted output frame carries back; the shared word stays with the host's own gate. */
+export type ExtensionOwnerIdentity = Pick<ExtensionOwnerWire, "ownerId" | "bindingGeneration">;
+
+/** Commands whose handlers may run extension effects receive a captured owner; control commands never do. */
+export function carriesExtensionOwner(command: object): boolean {
+	const type = "type" in command ? String(command.type) : "";
+	return type === "extension_request" || type.startsWith("eval_cells.");
+}
+
 /** One attachment's shared effect gate plus isolate-local cancellation notification. */
 export class ExtensionOwner {
 	private readonly state: Int32Array;
 	private readonly cancellation = new AbortController();
 	readonly context: ExtensionRpcRequestContext;
+	readonly wire: ExtensionOwnerWire;
 
-	constructor(readonly wire: ExtensionOwnerWire) {
+	constructor(wire: ExtensionOwnerWire) {
+		this.wire = wire;
 		this.state = new Int32Array(wire.retirement);
 		this.context = Object.freeze({
 			ownerId: wire.ownerId,
 			disconnectSignal: this.cancellation.signal,
 			admit: <T>(dispatch: () => T): T => {
 				// The atomic observation is the admission point, not abort-message delivery.
-				if (Atomics.load(this.state, 0) !== 0)
-					throw new DOMException("RPC owner retired", "AbortError");
+				if (Atomics.load(this.state, 0) !== 0) throw new DOMException("RPC owner retired", "AbortError");
 				return dispatch();
 			},
 		});
@@ -59,6 +69,11 @@ export class ExtensionTransportOwner {
 		});
 		this.bindings.set(bindingGeneration, owner);
 		return owner;
+	}
+
+	/** The gate already issued for a generation, without minting one. */
+	peek(bindingGeneration: string): ExtensionOwner | undefined {
+		return this.closed ? undefined : this.bindings.get(bindingGeneration);
 	}
 
 	retireBinding(bindingGeneration: string): void {
