@@ -89,6 +89,6 @@ describe("senpi#4765 gitlab-duo honors a models.json baseUrl", () => {
 		await sendOneTurn(new URL(server.url).origin, "claude-sonnet-4-6");
 
 		expect(guard.blocked).toEqual([]);
-		expect(server.requests).toEqual(["/v1/messages"]);
+		expect(server.requests).toEqual(["/v1/messages?beta=true"]);
 	});
 });
