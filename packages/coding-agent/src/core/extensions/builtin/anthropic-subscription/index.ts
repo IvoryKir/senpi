@@ -96,6 +96,8 @@ export function registerAnthropicSubscriptionExtension(
 		// The lane selects among its accounts itself (pin, resident account, order, per-account and
 		// per-model limits), so the generic credential pool must not choose a second time (senpi#2081).
 		ownsAccountSelection: true,
+		// A models.json baseUrl reaches Claude Code as ANTHROPIC_BASE_URL (query-environment.ts, senpi#4765).
+		honorsModelBaseUrl: true,
 		oauth: createOAuthConfig({
 			readCurrent: async () => readStoredCredential(ANTHROPIC_SUBSCRIPTION_PROVIDER_ID),
 			readAmbientAuthStatus: deps.readAmbientAuthStatus,
