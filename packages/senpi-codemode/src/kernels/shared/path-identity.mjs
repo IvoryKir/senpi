@@ -16,16 +16,6 @@ function failure(code) {
 	return Object.assign(new Error(code), { code });
 }
 
-/** Lowercase per code point, only where the lowercase form is exactly one code point (U+0130 stays). */
-export function foldCaseText(text) {
-	let out = "";
-	for (const char of text) {
-		const lower = char.toLowerCase();
-		out += [...lower].length === 1 ? lower : char;
-	}
-	return out;
-}
-
 /** Strip trailing dots and spaces from every component, as Win32 path normalization does. */
 function stripWin32Components(value, sep) {
 	return value

@@ -39,5 +39,4 @@ export interface PathIdentity {
 	volumeFoldCase(existingPath: string): boolean;
 }
 
-export function foldCaseText(text: string): string;
 export function createPathIdentity(primitives: PathIdentityPrimitives): PathIdentity;

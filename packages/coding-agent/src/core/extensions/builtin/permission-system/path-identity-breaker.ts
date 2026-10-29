@@ -1,6 +1,6 @@
 export const LEAK_GRACE_MS = 1000;
 export const MAX_LEAKED_WORKERS = 3;
-export const BREAKER_OPEN_AFTER = 2;
+const BREAKER_OPEN_AFTER = 2;
 export const BREAKER_BACKOFF_MS = 5000;
 export const BREAKER_BACKOFF_MAX_MS = 60_000;
 
