@@ -404,6 +404,5 @@ export default function (pi: ExtensionAPI) {
 			getApiKey: (cred) => cred.access,
 		},
 		streamSimple: streamGitLabDuo,
-		honorsModelBaseUrl: true,
 	});
 }
