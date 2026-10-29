@@ -902,6 +902,8 @@ export interface AgentSessionConfig {
 	promptSurface?: PromptSurface;
 	/** Browser engine this session's skills drive; omitted means none was chosen. */
 	browserEngine?: BrowserEngine;
+	/** Caller env for this session's tool subprocesses (`open_session.env`, senpi#4381); omitted means none. */
+	sessionEnv?: Readonly<Record<string, string>>;
 	/** Tool runtime for this session (senpi#3566); absent means `in-process`. */
 	toolRuntime?: ToolRuntimeKind;
 	/** Where the startup thinking level came from (senpi#3819); absent means `default`. */
@@ -1766,10 +1768,12 @@ export class AgentSession {
 	private _systemPromptOverride?: string;
 	private _promptSurface: PromptSurface | undefined;
 	private _browserEngine: BrowserEngine | undefined;
+	private readonly _sessionEnv: Readonly<Record<string, string>> | undefined;
 
 	constructor(config: AgentSessionConfig) {
 		this._promptSurface = config.promptSurface;
 		this._browserEngine = config.browserEngine;
+		this._sessionEnv = config.sessionEnv;
 		this.agent = config.agent;
 		this._structuredLane = new StructuredSessionLane(
 			config.internalChannel,
@@ -5010,6 +5014,10 @@ export class AgentSession {
 
 	get browserEngine(): BrowserEngine | undefined {
 		return this._browserEngine;
+	}
+
+	get sessionEnv(): Readonly<Record<string, string>> | undefined {
+		return this._sessionEnv;
 	}
 
 	/** Current effective system prompt (includes any per-turn extension modifications) */
@@ -11941,6 +11949,7 @@ export class AgentSession {
 				},
 				getAskUserSettings: () => this.settingsManager.getAskUserSettings(),
 				getBrowserEngine: () => this._browserEngine,
+				getSessionEnv: () => this._sessionEnv,
 				getImageSettings: () => ({
 					autoResize: this.settingsManager.getImageAutoResize(),
 					blockImages: this.settingsManager.getBlockImages(),
