@@ -14,6 +14,7 @@ import { TERMINAL_SETTINGS_DEFAULTS } from "../../../src/core/extensions/builtin
 import { StaleExtensionContextError } from "../../../src/core/extensions/stale-context-error.ts";
 import type { ExtensionAPI, ExtensionContext } from "../../../src/core/extensions/types.ts";
 import { line } from "../terminal-monitor-notify-harness.ts";
+import { armRpcCheckpoint, disposeRpcCheckpoints, fireRpcCheckpoint } from "./4711-rpc-checkpoint-support.ts";
 
 // #4711: independently exercise each deferred notification boundary with guarded getters,
 // not a mock delivery function that already implements retirement.
@@ -114,6 +115,12 @@ const ended = {
 };
 
 const cases = [
+	...(["record", "lost"] as const).map((source) => ({
+		name: `persistent RPC ${source} checkpoint`,
+		capturesContext: true,
+		arm: ({ state, pi }: ReturnType<typeof fixture>) => armRpcCheckpoint(state, pi),
+		fire: ({ state }: ReturnType<typeof fixture>) => fireRpcCheckpoint(state, source),
+	})),
 	{
 		name: "monitor flush timer",
 		arm: ({ monitor }: ReturnType<typeof fixture>) => monitor.notifyEvent(line("bash_1", "build", "ready")),
@@ -166,15 +173,16 @@ const cases = [
 ];
 
 describe("#4711 deferred terminal context readers", () => {
-	afterEach(() => {
+	afterEach(async () => {
+		await disposeRpcCheckpoints();
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 	});
 
-	it.each(cases)("$name retires without delivering or re-arming", async (testCase) => {
+	it.each(cases)("$name handles retirement without an uncaught error", async (testCase) => {
 		vi.useFakeTimers();
 		const f = fixture();
-		testCase.arm(f);
+		await testCase.arm(f);
 		f.fail(new StaleExtensionContextError("retired test generation"));
 		await testCase.fire(f);
 		expect(vi.getTimerCount()).toBe(0);
@@ -184,14 +192,26 @@ describe("#4711 deferred terminal context readers", () => {
 		f.monitor.dispose();
 	});
 
-	it.each(cases)("$name rethrows a non-stale failure unchanged", async (testCase) => {
+	it.each(cases.filter((testCase) => !("capturesContext" in testCase)))(
+		"$name rethrows a non-stale failure unchanged",
+		async (testCase) => {
+			vi.useFakeTimers();
+			const f = fixture();
+			testCase.arm(f);
+			const error = new Error("unexpected context failure");
+			f.fail(error);
+			await expect(Promise.resolve().then(() => testCase.fire(f))).rejects.toBe(error);
+			f.monitor.dispose();
+		},
+	);
+
+	it.each(["record", "lost"] as const)("RPC %s checkpoint preserves unrelated writer failures", async (source) => {
 		vi.useFakeTimers();
 		const f = fixture();
-		testCase.arm(f);
-		const error = new Error("unexpected context failure");
-		f.fail(error);
-		await expect(Promise.resolve().then(() => testCase.fire(f))).rejects.toBe(error);
-		f.monitor.dispose();
+		await armRpcCheckpoint(f.state, f.pi);
+		f.fail(new StaleExtensionContextError("retired test generation"));
+		const error = new Error("unexpected checkpoint failure");
+		await expect(fireRpcCheckpoint(f.state, source, error)).rejects.toBe(error);
 	});
 
 	it("disposes the pending batch when its flush discovers retirement", () => {
