@@ -1,6 +1,6 @@
 {
  "repo": {
-  "head": "238b916a8918ef8087c94cb7f68fc7c7de44d18f",
+  "head": "775569148cf304a3fe1db561e2b2844a7ee12323",
   "dirty": false
  },
  "platform": "darwin-arm64",
@@ -12,8 +12,8 @@
   "harness": "sha256:3e1746aa5d5f225e37aabb8ce4378084c21bcff752f929d1c0254dfac8390354",
   "normalizer": "sha256:ea21279187e358d6c3ff12ecc9430fd14f0ef91e0ce51f7847976ebf232b4b79",
   "fakeModelServer": "sha256:cab5b6866b7854287218de51d1fafcc242a8602b2c83fb85572abe332f9f6560",
-  "cases": "sha256:c43e88aaef36908914b621f1c99f9123ca63573555cf10490f5f5d942b13dfc2",
+  "cases": "sha256:e2bc37d116a15a32620304d4c6f139c57ff3683c3dbe131b88a157d5aa027a46",
   "fixtures": "sha256:40f9e14a19251c338614b3c0d2d2ecfce9f543aca9df5a389bd7bf5bd8f6b038"
  },
- "command": "node .agents/skills/senpi-qa/scripts/scenarios/fused-equivalence-qa.mjs --record --pipeline legacy --placement fused --cases E08,E20 --repeat 3 --evidence eq-rec-darwin-arm64-e08e20-rec1"
+ "command": "node .agents/skills/senpi-qa/scripts/scenarios/fused-equivalence-qa.mjs --record --pipeline legacy --placement fused --cases E11 --repeat 3 --evidence eq-rec-darwin-e11-rec1"
 }
