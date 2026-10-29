@@ -171,7 +171,8 @@ it("commits each compaction round's structural value leaves as one segment on th
 			files.set(path, Buffer.from(data));
 		},
 		async readFile(path, range) {
-			if (path.includes("/value-")) value.reads++;
+			// Node pages live in their own node-* files (SP4), so node reads count toward the round's read bound too.
+			if (path.includes("/value-") || path.includes("/node-")) value.reads++;
 			const data = files.get(path);
 			if (!data) throw new Error("missing backing file");
 			return Buffer.from(range ? data.subarray(range.offset, range.offset + range.length) : data);
@@ -210,13 +211,14 @@ it("commits each compaction round's structural value leaves as one segment on th
 		expect(rounds).toBeGreaterThan(0);
 		expect(rounds, "compaction rounds").toBeLessThanOrEqual(Math.ceil((4 * joins) / 128));
 		for (const [n, start] of roundStarts.entries()) {
-			// One segment for the round's batch of structural leaves, one for its surviving nodes, and one for the
-			// value_write batch queued between rounds; one file per leaf made about 130 per round.
+			// Value and spill files only: one segment for the round's batch of structural leaves and one for the
+			// value_write batch queued between rounds (one file per leaf made about 130 per round). The round's node
+			// files are counted separately: each round writes exactly ceil(node bytes / 64 KiB) of them (SP4's case above).
 			const creates = (roundStarts[n + 1] ?? value.creates) - start;
 			expect(creates, `round ${n} structural value file creates`).toBeLessThanOrEqual(3);
 		}
 		// About 290 node reads per round once pending keys are skipped before lookup; about 1,230 before either fix.
-		expect(value.reads, "structural value reads").toBeLessThanOrEqual(320 * rounds);
+		expect(value.reads, "structural value and node reads").toBeLessThanOrEqual(320 * rounds);
 		expect(rig.lane.storageStatus()).toMatchObject({ residentPayloadBytes: 0, failures: [] });
 		expect((await rig.cut()).owners).toHaveLength(joins);
 	} finally {
