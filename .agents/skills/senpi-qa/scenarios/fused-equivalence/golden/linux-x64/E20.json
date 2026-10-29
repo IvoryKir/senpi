@@ -4278,7 +4278,7 @@
       "id": "<uuid:20>",
       "method": "setStatus",
       "statusKey": "eval-cells",
-      "statusText": "↗ js · a cell that never finishes (1s)"
+      "statusText": "↗ js · a cell that never finishes (<elapsed>)"
      },
      {
       "type": "entry_appended",
@@ -5446,7 +5446,7 @@
       "id": "<uuid:23>",
       "method": "setStatus",
       "statusKey": "eval-cells",
-      "statusText": "↗ js · a cell that never finishes (2s)"
+      "statusText": "↗ js · a cell that never finishes (<elapsed>)"
      },
      {
       "type": "extension_ui_request",

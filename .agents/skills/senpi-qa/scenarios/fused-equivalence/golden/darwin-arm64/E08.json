@@ -4526,7 +4526,7 @@
       "id": "<uuid:20>",
       "method": "setStatus",
       "statusKey": "eval-cells",
-      "statusText": "↗ js · G4 detached nested calls (1s)"
+      "statusText": "↗ js · G4 detached nested calls (<elapsed>)"
      },
      {
       "type": "entry_appended",
