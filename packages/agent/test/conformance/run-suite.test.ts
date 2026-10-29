@@ -108,13 +108,21 @@ describe("the ./conformance export", () => {
 			"DurableStoreError",
 			"KILL_STORE_CASES",
 			"KILL_STORE_DECLARATIONS",
+			"KILL_WAKE_CASES",
+			"KILL_WAKE_DECLARATIONS",
+			"MULTI_HOST_CASES",
 			"STORE_CASES",
+			"WAKE_CASES",
 			"buildManifest",
 			"computeSuiteHash",
+			"createBunTimerHost",
+			"createManualTimers",
+			"createWakeHost",
 			"findImplementationGaps",
 			"findMappingProblems",
 			"runSuite",
 			"sha256Hex",
+			"storeAlarmPersistence",
 		]);
 	});
 });

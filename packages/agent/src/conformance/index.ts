@@ -25,3 +25,24 @@ export type { KillDeclaration } from "../durable/testing/kill-store.ts";
 export { KILL_STORE_CASES, KILL_STORE_DECLARATIONS } from "../durable/testing/kill-store.ts";
 export { STORE_CASES } from "../durable/testing/store-cases.ts";
 export type { StoreCaseAdapters, StoreConformanceAdapter } from "../durable/testing/store-harness.ts";
+export type { KillWakeDeclaration } from "../durable/testing/kill-wake.ts";
+export { KILL_WAKE_CASES, KILL_WAKE_DECLARATIONS } from "../durable/testing/kill-wake.ts";
+export type { ManualTimers } from "../durable/testing/manual-timers.ts";
+export { createManualTimers } from "../durable/testing/manual-timers.ts";
+export { MULTI_HOST_CASES } from "../durable/testing/multi-host-cases.ts";
+export { WAKE_CASES } from "../durable/testing/wake-cases.ts";
+export type { WakeAlarmSession, WakeCaseAdapters, WakeConformanceAdapter } from "../durable/testing/wake-harness.ts";
+export type {
+	Wake,
+	WakeAlarm,
+	WakeAlarmOptions,
+	WakeAlarmPoint,
+	WakeHost,
+	WakeHostOptions,
+	WakePoint,
+} from "../durable/wake-host.ts";
+export { createWakeHost } from "../durable/wake-host.ts";
+export type { BunTimerHost, BunTimerHostOptions, SetTimer } from "../durable/wake-host-bun-timer.ts";
+export { createBunTimerHost } from "../durable/wake-host-bun-timer.ts";
+export type { AlarmPersistence } from "../durable/wake-host-store-alarm.ts";
+export { storeAlarmPersistence } from "../durable/wake-host-store-alarm.ts";
