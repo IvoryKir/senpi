@@ -46,3 +46,30 @@ export type { BunTimerHost, BunTimerHostOptions, SetTimer } from "../durable/wak
 export { createBunTimerHost } from "../durable/wake-host-bun-timer.ts";
 export type { AlarmPersistence } from "../durable/wake-host-store-alarm.ts";
 export { storeAlarmPersistence } from "../durable/wake-host-store-alarm.ts";
+export type { CarrierLink, InProcessNetwork, InProcessNetworkOptions } from "../transport/in-process-carrier.ts";
+export { createInProcessNetwork } from "../transport/in-process-carrier.ts";
+export type { LocalEndpoint } from "../transport/local-endpoint.ts";
+export { localEndpoint } from "../transport/local-endpoint.ts";
+export type { ReferencePacket, ReliableTransportOptions } from "../transport/reliable-transport.ts";
+export { createReliableTransport, decodeReferencePacket } from "../transport/reliable-transport.ts";
+export { FAULT_TRANSPORT_CASES } from "../transport/testing/fault-cases.ts";
+export type { FaultProfileName } from "../transport/testing/fault-transport.ts";
+export { FAULT_PROFILE_NAMES } from "../transport/testing/fault-transport.ts";
+export { MULTI_CASES } from "../transport/testing/multi-cases.ts";
+export { TRANSPORT_CASES } from "../transport/testing/transport-cases.ts";
+export type {
+	CarrierFault,
+	TransportCaseAdapters,
+	TransportConformanceAdapter,
+	WireView,
+} from "../transport/testing/transport-harness.ts";
+export type {
+	CarrierConnection,
+	CarrierSide,
+	FrameHandler,
+	Transport,
+	TransportClock,
+	TransportFrame,
+	TransportSide,
+} from "../transport/transport.ts";
+export { TransportClosedError } from "../transport/transport.ts";

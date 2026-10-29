@@ -23,6 +23,22 @@ const KILL_STORE_IMPL = "packages/agent/src/durable/testing/kill-store.ts";
 const WAKE_CASES_IMPL = "packages/agent/src/durable/testing/wake-cases.ts";
 const MULTI_HOST_IMPL = "packages/agent/src/durable/testing/multi-host-cases.ts";
 const KILL_WAKE_IMPL = "packages/agent/src/durable/testing/kill-wake.ts";
+const TRANSPORT_CASES_IMPL = "packages/agent/src/transport/testing/transport-cases.ts";
+const MULTI_CASES_IMPL = "packages/agent/src/transport/testing/multi-cases.ts";
+const FAULT_CASES_IMPL = "packages/agent/src/transport/testing/fault-cases.ts";
+const transportCase = (id: string, impl: string, expected: string): RegisteredCase => ({
+	id,
+	impl,
+	intro: "#4741",
+	adapters: ["transport"],
+	expected,
+});
+const faultCase = (n: number, profile: string): RegisteredCase =>
+	transportCase(
+		`FAULT-TRANSPORT-0${n}`,
+		FAULT_CASES_IMPL,
+		`${profile} profile: lane order kept, committed frames delivered once, resume from the last ACK`,
+	);
 const wakeCase = (id: string, impl: string, expected: string): RegisteredCase => ({
 	id,
 	impl,
@@ -165,4 +181,30 @@ export const CONFORMANCE_REGISTRY: readonly RegisteredCase[] = [
 		KILL_WAKE_IMPL,
 		"everywhere: a concurrent fire's updates cannot clear an uncommitted admission's heartbeat; a kill after its commit recovers the wake, run once",
 	),
+	transportCase(
+		"TRANSPORT-01",
+		TRANSPORT_CASES_IMPL,
+		"order: frames on each lane are delivered in send order, each once",
+	),
+	transportCase(
+		"TRANSPORT-02",
+		TRANSPORT_CASES_IMPL,
+		"resume: after the carrier drops and re-attaches, each lane continues from its last ACK; nothing lost or repeated",
+	),
+	transportCase(
+		"TRANSPORT-03",
+		TRANSPORT_CASES_IMPL,
+		"backpressure: a stalled receiver bounds its lane's senders; sends resolve in order once it drains",
+	),
+	transportCase("MULTI-LANE-01", MULTI_CASES_IMPL, "N scopes over one transport keep per-scope order and interleave"),
+	transportCase(
+		"MULTI-FAIR-01",
+		MULTI_CASES_IMPL,
+		"a stalled or long lane in A does not starve B: B is delivered within a bounded number of A's frames",
+	),
+	faultCase(1, "slow"),
+	faultCase(2, "lossy"),
+	faultCase(3, "laggy"),
+	faultCase(4, "flap"),
+	faultCase(5, "drop-reattach"),
 ];
