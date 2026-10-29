@@ -1,6 +1,11 @@
 import childProcess, { type ChildProcess, type SpawnOptions, type SpawnSyncOptions } from "node:child_process";
 import { closeSync } from "node:fs";
-import { PRIVATE_FDS_FINAL_ENV, type PrivateFdEntry, takePrivateDescriptors } from "./private-fds.ts";
+import {
+	PRIVATE_FDS_FINAL_ENV,
+	type PrivateFdEntry,
+	takePrivateDescriptors,
+	UNPARSEABLE_TABLE,
+} from "./private-fds.ts";
 
 const TABLE_ENV = "SENPI_PRIVATE_FDS";
 
@@ -13,16 +18,19 @@ export function preparePrivateFdSpawn<T extends SpawnOptions | SpawnSyncOptions>
 	options: T,
 	hop: { readonly final?: boolean } = {},
 ) {
-	const entries = takePrivateDescriptors();
+	const forward = takePrivateDescriptors();
 	const env = { ...(options.env ?? process.env) };
 	delete env[TABLE_ENV];
 	delete env[PRIVATE_FDS_FINAL_ENV];
 	const base = options.stdio ?? "pipe";
 	const stdio = typeof base === "string" ? [base, base, base] : [...base];
-	if (entries.size > 0) {
+	const owned: number[] = [];
+	if (forward.kind === "unparseable") env[TABLE_ENV] = UNPARSEABLE_TABLE;
+	else if (forward.entries.size > 0) {
 		const carries = !options.shell && process.platform !== "win32";
 		const table: Record<string, PrivateFdEntry> = {};
-		for (const [name, fd] of entries) {
+		for (const [name, fd] of forward.entries) {
+			if (fd !== null) owned.push(fd);
 			if (fd !== null && carries) {
 				while (stdio.length <= fd) stdio.push("ignore");
 				stdio[fd] = fd;
@@ -32,12 +40,12 @@ export function preparePrivateFdSpawn<T extends SpawnOptions | SpawnSyncOptions>
 			}
 		}
 		env[TABLE_ENV] = JSON.stringify(table);
-		if (hop.final) env[PRIVATE_FDS_FINAL_ENV] = "1";
 	}
+	if (env[TABLE_ENV] !== undefined && hop.final) env[PRIVATE_FDS_FINAL_ENV] = "1";
 	return {
 		options: { ...options, env, stdio },
 		close() {
-			for (const fd of entries.values()) if (fd !== null) closeSync(fd);
+			for (const fd of owned) closeSync(fd);
 		},
 	};
 }

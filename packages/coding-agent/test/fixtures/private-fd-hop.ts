@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import { closeSync, createReadStream, writeSync } from "node:fs";
 import { spawnHostChild } from "../../src/modes/rpc/host-lifecycle-launch.ts";
 import { spawnWithPrivateFds } from "../../src/private-fd-spawn.ts";
-import { privateChannelDeclared, takeInheritedPrivateChannel } from "../../src/private-fds.ts";
+import {
+	privateChannelDeclared,
+	privateFdTableUnparseable,
+	privateTablePresent,
+	takeInheritedPrivateChannel,
+} from "../../src/private-fds.ts";
 
 const mode = process.argv[2];
 
@@ -21,7 +26,13 @@ if (mode === "engine") {
 	// Exit only after the claimed channel's write has flushed.
 	const report = (code: number) => {
 		const stream = takeInheritedPrivateChannel("sample-channel");
-		const seen = { mode, declared: privateChannelDeclared("sample-channel"), available: stream !== undefined };
+		const seen = {
+			mode,
+			present: privateTablePresent(),
+			declared: privateChannelDeclared("sample-channel"),
+			unparseable: privateFdTableUnparseable(),
+			available: stream !== undefined,
+		};
 		writeSync(2, `${JSON.stringify(seen)}\n`);
 		if (stream) stream.end("engine-claimed", () => process.exit(code));
 		else process.exit(code);
@@ -38,8 +49,16 @@ if (mode === "engine") {
 } else if (mode === "receiver") {
 	const stream = takeInheritedPrivateChannel("sample-channel");
 	const again = takeInheritedPrivateChannel("sample-channel");
-	const declared = privateChannelDeclared("sample-channel");
-	writeSync(1, JSON.stringify({ available: stream !== undefined, repeated: again !== undefined, declared }));
+	writeSync(
+		1,
+		JSON.stringify({
+			available: stream !== undefined,
+			repeated: again !== undefined,
+			declared: privateChannelDeclared("sample-channel"),
+			present: privateTablePresent(),
+			unparseable: privateFdTableUnparseable(),
+		}),
+	);
 	if (stream) {
 		stream.once("data", (chunk) => {
 			stream.end(`claimed:${chunk.toString()}`, () => stream.destroy());

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import "./valid-cwd.ts";
 import "./private-fds.ts";
+import "./valid-cwd.ts";
 import "./internal-role.ts";
 import { spawnSync, type StdioOptions } from "node:child_process";
 import { existsSync, fstatSync, realpathSync } from "node:fs";

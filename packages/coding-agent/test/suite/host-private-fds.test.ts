@@ -67,9 +67,27 @@ describe("private host descriptors", () => {
 		expect(JSON.parse(result.received)).toEqual({ childExit: 2, leakedTable: false });
 	});
 
+	const state = (fields: { available?: boolean; declared?: boolean; present?: boolean; unparseable?: boolean }) => ({
+		available: false,
+		repeated: false,
+		declared: false,
+		present: true,
+		unparseable: false,
+		...fields,
+	});
+	const engine = (fields: { available?: boolean; declared?: boolean; present?: boolean; unparseable?: boolean }) => ({
+		mode: "engine-report",
+		present: true,
+		declared: true,
+		unparseable: false,
+		available: false,
+		...fields,
+	});
+	const nested = { mode: "nested", present: false, declared: false, unparseable: false, available: false };
+
 	it.skipIf(process.platform === "win32")("claims the named channel only once", async () => {
 		const result = await exchange("receiver");
-		expect(JSON.parse(result.stdout)).toEqual({ available: true, repeated: false, declared: true });
+		expect(JSON.parse(result.stdout)).toEqual(state({ available: true, declared: true }));
 		expect(result.received).toBe("claimed:ping");
 	});
 
@@ -77,24 +95,46 @@ describe("private host descriptors", () => {
 		// given a desktop host that declares the channel on a path with no descriptor
 		const result = await exchange("receiver", '{"sample-channel":null}');
 		// then the name is declared, and the open fd 5 is not adopted
-		expect(JSON.parse(result.stdout)).toEqual({ available: false, repeated: false, declared: true });
+		expect(JSON.parse(result.stdout)).toEqual(state({ declared: true }));
 		expect(result.received).toBe("");
 	});
 
 	it.each([
-		"",
-		"not-json",
-		'{"sample-channel":4}',
-		'{"sample-channel":5,"alias":5}',
-		'{"sample-channel":65}',
-		'{"sample-channel":6}',
-		'{"bad name":5}',
-		'{"sample-channel":"5"}',
-		'{"sample-channel":true}',
-		'{"sample-channel":5,"other":{}}',
-	])("refuses an absent or invalid table %s", async (table) => {
+		['{"sample-channel":4}', "a reserved descriptor"],
+		['{"sample-channel":5,"alias":5}', "a descriptor named twice"],
+		['{"sample-channel":65}', "a descriptor above the range"],
+		['{"sample-channel":6}', "a descriptor that is not open"],
+		['{"sample-channel":"5"}', "a string"],
+		['{"sample-channel":true}', "a boolean"],
+	])("keeps the name declared but unavailable for %s (%s)", async (table) => {
 		const result = await exchange("receiver", table);
-		expect(JSON.parse(result.stdout)).toEqual({ available: false, repeated: false, declared: false });
+		expect(JSON.parse(result.stdout)).toEqual(state({ declared: true }));
+		expect(result.received).toBe("");
+	});
+
+	it.each([
+		["", state({ present: false })],
+		['{"bad name":5}', state({})],
+		["not-json", state({ unparseable: true })],
+		["[5]", state({ unparseable: true })],
+	])("never declares the channel for table %j", async (table, expected) => {
+		const result = await exchange("receiver", table);
+		expect(JSON.parse(result.stdout)).toEqual(expected);
+		expect(result.received).toBe("");
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"canary: an invalid entry beside the channel leaves the channel working",
+		async () => {
+			const result = await exchange("receiver", '{"sample-channel":5,"other":{},"bad name":7}');
+			expect(JSON.parse(result.stdout)).toEqual(state({ available: true, declared: true }));
+			expect(result.received).toBe("claimed:ping");
+		},
+	);
+
+	it("canary: a garbage table declares the names it still quotes, all unavailable", async () => {
+		const result = await exchange("receiver", '{"sample-channel":5');
+		expect(JSON.parse(result.stdout)).toEqual(state({ declared: true }));
 		expect(result.received).toBe("");
 	});
 
@@ -103,22 +143,26 @@ describe("private host descriptors", () => {
 		const result = await exchange("supervisor-report", '{"sample-channel":null}');
 		// then the engine sees the declaration without a channel, and its nested host sees neither
 		expect(result.code, result.stderr).toBe(0);
-		expect(reports(result.stderr)).toEqual([
-			{ mode: "nested", declared: false, available: false },
-			{ mode: "engine-report", declared: true, available: false },
-		]);
+		expect(reports(result.stderr)).toEqual([nested, engine({})]);
 		expect(result.received).toBe("");
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"carries an unparseable table to the engine as present but unavailable",
+		async () => {
+			const result = await exchange("supervisor-report", "%%%");
+			expect(result.code, result.stderr).toBe(0);
+			expect(reports(result.stderr)).toEqual([nested, engine({ declared: false, unparseable: true })]);
+			expect(result.received).toBe("");
+		},
+	);
 
 	it.skipIf(process.platform === "win32")("ends the chain at the engine: a nested host inherits nothing", async () => {
 		// given the engine received the named duplex
 		const result = await exchange("supervisor-report");
 		// then a host it starts before claiming gets neither the table nor the descriptor; the engine still claims it
 		expect(result.code, result.stderr).toBe(0);
-		expect(reports(result.stderr)).toEqual([
-			{ mode: "nested", declared: false, available: false },
-			{ mode: "engine-report", declared: true, available: true },
-		]);
+		expect(reports(result.stderr)).toEqual([nested, engine({ available: true })]);
 		expect(result.received).toBe("engine-claimed");
 	});
 
