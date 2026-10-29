@@ -141,8 +141,8 @@ function createKernelWebView(NativeWebView, requestPort) {
 		scroll(dx, dy) { return this.#call("scroll", [dx, dy]); }
 		scrollTo(...args) { return this.#call("scrollTo", args); }
 		resize(width, height) { return this.#call("resize", [width, height]); }
-		back() { return this.#call("back", []); }
-		forward() { return this.#call("forward", []); }
+		goBack() { return this.#call("goBack", []); }
+		goForward() { return this.#call("goForward", []); }
 		reload() { return this.#call("reload", []); }
 		cdp(...args) { return this.#call("cdp", args); }
 

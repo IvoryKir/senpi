@@ -109,6 +109,23 @@ describe.skipIf(!bunWebViewAvailable)("Bun.WebView from an eval cell", { timeout
 		expect(value).toEqual({ logged: [["log", "from the page", 7]], answer: 42 });
 	});
 
+	it("walks the default-backend view's history with goBack() and goForward()", async () => {
+		// goBack()/goForward() resolve before the history navigation commits; the cell waits for the view's
+		// navigated event, so the check reads the committed page.
+		const value = await cell(
+			[
+				`await using view = new Bun.WebView({ width: 320, height: 240 });`,
+				`await view.navigate(${JSON.stringify(fixtureUrl())});`,
+				`await view.navigate(${JSON.stringify(`${fixtureUrl()}?second`)});`,
+				`const settled = (move) => new Promise((resolve, reject) => { view.onNavigated = (url) => resolve(url); move().catch(reject); });`,
+				`const back = await settled(() => view.goBack());`,
+				`const forward = await settled(() => view.goForward());`,
+				`return { back, forward };`,
+			].join("\n"),
+		);
+		expect(value).toEqual({ back: fixtureUrl(), forward: `${fixtureUrl()}?second` });
+	});
+
 	// senpi#4794: Bun's WebKit host client is bound to the first thread that spawns it, so a WebKit view
 	// built in a kernel worker broke every view after that worker exited and corrupted the heap once a
 	// second worker used one.
