@@ -16,7 +16,10 @@ export interface ReliableTransportOptions {
 	readonly clock: TransportClock;
 	/** Frames per lane that may be sent and unacknowledged at once. Default 32. */
 	readonly window?: number;
-	/** Without ACK progress for this long, unacknowledged frames are sent again from each lane's last ACK. Default 1000. */
+	/**
+	 * Without ACK progress on a lane for this long, that lane's unacknowledged frames are sent again from its last ACK.
+	 * Each lane keeps its own deadline, so progress on one lane never postpones another's retransmit. Default 1000.
+	 */
 	readonly retransmitMs?: number;
 	/** A receiver that throws: the frame still counts as delivered (it is never delivered twice). */
 	readonly onHandlerError: (error: unknown, frame: TransportFrame) => void;
@@ -34,6 +37,8 @@ interface OutLane {
 	transmitted: number;
 	readonly outbox: Map<number, Uint8Array>;
 	readonly waiters: Waiter[];
+	/** Cancels this lane's retransmit deadline; set while the lane has unacknowledged frames and a connection. */
+	cancelRetransmit: (() => void) | undefined;
 }
 
 interface InLane {
@@ -61,7 +66,7 @@ export function decodeReferencePacket(
 /**
  * The reference transport: per-lane send windows (backpressure), round-robin transmission across lanes (fairness),
  * cumulative ACKs sent only after the receiver's handler settles, and go-back-N from each lane's last ACK on re-attach or
- * on a retransmit timeout. A receiver drops anything that is not the next frame of its lane, so it delivers each frame
+ * on that lane's own retransmit timeout. A receiver drops anything that is not the next frame of its lane, so it delivers each frame
  * once and in order over any carrier that may drop, lose, delay or reorder messages.
  */
 export function createReliableTransport(options: ReliableTransportOptions): TransportSide {
@@ -76,12 +81,11 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 	let writable = false;
 	let closed = false;
 	let handler: FrameHandler | undefined;
-	let cancelRetransmit: (() => void) | undefined;
 
 	const outLane = (lane: string): OutLane => {
 		let state = outLanes.get(lane);
 		if (state === undefined) {
-			state = { nextSeq: 1, acked: 0, transmitted: 0, outbox: new Map(), waiters: [] };
+			state = { nextSeq: 1, acked: 0, transmitted: 0, outbox: new Map(), waiters: [], cancelRetransmit: undefined };
 			outLanes.set(lane, state);
 			order.push(lane);
 		}
@@ -113,18 +117,23 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 		return false;
 	};
 
-	const disarm = (): void => {
-		cancelRetransmit?.();
-		cancelRetransmit = undefined;
+	const disarm = (state: OutLane): void => {
+		state.cancelRetransmit?.();
+		state.cancelRetransmit = undefined;
+	};
+	const disarmAll = (): void => {
+		for (const state of outLanes.values()) disarm(state);
 	};
 	const arm = (): void => {
-		if (cancelRetransmit !== undefined || connection === undefined) return;
-		if (![...outLanes.values()].some((state) => state.outbox.size > 0)) return;
-		cancelRetransmit = options.clock.setTimer(() => {
-			cancelRetransmit = undefined;
-			for (const state of outLanes.values()) state.transmitted = state.acked;
-			pump();
-		}, retransmitMs);
+		if (connection === undefined) return;
+		for (const state of outLanes.values()) {
+			if (state.cancelRetransmit !== undefined || state.outbox.size === 0) continue;
+			state.cancelRetransmit = options.clock.setTimer(() => {
+				state.cancelRetransmit = undefined;
+				state.transmitted = state.acked;
+				pump();
+			}, retransmitMs);
+		}
 	};
 
 	function pump(): void {
@@ -189,7 +198,7 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 		for (let seq = state.acked + 1; seq <= packet.seq; seq++) state.outbox.delete(seq);
 		state.acked = packet.seq;
 		state.transmitted = Math.max(state.transmitted, state.acked);
-		disarm();
+		disarm(state);
 		admit(state);
 		pump();
 	};
@@ -215,7 +224,7 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 		close() {
 			if (closed) return;
 			closed = true;
-			disarm();
+			disarmAll();
 			for (const state of outLanes.values()) {
 				for (const waiter of state.waiters.splice(0)) waiter.reject(new TransportClosedError());
 			}
@@ -232,7 +241,7 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 			writable = true;
 			for (const state of outLanes.values()) state.transmitted = state.acked;
 			for (const [lane, state] of inLanes) if (state.delivered > 0) ackDue.add(lane);
-			disarm();
+			disarmAll();
 			pump();
 		},
 		message(message) {
@@ -248,7 +257,7 @@ export function createReliableTransport(options: ReliableTransportOptions): Tran
 		detached() {
 			connection = undefined;
 			writable = false;
-			disarm();
+			disarmAll();
 		},
 	};
 }

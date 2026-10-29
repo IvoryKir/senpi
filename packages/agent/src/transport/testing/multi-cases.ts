@@ -1,6 +1,14 @@
 import type { CaseImplementation } from "../../conformance/runner.ts";
 import { createCarrierFault, type FaultStats } from "./fault-transport.ts";
-import { allDelivered, expectExactDelivery, openLink, range, type TransportCaseAdapters } from "./transport-harness.ts";
+import {
+	allDelivered,
+	type CarrierFault,
+	expectExactDelivery,
+	openLink,
+	range,
+	type TransportCaseAdapters,
+	type WireView,
+} from "./transport-harness.ts";
 
 type MultiCase = CaseImplementation<TransportCaseAdapters>;
 
@@ -70,7 +78,62 @@ const fairness: MultiCase = async (adapters) => {
 	await longLaneDoesNotStarveAnother(adapters);
 };
 
+/** Loses the first data message of `lane`#`seq` on the carrier, once; every other message passes. */
+function loseOnce(decode: (message: unknown) => WireView, lane: string, seq: number, stats: FaultStats): CarrierFault {
+	return {
+		wrap: (side) => ({
+			attached: (connection) =>
+				side.attached({
+					send: (message) => {
+						const view = decode(message);
+						if (stats.lost === 0 && view.kind === "data" && view.lane === lane && view.seq === seq) {
+							stats.lost += 1;
+							return true;
+						}
+						return connection.send(message);
+					},
+					close: () => connection.close(),
+				}),
+			message: (message) => side.message(message),
+			writable: () => side.writable(),
+			detached: () => side.detached(),
+		}),
+		start: () => {},
+	};
+}
+
+const LONG_LANE_FRAMES = 400;
+const LONG_LANE_PACE_MS = 10;
+
+/**
+ * B's only frame is lost while A's paced receiver keeps acknowledging A's long lane. B's resend must not wait for A: the
+ * loss is recovered on B's own deadline, before half of A's frames have gone ahead of it.
+ */
+const lossOnOneLaneIsNotHeldByAnother: MultiCase = async (adapters) => {
+	const stats: FaultStats = { refused: 0, lost: 0, reordered: 0, drops: 0 };
+	const decode = (message: unknown) => adapters.transport.decode(message);
+	const link = openLink(adapters, () => loseOnce(decode, "B", 1, stats));
+	link.pace("A", LONG_LANE_PACE_MS);
+	const aSends = range(1, LONG_LANE_FRAMES).map((n) => link.send("A", n));
+	await link.runUntil(() => link.delivered("A").length >= 10, "MULTI-FAIR-02 A's long lane under way");
+	const before = link.delivered("A").length;
+	const bSend = link.send("B", 1);
+	await link.runUntil(allDelivered(link, { B: 1 }), "MULTI-FAIR-02 B delivered after its loss", 600_000);
+	if (stats.lost !== 1) throw new Error(`MULTI-FAIR-02: B#1 was not lost on the carrier (${JSON.stringify(stats)})`);
+	const aheadOfB = link.delivered("A").length - before;
+	if (aheadOfB >= LONG_LANE_FRAMES / 2) {
+		throw new Error(
+			`MULTI-FAIR-02: B's lost frame was resent only after ${aheadOfB} of A's frames (fewer than ${LONG_LANE_FRAMES / 2})`,
+		);
+	}
+	await link.runUntil(allDelivered(link, { A: LONG_LANE_FRAMES }), "MULTI-FAIR-02 A delivered", 600_000);
+	await link.awaitAll([...aSends, bSend], "MULTI-FAIR-02");
+	await link.advance(2000);
+	expectExactDelivery(link, { A: LONG_LANE_FRAMES, B: 1 }, "MULTI-FAIR-02");
+};
+
 export const MULTI_CASES: ReadonlyMap<string, MultiCase> = new Map([
 	["MULTI-LANE-01", manyLanes],
 	["MULTI-FAIR-01", fairness],
+	["MULTI-FAIR-02", lossOnOneLaneIsNotHeldByAnother],
 ]);

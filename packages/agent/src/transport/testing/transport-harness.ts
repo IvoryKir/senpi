@@ -72,6 +72,8 @@ export interface TestLink {
 	delivered(lane: string): readonly number[];
 	/** Holds the receiver on `lane` (from its next frame) until the returned release is called. */
 	gate(lane: string): () => void;
+	/** Makes the receiver take `ms` of transport time for each frame on `lane` (from its next frame). */
+	pace(lane: string, ms: number): void;
 	runUntil(done: () => boolean, what: string, budgetMs?: number): Promise<void>;
 	/** Advances transport time until every promise settles; a rejection fails the case. */
 	awaitAll(promises: readonly Promise<unknown>[], what: string): Promise<void>;
@@ -87,6 +89,7 @@ export function openLink(adapters: TransportCaseAdapters, fault?: (timers: Manua
 	const log: string[] = [];
 	const received = new Map<string, number[]>();
 	const gates = new Map<string, PromiseWithResolvers<void>>();
+	const paces = new Map<string, number>();
 	const installed = fault?.(timers);
 	const outer = (side: TransportSide): CarrierSide => {
 		const tapped = tap(side, (message) => adapters.transport.decode(message), violations);
@@ -98,6 +101,8 @@ export function openLink(adapters: TransportCaseAdapters, fault?: (timers: Manua
 	const decoder = new TextDecoder();
 	receiver.onFrame(async (frame) => {
 		await gates.get(frame.lane)?.promise;
+		const paceMs = paces.get(frame.lane);
+		if (paceMs !== undefined) await new Promise<void>((resolve) => void timers.setTimer(resolve, paceMs));
 		const n = Number(decoder.decode(frame.payload));
 		received.set(frame.lane, [...(received.get(frame.lane) ?? []), n]);
 		log.push(`${frame.lane}:${n}`);
@@ -137,6 +142,9 @@ export function openLink(adapters: TransportCaseAdapters, fault?: (timers: Manua
 				gates.delete(lane);
 				gate.resolve();
 			};
+		},
+		pace(lane, ms) {
+			paces.set(lane, ms);
 		},
 		runUntil,
 		async awaitAll(promises, what) {
