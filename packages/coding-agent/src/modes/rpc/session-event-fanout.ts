@@ -1,5 +1,7 @@
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
+import { ExtensionTransportOwner } from "./extension-owner.ts";
 import { serializeJsonLine } from "./jsonl.ts";
+import { observeLifecycleDelivery } from "./lifecycle-delivery.ts";
 import { carriesMedia, omitNormalInlineMedia } from "./media-placeholders.ts";
 import type { SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { SocketEventSinkActor } from "./socket-event-fanout.ts";
@@ -32,6 +34,7 @@ const BROADCAST_LIFECYCLE_RECORDS = new Set([
 type RegisteredConnection = {
 	readonly connection: SessionEventWriterConnection;
 	readonly actor: SocketEventSinkActor;
+	readonly owner: ExtensionTransportOwner;
 };
 
 /**
@@ -79,10 +82,13 @@ export class SessionEventFanout {
 		connection: SessionEventWriterConnection,
 		options: { readonly maxQueueBytes?: number; readonly stallMs?: number } = {},
 	): void {
+		this.unregisterConnection(id);
+		const owner = new ExtensionTransportOwner();
 		const actor = new SocketEventSinkActor(
 			connection,
 			(cause) => {
 				if (this.connections.get(id)?.actor === actor) {
+					owner.retire();
 					this.connections.delete(id);
 					this.connectionCapabilities.delete(id);
 					this.connectionSessions.delete(id);
@@ -97,7 +103,7 @@ export class SessionEventFanout {
 			options.maxQueueBytes,
 			options.stallMs,
 		);
-		this.connections.set(id, { connection, actor });
+		this.connections.set(id, { connection, actor, owner });
 		this.connectionCapabilities.set(id, new Set());
 		this.connectionSessions.set(id, new Set());
 	}
@@ -105,6 +111,7 @@ export class SessionEventFanout {
 	unregisterConnection(id: string): void {
 		const registered = this.connections.get(id);
 		if (!registered) return;
+		registered.owner.retire();
 		registered.actor.close();
 		this.connections.delete(id);
 		this.connectionCapabilities.delete(id);
@@ -275,7 +282,7 @@ export class SessionEventFanout {
 		if (!actor) return;
 		const placeholders = this.connectionHas(id, MEDIA_PLACEHOLDERS_CAPABILITY);
 		const lifecycle = this.lifecycleSnapshots.get(sessionId);
-		if (lifecycle) actor.enqueue(placeholders ? snapshotPlaceholderLine(lifecycle) : lifecycle.line);
+		if (lifecycle) actor.enqueue(serializeJsonLine(observeLifecycleDelivery(JSON.parse(lifecycle.line))));
 		for (const record of this.sessionSnapshots.get(sessionId) ?? [])
 			actor.enqueue(placeholders ? snapshotPlaceholderLine(record) : record.line);
 	}
