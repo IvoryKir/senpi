@@ -62,9 +62,7 @@ function ownsTransport(model: AnyModel, context: BaseUrlOverrideContext): boolea
 }
 
 function honorsModelBaseUrl(context: BaseUrlOverrideContext): boolean {
-	return context.extension
-		? context.extension.honorsModelBaseUrl === true
-		: context.base?.honorsModelBaseUrl === true;
+	return context.extension ? context.extension.honorsModelBaseUrl === true : context.base?.honorsModelBaseUrl === true;
 }
 
 function baseUrlOverrideDecision(model: AnyModel, context: BaseUrlOverrideContext): BaseUrlOverrideDecision {

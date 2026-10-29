@@ -61,7 +61,15 @@ describe("senpi#4765 models.json baseUrl precedence over an extension", () => {
 			...extension,
 			models: [
 				chatDefinition("chat-a"),
-				{ type: "image", id: "img-a", name: "img-a", api: "openai-images", input: ["text"], output: ["image"], cost: ZERO_COST },
+				{
+					type: "image",
+					id: "img-a",
+					name: "img-a",
+					api: "openai-images",
+					input: ["text"],
+					output: ["image"],
+					cost: ZERO_COST,
+				},
 				{
 					type: "classifier",
 					id: "cls-a",
