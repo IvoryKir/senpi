@@ -42,6 +42,10 @@ vi.mock("../src/core/extensions/builtin/cursor-cli-oauth/stream.ts", async (impo
 	};
 });
 
+const firstCursorModel = STATIC_CURSOR_CLI_MODELS[0];
+if (firstCursorModel === undefined) throw new Error("cursor-cli-oauth ships no static models");
+const CURSOR_MODEL_ID = firstCursorModel.id;
+
 const userContext: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
 
 let server: LoopbackServer;
@@ -122,7 +126,7 @@ describe("senpi#4765 cursor-cli-oauth cannot change its address", () => {
 	});
 
 	it("shows one notice for a per-model baseUrl, also when the provider baseUrl is set too", () => {
-		const modelId = STATIC_CURSOR_CLI_MODELS[0]!.id;
+		const modelId = CURSOR_MODEL_ID;
 		models = modelsJsonFile({ [CURSOR_CLI_OAUTH_PROVIDER_ID]: { models: [{ id: modelId, baseUrl: server.url }] } });
 		expect(cursorNotices(models.config().getWarnings())).toHaveLength(1);
 
@@ -134,7 +138,7 @@ describe("senpi#4765 cursor-cli-oauth cannot change its address", () => {
 
 	it("shows no notice when models.json sets no baseUrl for cursor-cli-oauth", async () => {
 		models = modelsJsonFile({
-			[CURSOR_CLI_OAUTH_PROVIDER_ID]: { modelOverrides: { [STATIC_CURSOR_CLI_MODELS[0]!.id]: { name: "renamed" } } },
+			[CURSOR_CLI_OAUTH_PROVIDER_ID]: { modelOverrides: { [CURSOR_MODEL_ID]: { name: "renamed" } } },
 			deepseek: { baseUrl: server.url },
 		});
 
@@ -154,7 +158,7 @@ describe("senpi#4765 cursor-cli-oauth cannot change its address", () => {
 		});
 		await registerCursorLane(runtime, credentials);
 
-		const model = requireModel(runtime, CURSOR_CLI_OAUTH_PROVIDER_ID, STATIC_CURSOR_CLI_MODELS[0]!.id);
+		const model = requireModel(runtime, CURSOR_CLI_OAUTH_PROVIDER_ID, CURSOR_MODEL_ID);
 		expect(model.api).toBe(CURSOR_CLI_OAUTH_PROVIDER_ID);
 		const reply = await runtime.completeSimple(model, userContext);
 
