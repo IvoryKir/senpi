@@ -119,9 +119,11 @@ function getV41CatalogModels(): Model<Api>[] {
 	);
 }
 
+// Image input and reasoning are per-provider serving choices, not snapshot facts: models.dev lists mistral's
+// deepseek-v4-1-flash-1017 as text-only (attachment false), so the release's catalog regeneration can add such a
+// row (senpi#4762). Every shipped row must reach the V4.1 preset; the curated KNOWN_1017_ROWS pin the multimodal set.
 function expectShipped1017Row(model: Model<Api>): void {
-	expect(model.reasoning).toBe(true);
-	expect(model.input).toContain("image");
+	expect(model.input).toContain("text");
 	expect(resolvePresetName(model, AUTO)).toBe("deepseek-v4-1-flash");
 }
 
@@ -203,10 +205,17 @@ describe("DeepSeek V4.1 Flash prompt preset", () => {
 		expectShipped1017Row(model);
 	});
 
-	it.each(KNOWN_1017_ROWS)("still ships the 1017 snapshot row on %s (%s)", (provider, id) => {
-		// then
-		expect(SHIPPED_1017_ROWS.some(([p, i]) => p === provider && i === id)).toBe(true);
-	});
+	it.each(KNOWN_1017_ROWS)(
+		"still ships the 1017 snapshot row on %s (%s) as a multimodal reasoning row",
+		(provider, id) => {
+			// when
+			const model = SHIPPED_1017_ROWS.find(([p, i]) => p === provider && i === id)?.[2];
+
+			// then
+			expect(model?.reasoning).toBe(true);
+			expect(model?.input).toContain("image");
+		},
+	);
 });
 
 describe("DeepSeek V4.1 Flash prompt content", () => {
