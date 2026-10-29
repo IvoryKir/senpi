@@ -30,6 +30,7 @@ import {
 	spawnCli,
 } from "../lib/common.mjs";
 import { hermeticEnv, writeMockModelsJson } from "../lib/mock-loop-support.mjs";
+import { ownerCommand } from "../lib/owner-receipt.mjs";
 import {
 	buildBands,
 	checkBudgets,
@@ -568,10 +569,16 @@ function report(opts, out, summary, facts) {
 		slopes_in_band: verdict?.slopes_in_band ?? false,
 		latency_in_band: verdict?.latency_in_band ?? false,
 	};
+	const pass = valid && soak.post_wave_levels_ok && soak.slopes_in_band && soak.latency_in_band;
+	const run = { argv: ["node", ".agents/skills/senpi-qa/scripts/scenarios/soak-qa.mjs", ...argv], exit: pass ? 0 : 1 };
 	const receipt = {
 		manifest_id: "QA.soak",
+		// A smoke run (shortened durations) is not the manifest entry, so it carries no PGATE coverage row.
+		commands: opts.smoke
+			? []
+			: [ownerCommand({ manifestId: "QA.soak", kind: "soak", argv: run.argv, childRuntime: childRuntime().label, exit: run.exit })],
 		kind: "soak",
-		argv: ["node", ".agents/skills/senpi-qa/scripts/scenarios/soak-qa.mjs", ...argv],
+		argv: run.argv,
 		child_runtime: childRuntime().label,
 		mode: opts.writeBaseline ? "b0" : "compare",
 		smoke: opts.smoke,
@@ -594,11 +601,10 @@ function report(opts, out, summary, facts) {
 	for (const violation of receipt.violations)
 		process.stdout.write(`[BREACH] ${violation.check}: ${violation.detail}\n`);
 	for (const error of receipt.workload_errors) process.stdout.write(`[WORKLOAD] ${error}\n`);
-	const pass = valid && soak.post_wave_levels_ok && soak.slopes_in_band && soak.latency_in_band;
 	process.stdout.write(
 		`soak-qa ${receipt.mode}: ${pass ? "PASS" : "FAIL"} waves=${receipt.waves} turns=${receipt.turns} calls=${receipt.calls} post_wave_levels_ok=${soak.post_wave_levels_ok} slopes_in_band=${soak.slopes_in_band} latency_in_band=${soak.latency_in_band} (child_runtime=${receipt.child_runtime}, x4_cap=${receipt.x4_cap})\nevidence: ${out}\n`,
 	);
-	process.exitCode = pass ? 0 : 1;
+	process.exitCode = run.exit;
 }
 
 // Run only as a script; resource-sampler.test.mjs imports the fake model's script from this file.
