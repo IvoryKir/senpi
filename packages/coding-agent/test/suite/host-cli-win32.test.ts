@@ -34,14 +34,14 @@ describe.skipIf(process.platform !== "win32")("senpi host on named pipes", () =>
 		const qa = await hostCliSandbox("pipe");
 		completed.push(qa);
 		const firstResult = await runHostCli(qa, ["ensure", "--json"]);
-		expect(firstResult.exitCode, firstResult.stderr).toBe(0);
+		expect(firstResult.exitCode, `${firstResult.stdout}${firstResult.stderr}`).toBe(0);
 		const first = onlyJsonLine(firstResult);
 		expect(first).toMatchObject({ action: "start", reused: false });
 		expect([...qa.ownedPids]).toContain(first.pid);
 
 		const second = await runHostCli(qa, ["ensure", "--json"]);
 
-		expect(second.exitCode, second.stderr).toBe(0);
+		expect(second.exitCode, `${second.stdout}${second.stderr}`).toBe(0);
 		expect(onlyJsonLine(second)).toMatchObject({ action: "reuse", reused: true, instanceId: first.instanceId });
 	}, 180_000);
 
@@ -49,7 +49,7 @@ describe.skipIf(process.platform !== "win32")("senpi host on named pipes", () =>
 		const qa = await hostCliSandbox("handoff");
 		completed.push(qa);
 		const result = await runHostCli(qa, ["ensure", "--json"]);
-		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 		const started = onlyJsonLine(result);
 		expect(started).toMatchObject({ action: "start" });
 		expect([...qa.ownedPids]).toContain(started.pid);

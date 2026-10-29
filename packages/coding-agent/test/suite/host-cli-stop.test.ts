@@ -78,7 +78,7 @@ async function occupiedDaemon(label: string): Promise<OccupiedDaemon> {
 	models.push(model);
 	writeRpcModelsJson(sandbox.agentDir, model.origin);
 	const result = await runHostCli(sandbox, ["ensure", "--json"]);
-	expect(result.exitCode, result.stderr).toBe(0);
+	expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 	const ensured = onlyJsonLine(result);
 	const peer = await JsonlPeer.connect(sandbox.socket);
 	peers.push(peer);

@@ -99,7 +99,7 @@ describe.skipIf(process.platform === "win32")("senpi host launch spec trust", ()
 
 		const result = await runHostCli(qa, ["ensure", "--json", "--launch-spec", spec]);
 
-		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 		expect(onlyJsonLine(result)).toMatchObject({ action: "start" });
 		const status = onlyJsonLine(await runHostCli(qa, ["status", "--json"]));
 		expect((status.launchProfile as { core: { extensions: string[] } }).core.extensions).toEqual([
@@ -112,7 +112,7 @@ describe.skipIf(process.platform === "win32")("senpi host handoff", () => {
 	it("starts one sanitized successor generation", async () => {
 		const qa = await hostCliSandbox("successor-env");
 		const firstResult = await runHostCli(qa, ["ensure", "--json"]);
-		expect(firstResult.exitCode, firstResult.stderr).toBe(0);
+		expect(firstResult.exitCode, `${firstResult.stdout}${firstResult.stderr}`).toBe(0);
 		const first = onlyJsonLine(firstResult);
 
 		const result = await runHostCli(qa, ["handoff", "--json"], {

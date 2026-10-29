@@ -40,7 +40,7 @@ async function launched(
 	const result = await runHostCli(qa, args, { SENPI_RUNTIME: options.runtime ?? "bun" }, async (socket) => {
 		enrolled = await bootstrap(socket, options.predecessor);
 	});
-	expect(result.exitCode, result.stderr).toBe(0);
+	expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 	expect(enrolled).toMatchObject({ type: "enrolled", backendGeneration: enroll.backendGeneration });
 	if (!enrolled) throw new Error("CLI exited without presenter enrollment");
 	return { payload: onlyJsonLine(result), enrolled };
@@ -133,7 +133,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 				await closed;
 			});
 			expect(frames).toEqual([]);
-			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 			expect(onlyJsonLine(result)).toMatchObject({ action: "handoff" });
 		},
 		240_000,
@@ -148,7 +148,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 				? await launched(qa, ["ensure", ...enforcement])
 				: await (async () => {
 						const result = await runHostCli(qa, ["ensure"]);
-						expect(result.exitCode, result.stderr).toBe(0);
+						expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 						return { payload: onlyJsonLine(result), enrolled: undefined };
 					})();
 			const { peer, sessionId } = await busy(qa);
@@ -185,7 +185,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 			);
 			// An ensure reports THIS CLI's target build while reusing the busy generation, never enrolling it.
 			const targetResult = await runHostCli(qa, ["ensure", "--policy", "never", "--launch-spec", spec]);
-			expect(targetResult.exitCode, targetResult.stderr).toBe(0);
+			expect(targetResult.exitCode, `${targetResult.stdout}${targetResult.stderr}`).toBe(0);
 			const target = onlyJsonLine(targetResult);
 			const pending = await runHostCli(qa, [
 				"handoff",
@@ -203,7 +203,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 				spec,
 				"--mcp-presenter-enforcement",
 			]);
-			expect(pending.exitCode, pending.stderr).toBe(0);
+			expect(pending.exitCode, `${pending.stdout}${pending.stderr}`).toBe(0);
 			expect(onlyJsonLine(pending).action).toBe("handover_pending");
 			const successorPrepare = management ? next(management, "mcp_presenter_successor_prepare") : undefined;
 			const superseded = next(peer.socket, "host_superseded");
@@ -258,7 +258,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 			socket.on("data", (chunk) => received.push(String(chunk)));
 			send(socket, enroll);
 		});
-		expect(result.exitCode, result.stderr).toBe(0);
+		expect(result.exitCode, `${result.stdout}${result.stderr}`).toBe(0);
 		expect(onlyJsonLine(result).capabilities).not.toContain("mcp_form_presenter_v1");
 		expect(received).toEqual([]);
 	}, 120_000);
@@ -267,7 +267,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 		const qa = await hostCliSandbox("pr");
 		const model = await heldModel(qa);
 		const firstResult = await runHostCli(qa, ["ensure"]);
-		expect(firstResult.exitCode, firstResult.stderr).toBe(0);
+		expect(firstResult.exitCode, `${firstResult.stdout}${firstResult.stderr}`).toBe(0);
 		const first = onlyJsonLine(firstResult);
 		expect(first.capabilities).not.toContain("mcp_form_presenter_v1");
 		const { peer } = await busy(qa);
@@ -277,7 +277,7 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 			socket.on("data", (chunk) => received.push(String(chunk)));
 			send(socket, enroll);
 		});
-		expect(reused.exitCode, reused.stderr).toBe(0);
+		expect(reused.exitCode, `${reused.stdout}${reused.stderr}`).toBe(0);
 		expect(onlyJsonLine(reused)).toMatchObject({
 			action: "reuse",
 			reused: true,
