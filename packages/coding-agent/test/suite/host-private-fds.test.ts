@@ -178,11 +178,18 @@ describe("private host descriptors", () => {
 const probeFixture = join(import.meta.dirname, "../fixtures/private-fd-probe.ts");
 
 /** The runtimes a launcher may start: this test's runtime, and Node when the host has a working one. */
-function runtimes(): [string, string][] {
-	const node = spawnSync("node", ["--version"], { encoding: "utf8" });
-	const found: [string, string][] = [["current", process.execPath]];
-	if (node.status === 0 && node.stdout.startsWith("v") && !process.execPath.endsWith("/node"))
-		found.push(["node", "node"]);
+function works(command: string): boolean {
+	const probed = spawnSync(command, ["--version"], { encoding: "utf8" });
+	return probed.status === 0 && probed.stdout.trim().length > 0;
+}
+
+/** [label, command, skip reason]: a runtime that is not installed is skipped with that reason. */
+function runtimes(): [string, string, string | undefined][] {
+	const found: [string, string, string | undefined][] = [["current", process.execPath, undefined]];
+	for (const command of ["node", "bun"]) {
+		const isCurrent = command === "bun" ? Boolean(process.versions.bun) : !process.versions.bun;
+		if (!isCurrent) found.push([command, command, works(command) ? undefined : `${command} is not installed`]);
+	}
 	return found;
 }
 
@@ -214,63 +221,68 @@ const pipes = (...fds: number[]): StdioOptions => {
 };
 
 // #4771 review: only a handed-over socket in the range every runtime marks close-on-exec is adopted.
-describe.skipIf(process.platform === "win32").each(runtimes())(
-	"private descriptor adoption under %s",
-	(_label, runtime) => {
-		it("a tool child with ignored stdio holds no private descriptor, even one above the protected range", async () => {
-			const result = await probe(
-				runtime,
-				[probeFixture, "leak-probe"],
-				'{"sample-channel":5,"high":20}',
-				pipes(5, 20),
-			);
-			expect(result.code, result.stderr).toBe(0);
-			expect(JSON.parse(result.stdout)).toEqual({ open: "", high: { declared: true, available: false } });
-		});
+for (const [label, runtime, missing] of runtimes()) {
+	describe.skipIf(process.platform === "win32" || missing !== undefined)(
+		`private descriptor adoption under ${label}${missing === undefined ? "" : ` (skipped: ${missing})`}`,
+		() => registerAdoptionCases(runtime),
+	);
+}
 
-		it("a named descriptor the launcher never passed is declared but unavailable", async () => {
-			for (const table of ['{"sample-channel":5}', '{"sample-channel":6}', '{"sample-channel":9}']) {
-				const result = await probe(runtime, [probeFixture, "report"], table, ["ignore", "pipe", "pipe"]);
-				expect(JSON.parse(result.stdout), table).toEqual({
-					available: false,
-					declared: true,
-					present: true,
-					unparseable: false,
-				});
-			}
+function registerAdoptionCases(runtime: string): void {
+	it("a tool child with ignored stdio holds no private descriptor, even one above the protected range", async () => {
+		// 24 and 64 sit past every runtime's startup close-on-exec sweep (Node on Linux leaks from 24 up).
+		const table = '{"sample-channel":5,"high":24,"top":64}';
+		const result = await probe(runtime, [probeFixture, "leak-probe"], table, pipes(5, 24, 64));
+		expect(result.code, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			open: "",
+			high: { declared: true, available: false },
+			top: { declared: true, available: false },
 		});
+	});
 
-		it("a descriptor replaced by execve is declared but unavailable", async () => {
-			const hop = `process.execve(process.execPath, [process.execPath, ${JSON.stringify(probeFixture)}, "report"], process.env)`;
-			const result = await probe(runtime, ["-e", hop], '{"sample-channel":5}', pipes(5));
-			expect(JSON.parse(result.stdout), result.stderr).toEqual({
+	it("a named descriptor the launcher never passed is declared but unavailable", async () => {
+		for (const table of ['{"sample-channel":5}', '{"sample-channel":6}', '{"sample-channel":9}']) {
+			const result = await probe(runtime, [probeFixture, "report"], table, ["ignore", "pipe", "pipe"]);
+			expect(JSON.parse(result.stdout), table).toEqual({
 				available: false,
 				declared: true,
 				present: true,
 				unparseable: false,
 			});
-		});
+		}
+	});
 
-		it("the runtime's own IPC channel is never adopted", async () => {
-			const result = await probe(runtime, [probeFixture, "report"], '{"sample-channel":5}', [
-				"ignore",
-				"pipe",
-				"pipe",
-				"ignore",
-				"ignore",
-				"ipc",
-			]);
-			expect(JSON.parse(result.stdout), result.stderr).toEqual({
-				available: false,
-				declared: true,
-				present: true,
-				unparseable: false,
-			});
+	it("a descriptor replaced by execve is declared but unavailable", async () => {
+		const hop = `process.execve(process.execPath, [process.execPath, ${JSON.stringify(probeFixture)}, "report"], process.env)`;
+		const result = await probe(runtime, ["-e", hop], '{"sample-channel":5}', pipes(5));
+		expect(JSON.parse(result.stdout), result.stderr).toEqual({
+			available: false,
+			declared: true,
+			present: true,
+			unparseable: false,
 		});
+	});
 
-		it("a second spawn still declares every name, without the descriptor", async () => {
-			const result = await probe(runtime, [probeFixture, "double-spawn"], '{"sample-channel":5}', pipes(5));
-			expect(JSON.parse(result.stdout), result.stderr).toEqual(['{"sample-channel":5}', '{"sample-channel":null}']);
+	it("the runtime's own IPC channel is never adopted", async () => {
+		const result = await probe(runtime, [probeFixture, "report"], '{"sample-channel":5}', [
+			"ignore",
+			"pipe",
+			"pipe",
+			"ignore",
+			"ignore",
+			"ipc",
+		]);
+		expect(JSON.parse(result.stdout), result.stderr).toEqual({
+			available: false,
+			declared: true,
+			present: true,
+			unparseable: false,
 		});
-	},
-);
+	});
+
+	it("a second spawn still declares every name, without the descriptor", async () => {
+		const result = await probe(runtime, [probeFixture, "double-spawn"], '{"sample-channel":5}', pipes(5));
+		expect(JSON.parse(result.stdout), result.stderr).toEqual(['{"sample-channel":5}', '{"sample-channel":null}']);
+	});
+}

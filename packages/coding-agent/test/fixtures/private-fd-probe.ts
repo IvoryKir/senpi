@@ -26,15 +26,17 @@ if (mode === "report") {
 	if (process.connected) process.disconnect?.();
 } else if (mode === "leak-probe") {
 	// A tool child started with ignored stdio must hold no private descriptor, adopted or not.
-	const listed = spawnSync("/bin/sh", ["-c", "for f in 5 20; do [ -e /dev/fd/$f ] && printf '%s ' $f; done"], {
+	const listed = spawnSync("/bin/sh", ["-c", "for f in 5 24 64; do [ -e /dev/fd/$f ] && printf '%s ' $f; done"], {
 		stdio: ["ignore", "pipe", "ignore"],
 	});
 	const high = takeInheritedPrivateChannel("high");
+	const top = takeInheritedPrivateChannel("top");
 	writeSync(
 		1,
 		JSON.stringify({
 			open: listed.stdout.toString().trim(),
 			high: { declared: privateChannelDeclared("high"), available: high !== undefined },
+			top: { declared: privateChannelDeclared("top"), available: top !== undefined },
 		}),
 	);
 	takeInheritedPrivateChannel("sample-channel")?.destroy();
