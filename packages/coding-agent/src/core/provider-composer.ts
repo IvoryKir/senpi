@@ -33,7 +33,7 @@ import {
 import { classifierErrorResult, imageErrorResult } from "@earendil-works/pi-ai/utils/model-operations";
 import type { RetryPolicyProfile } from "@earendil-works/pi-ai/utils/retry-profile/types";
 import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
-import { applyUserBaseUrl, type ProviderBaseOrigin } from "./provider-base-url-override.ts";
+import { applyUserBaseUrl } from "./provider-base-url-override.ts";
 import {
 	composeApiKeyAuth,
 	configuredHeaders,
@@ -118,12 +118,6 @@ export interface ProviderConfigInput {
 		context: TranscriptContext,
 		options?: SimpleStreamOptions,
 	) => AssistantMessageEventStream;
-	/**
-	 * Declares that `streamSimple`, `images` and `classifiers` send each request to `model.baseUrl`, so a
-	 * models.json baseUrl override reaches them. Undeclared, models those transports serve keep the
-	 * extension's own baseUrl (senpi#4765).
-	 */
-	honorsModelBaseUrl?: boolean;
 	images?: Partial<Record<ImageApi, ProviderImages>>;
 	classifiers?: Partial<Record<ClassifierApi, ProviderClassifier>>;
 	headers?: Record<string, string>;
@@ -573,16 +567,11 @@ export function validateExtensionProvider(
 	if (extension.streamSimple && !extension.api) {
 		throw new Error(`Provider ${providerId}: "api" is required when registering streamSimple.`);
 	}
-	const baseModels = getAllProviderModels(base);
-	applyUserBaseUrl(
-		applyExtension(
-			providerId,
-			applyModelsJson(providerId, baseModels, modelsConfig, extension),
-			extension,
-			new Set((modelsConfig?.models ?? []).map((definition) => definition.id)),
-		),
-		// The runtime validates a config registration against the builtin base only.
-		{ config: modelsConfig, extension, base, baseOrigin: "builtin", baseModels },
+	applyExtension(
+		providerId,
+		applyModelsJson(providerId, getAllProviderModels(base), modelsConfig, extension),
+		extension,
+		new Set((modelsConfig?.models ?? []).map((definition) => definition.id)),
 	);
 }
 
@@ -593,10 +582,9 @@ export function composeModelProvider(
 	modelConfig: ModelConfig,
 	extension: ProviderConfigInput | undefined,
 	/** Deferred ambient reads; the reader runs during auth resolution, never at composition. */
-	options?: { storedProviderEnv?: StoredProviderEnvReader; baseOrigin?: ProviderBaseOrigin },
+	options?: { storedProviderEnv?: StoredProviderEnvReader },
 ): Provider {
 	const config = modelConfig.getProvider(providerId);
-	const baseOrigin = options?.baseOrigin ?? "builtin";
 	let extensionOAuthCredential: OAuthCredentials | undefined;
 	let refreshedExtensionModels: ProviderConfigInput["models"];
 	const currentExtension = (): ProviderConfigInput | undefined =>
@@ -604,10 +592,9 @@ export function composeModelProvider(
 	// models.json modelOverrides are the topmost user-config layer: they apply once,
 	// after custom-model upserts, extension model replacement, and legacy OAuth projection.
 	const getAllModels = (): AnyModel[] => {
-		const baseModels = getAllProviderModels(base);
 		let models = applyExtension(
 			providerId,
-			applyModelsJson(providerId, baseModels, config, currentExtension()),
+			applyModelsJson(providerId, getAllProviderModels(base), config, currentExtension()),
 			currentExtension(),
 			new Set((config?.models ?? []).map((definition) => definition.id)),
 		);
@@ -622,7 +609,7 @@ export function composeModelProvider(
 			];
 		}
 		// The user's models.json baseUrl is applied after every extension rewrite, modifyModels included.
-		models = applyUserBaseUrl(models, { config, extension: currentExtension(), base, baseOrigin, baseModels });
+		models = applyUserBaseUrl(models, config);
 		return models.map((model) => {
 			const override = config?.modelOverrides?.[model.id];
 			return override && isModelType(model, "chat") ? applyModelOverride(model, override) : model;
@@ -696,16 +683,14 @@ export function composeModelProvider(
 							update: () => {
 								if (refreshed) {
 									// Validate before publishing the new synchronous list.
-									const baseModels = getAllProviderModels(base);
-									const refreshedExtension = { ...extension, models: refreshed };
-									applyUserBaseUrl(
-										applyExtension(
-											providerId,
-											applyModelsJson(providerId, baseModels, config, extension),
-											refreshedExtension,
-											new Set((config?.models ?? []).map((definition) => definition.id)),
-										),
-										{ config, extension: refreshedExtension, base, baseOrigin, baseModels },
+									applyExtension(
+										providerId,
+										applyModelsJson(providerId, getAllProviderModels(base), config, extension),
+										{
+											...extension,
+											models: refreshed,
+										},
+										new Set((config?.models ?? []).map((definition) => definition.id)),
 									);
 									refreshedExtensionModels = refreshed;
 								}

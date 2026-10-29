@@ -124,6 +124,49 @@ describe("senpi#4765 models.json baseUrl precedence over an extension", () => {
 		]);
 	});
 
+	it("sets the models.json baseUrl on every model served by extension-supplied transports", () => {
+		models = modelsJsonFile({ "ext-proxy": { baseUrl: USER_URL } });
+		const notCalled = () => {
+			throw new Error("not called");
+		};
+		const provider = composeModelProvider("ext-proxy", undefined, models.config(), {
+			baseUrl: EXTENSION_HOST,
+			apiKey: "ext-key",
+			api: "custom-transport-api",
+			streamSimple: notCalled,
+			images: { "openai-images": { generateImages: notCalled } },
+			classifiers: { "typesafe-system-one": { classify: notCalled } },
+			models: [
+				chatDefinition("chat-a", "https://extension-model-host.invalid/v1"),
+				{
+					type: "image",
+					id: "img-a",
+					name: "img-a",
+					api: "openai-images",
+					input: ["text"],
+					output: ["image"],
+					cost: ZERO_COST,
+				},
+				{
+					type: "classifier",
+					id: "cls-a",
+					name: "cls-a",
+					api: "typesafe-system-one",
+					input: ["text"],
+					cost: ZERO_COST,
+					contextWindow: 8192,
+				},
+			],
+		});
+
+		expect(baseUrls(provider)).toEqual([
+			["chat-a", USER_URL],
+			["img-a", USER_URL],
+			["cls-a", USER_URL],
+		]);
+		expect(provider.baseUrl).toBe(USER_URL);
+	});
+
 	it("reports the models.json baseUrl as the composed Provider.baseUrl", () => {
 		models = modelsJsonFile({ "ext-proxy": { baseUrl: USER_URL } });
 		expect(composeModelProvider("ext-proxy", undefined, models.config(), extension).baseUrl).toBe(USER_URL);

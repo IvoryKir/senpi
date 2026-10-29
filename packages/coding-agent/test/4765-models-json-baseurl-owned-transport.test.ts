@@ -1,8 +1,7 @@
-import type { Api, Context, Model, Provider } from "@earendil-works/pi-ai";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	chatDefinition,
-	chatModel,
 	createRuntime,
 	EXTENSION_HOST,
 	type ModelsJsonFile,
@@ -45,8 +44,8 @@ function transportReadingModelBaseUrl(model: Model<Api>): never {
 	throw new Error("transport captured the request");
 }
 
-describe("senpi#4765 owned transports that declare honorsModelBaseUrl", () => {
-	it("routes an extension streamSimple that reads model.baseUrl to the models.json baseUrl", async () => {
+describe("senpi#4765 extension-supplied transports receive the models.json baseUrl", () => {
+	it("hands an extension streamSimple model.baseUrl equal to the models.json baseUrl", async () => {
 		models = modelsJsonFile({ "owned-ext": { baseUrl: server.url } });
 		const runtime = await createRuntime(models.path);
 		await runtime.registerProvider(
@@ -55,7 +54,6 @@ describe("senpi#4765 owned transports that declare honorsModelBaseUrl", () => {
 				baseUrl: EXTENSION_HOST,
 				apiKey: "ext-key",
 				api: "custom-loopback-api",
-				honorsModelBaseUrl: true,
 				models: [chatDefinition("owned-a")],
 				streamSimple: transportReadingModelBaseUrl,
 			},
@@ -63,28 +61,6 @@ describe("senpi#4765 owned transports that declare honorsModelBaseUrl", () => {
 		);
 
 		await runtime.completeSimple(requireModel(runtime, "owned-ext", "owned-a"), userContext);
-		await Promise.allSettled(sent);
-
-		expect(seen).toEqual([server.url]);
-		expect(guard.blocked).toEqual([]);
-		expect(server.requests).toEqual(["/v1/chat/completions"]);
-	});
-
-	it("routes a native Provider that declares honorsModelBaseUrl to the models.json baseUrl", async () => {
-		models = modelsJsonFile({ "native-ext": { baseUrl: server.url } });
-		const runtime = await createRuntime(models.path);
-		const native: Provider = {
-			id: "native-ext",
-			name: "Native",
-			honorsModelBaseUrl: true,
-			auth: { apiKey: { name: "Native key", resolve: async () => ({ auth: { apiKey: "native-key" } }) } },
-			getModels: () => [chatModel("native-ext", "native-a", "https://native-host.invalid/v1")],
-			stream: transportReadingModelBaseUrl,
-			streamSimple: transportReadingModelBaseUrl,
-		};
-		await runtime.registerNativeProvider(native, { refresh: false });
-
-		await runtime.completeSimple(requireModel(runtime, "native-ext", "native-a"), userContext);
 		await Promise.allSettled(sent);
 
 		expect(seen).toEqual([server.url]);

@@ -2839,7 +2839,8 @@ The object form accepts a complete pi-ai `Provider`, including native `auth`, `g
 - `refreshModels` - Async dynamic discovery callback. Its returned models replace extension-provided models. `context.stored` contains the persisted provider snapshot; use generation-checked `context.publish({ persist: entry })` only when updated catalog data should persist. Use `persist: null` to delete that snapshot.
 - `oauth` - OAuth provider config for `/login` support. When provided, the provider appears in the login menu.
 - `streamSimple` - Custom streaming implementation for non-standard APIs.
-- `honorsModelBaseUrl` - Set to `true` when `streamSimple`, `images`, and `classifiers` send each request to `model.baseUrl`. A `models.json` baseUrl override is then applied to the models those transports serve. Without it, those models keep the `baseUrl` this registration declares, because the composer cannot tell whether a custom transport reads `model.baseUrl`. A native `Provider` registered with `pi.registerProvider(provider)` declares the same thing with `Provider.honorsModelBaseUrl`.
+
+When `models.json` sets a `baseUrl` for a provider (or `models[i].baseUrl` for a model), every model of that provider carries it, whichever extension registered the provider. An extension that supplies its own transport (`streamSimple`, `images`, `classifiers`, or a native `Provider`'s `stream`) must send requests to `model.baseUrl`; a transport that builds its own URL ignores the user's setting.
 
 See [custom-provider.md](custom-provider.md) for advanced topics: custom streaming APIs, OAuth details, model definition reference.
 
