@@ -17,8 +17,8 @@ import { PythonKernel } from "../src/kernels/py/kernel.ts";
 import { createIdentityDecider, type RecordedCall } from "./fixtures/path-identity.ts";
 
 // Design 6.3.3 (#4392): a Python cell sends the path as written plus the string the operation hands
-// to the OS (`executedPath`, the cwd-joined spelling for a relative path, never collapsed), and no
-// canonical form; the host canonicalizes. Every row names ONE file through the rule's spelling and
+// to the OS (`executedPath`, the cwd-joined spelling for a relative path, never collapsed), and its
+// native canonical form when available. Every row names ONE file through the rule's spelling and
 // the request's spelling and asserts that an active deny refuses the operation while an inactive
 // kernel passes it.
 const python = await createInterpreterDetector().detect("py");
@@ -151,7 +151,7 @@ describe.each([true, false])("Python path identity: active=%s", (active) => {
 	}, 60_000);
 
 	it.runIf(active)(
-		"sends the written spelling with the cwd-joined executed spelling and no canonical",
+		"sends the written and executed spellings with the native canonical identity",
 		async () => {
 			denied.clear();
 			denied.add(`${real}/real/secret`);
@@ -162,7 +162,7 @@ describe.each([true, false])("Python path identity: active=%s", (active) => {
 				expect(seen, `decider never received ${written}: ${JSON.stringify(calls)}`).toBeDefined();
 				// os.path.join on os.getcwd(): anchored to the interpreter's physical cwd and never collapsed.
 				expect(seen?.executedPath).toBe(isAbsolute(written) ? written : `${real}/${written}`);
-				expect(seen?.canonical).toBeUndefined();
+				expect(seen?.canonical).toBe(realpathSync.native(join(real, "real", "secret")));
 				expect(seen?.unresolvable).toBeUndefined();
 			}
 		},

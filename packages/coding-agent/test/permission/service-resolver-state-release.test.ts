@@ -51,7 +51,16 @@ describe("permission service resolver-state subscription", () => {
 		});
 		const rules = [{ permission: "read", pattern: "/srv/data/**", action: "deny" as const }];
 		expect(
-			() => new PermissionService(rules, [], createLocalEventEmitter(), undefined, undefined, undefined, throwingDetect),
+			() =>
+				new PermissionService(
+					rules,
+					[],
+					createLocalEventEmitter(),
+					undefined,
+					undefined,
+					undefined,
+					throwingDetect,
+				),
 		).toThrow("detect failed");
 		expect(resolver.listenerCount).toBe(baseline);
 		await resolver.close();

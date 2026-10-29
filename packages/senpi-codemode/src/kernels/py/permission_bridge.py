@@ -141,5 +141,5 @@ def initialize(config, port):
             if sock is not None:
                 close(sock)
 
-    install(check, enforcing, refuse)
+    install(check, enforcing, refuse, config["runtime"])
     return context

@@ -50,15 +50,27 @@ dependencies get private globals dictionaries too. Rebinding public stdlib names
 cannot change an authority word, forge a reply, or redirect a permission target.
 The `posix`/`nt` aliases share the same wrappers as `os`.
 
-Every path request carries two fields: `path`, the spelling as written, and
+Every path request carries `path`, the spelling as written, and
 `executedPath`, the string the operating system receives (a relative spelling
 joined onto the interpreter's current directory with `os.path.join`, never
-collapsed or resolved in the interpreter). Python sends no canonical form:
-`os.path.realpath` rebuilds a path from the request's own components and
-differs from the native resolution on case and Unicode-form aliases, so the
-host canonicalizes the executed path on its resolver worker, the same way it
-does for every other request. A spelling that is not valid UTF-8 cannot travel
-losslessly and is refused as uncheckable.
+lexically collapsed). `path_identity.py` mirrors the JavaScript kernel's
+version-1 canonicalizer: native resolution of the deepest existing ancestor,
+the same missing-tail and dangling-link rules, Darwin NFC normalization, and
+a per-device case-folding probe. It sends `canonical: {v, path, foldCase}` or
+the same `unresolvable` error code. The bridge validates the field types; the
+permission service retains the shared version check and mount rewrite.
+The current canonical keeps identity matching available when the host resolver
+cannot start, just as for JavaScript cells.
+
+Native primitives are captured before interposition. Node uses libc realpath
+on POSIX; Bun uses descriptor paths on Darwin and Linux. Windows uses libuv's
+CreateFileW/GetFinalPathNameByHandleW sequence. Drive-relative and device-namespace
+Windows paths, unclassified Win32 errors, unsupported Bun platforms, and native
+names that cannot be represented losslessly in UTF-8 omit canonical identity
+rather than sending an approximation. They retain the existing host fallback;
+no operation is refused merely because local canonical identity is unavailable.
+An input spelling that is not valid UTF-8 remains uncheckable under the existing
+wire contract.
 
 File modes map to read, write, or both. Descriptor grants record paths and
 modes; unknown descriptors and opposite-mode operations refuse. Retained file

@@ -300,7 +300,10 @@ describe("Python permission interposition", () => {
 				expect(h.calls).toContainEqual(
 					expect.objectContaining({
 						tool: "read",
-						input: { path: "subject", executedPath: join(realpathSync.native(h.cwd), "subject") },
+						input: expect.objectContaining({
+							path: "subject",
+							executedPath: join(realpathSync.native(h.cwd), "subject"),
+						}),
 					}),
 				);
 		} finally {

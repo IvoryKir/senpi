@@ -45,6 +45,18 @@ export async function permissionCheck(body: unknown): Promise<unknown> {
 	if ("cwd" in call && typeof call.cwd !== "string") throw new Error("Invalid execution cwd");
 	const check = checks.get(body.token);
 	if (!check) throw new Error("Permission authority unavailable");
+	const canonical = "canonical" in input ? input.canonical : undefined;
+	const validCanonical =
+		typeof canonical === "object" &&
+		canonical !== null &&
+		"v" in canonical &&
+		typeof canonical.v === "number" &&
+		"path" in canonical &&
+		typeof canonical.path === "string" &&
+		"foldCase" in canonical &&
+		typeof canonical.foldCase === "boolean"
+			? { v: canonical.v, path: canonical.path, foldCase: canonical.foldCase }
+			: undefined;
 	const operation: CellOperation = {
 		tool: call.tool,
 		input: {
@@ -52,6 +64,10 @@ export async function permissionCheck(body: unknown): Promise<unknown> {
 			...("path" in input && typeof input.path === "string" ? { path: input.path } : {}),
 			...("executedPath" in input && typeof input.executedPath === "string"
 				? { executedPath: input.executedPath }
+				: {}),
+			...(validCanonical === undefined ? {} : { canonical: validCanonical }),
+			...("unresolvable" in input && typeof input.unresolvable === "string"
+				? { unresolvable: input.unresolvable }
 				: {}),
 		},
 		...("cwd" in call && typeof call.cwd === "string" ? { cwd: call.cwd } : {}),

@@ -64,7 +64,7 @@ export class PythonPermissionHost {
 		this.#offset = 8;
 		this.#revoked = false;
 		this.#publishKernel();
-		return { path: this.#path, size, rules: this.#state().rules };
+		return { path: this.#path, size, rules: this.#state().rules, runtime: process.versions.bun ? "bun" : "node" };
 	}
 	#mint(options?: AbortSignal | KernelToolsInvokeOptions): BoundToken {
 		if (this.#revoked || this.#session.dead || this.#disposed) throw new Error("Permission authority unavailable");

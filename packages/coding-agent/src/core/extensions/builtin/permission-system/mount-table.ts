@@ -76,7 +76,9 @@ export function parseMountTable(text: string, platform: string = process.platfor
 		point !== ancestor && point.startsWith(ancestor === "/" ? "/" : `${ancestor}/`);
 	const points =
 		platform === "linux"
-			? listed.filter((point) => !listed.some((other) => other.last > point.last && under(point.entry.on, other.entry.on)))
+			? listed.filter(
+					(point) => !listed.some((other) => other.last > point.last && under(point.entry.on, other.entry.on)),
+				)
 			: listed;
 	const mounts = points.map((point) => point.entry).sort((a, b) => b.on.length - a.on.length);
 	const ambiguous =

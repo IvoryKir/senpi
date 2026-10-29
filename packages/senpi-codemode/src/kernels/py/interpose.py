@@ -33,8 +33,15 @@ __builtins__ = vars(builtins).copy()
 
 pty = importlib.import_module("pty") if os.name == "posix" else None
 
+_identity_path = os.path.join(os.path.dirname(__file__), "path_identity.py")
+_identity_namespace = {"__builtins__": __builtins__, "__file__": _identity_path}
+with open(_identity_path, "rb") as _identity_source:
+    exec(compile(_identity_source.read(), _identity_path, "exec"), _identity_namespace)
+create_identity = _identity_namespace["create_identity"]
 
-def install(check, enforcing, refuse):
+
+def install(check, enforcing, refuse, runtime):
+    identity = create_identity(runtime)
     # Private dependency references are captured before cell code can rebind modules.
     fsdecode, fspath, PathLike, getcwd = os.fsdecode, os.fspath, os.PathLike, os.getcwd
     join_path, dirname, basename, isabs = os.path.join, os.path.dirname, os.path.basename, os.path.isabs
@@ -120,14 +127,14 @@ def install(check, enforcing, refuse):
 
     def path_input(requested):
         # The written spelling travels byte-for-byte and the executed spelling is the string the OS
-        # receives: the cwd-joined form of a relative path, never collapsed or resolved here; the
-        # host canonicalizes it. A spelling that is not valid UTF-8 cannot travel losslessly.
+        # receives: the cwd-joined form of a relative path, never lexically collapsed.
+        # The captured native canonicalizer supplies the same versioned identity as JS.
         try:
             encode_utf8(requested, "utf-8")
         except UnicodeEncodeError:
             refuse("operation cannot be checked")
         executed = requested if isabs(requested) else join_path(getcwd(), requested)
-        return {"path": requested, "executedPath": executed}
+        return {"path": requested, "executedPath": executed, **identity(executed)}
 
     def path_call(tool, path, *, dir_fd=None):
         if isinstance(path, int):
