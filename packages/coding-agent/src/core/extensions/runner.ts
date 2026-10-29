@@ -1680,6 +1680,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.getAskUserSettingsFn();
 			},
+			afterSessionStart: (publish) => {
+				runner.assertActive();
+				runner.sessionStartTurns.admit(publish);
+			},
 			getImageSettings: () => {
 				runner.assertActive();
 				return runner.getImageSettingsFn();

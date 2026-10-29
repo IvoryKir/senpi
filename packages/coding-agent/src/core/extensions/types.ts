@@ -648,6 +648,12 @@ export interface ExtensionContext {
 	getLookAtSettings(): { enabled: boolean; models: string[] | undefined };
 	/** Get resolved ask-user settings from global/project overrides and --no-ask-user. */
 	getAskUserSettings?(): { enabled: boolean; timeoutMinutes: number };
+	/**
+	 * Run `publish` once every `session_start` handler of the current dispatch has returned, in admission order;
+	 * outside a `session_start` dispatch it runs now. Recovered work published here cannot be answered while a
+	 * later startup handler is still preparing the session.
+	 */
+	afterSessionStart?(publish: () => void): void;
 	/** Get resolved image settings from global/project/user overrides. */
 	getImageSettings(): { autoResize: boolean; blockImages: boolean };
 	/** Manage retry fallback through the SettingsManager owned by this session. */
