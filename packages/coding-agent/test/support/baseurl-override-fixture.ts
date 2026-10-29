@@ -24,7 +24,18 @@ export function chatDefinition(id: string, baseUrl?: string): ProviderChatModelC
 }
 
 export function chatModel(provider: string, id: string, baseUrl: string): Model<"openai-completions"> {
-	return { ...chatDefinition(id), api: "openai-completions", provider, baseUrl };
+	return {
+		id,
+		name: id,
+		api: "openai-completions",
+		provider,
+		baseUrl,
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 1024,
+	};
 }
 
 export interface ModelsJsonFile {
