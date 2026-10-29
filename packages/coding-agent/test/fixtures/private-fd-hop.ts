@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, createReadStream, writeSync } from "node:fs";
+import { closeSync, createReadStream, fstatSync, writeSync } from "node:fs";
 import { spawnHostChild } from "../../src/modes/rpc/host-lifecycle-launch.ts";
 import { spawnWithPrivateFds } from "../../src/private-fd-spawn.ts";
 import {
@@ -13,6 +13,8 @@ const mode = process.argv[2];
 
 if (mode === "engine") {
 	try {
+		// Without a handed-over socket, fd 5 may be one of the runtime's own descriptors (Node opens one).
+		if (!fstatSync(5).isSocket()) process.exit(2);
 		const input = createReadStream("", { fd: 5, autoClose: false });
 		input.once("error", () => process.exit(2));
 		input.once("data", (chunk) => {
