@@ -42,7 +42,8 @@ async function launch(qa: Awaited<ReturnType<typeof hostCliSandbox>>, spec: stri
 			stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe"],
 		},
 	);
-	const channel = child.stdio[5];
+	const stdio: readonly unknown[] = child.stdio;
+	const channel = stdio[5];
 	if (!(channel instanceof Socket)) throw new Error("no private channel");
 	sockets.push(channel);
 	let stdout = "";

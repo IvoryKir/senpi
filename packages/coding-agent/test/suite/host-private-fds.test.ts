@@ -17,7 +17,8 @@ async function exchange(mode: string, table = '{"sample-channel":5}') {
 		stdio: ["ignore", "pipe", "pipe", "ignore", "ignore", "pipe"],
 	});
 	const closed = once(child, "close", { signal: AbortSignal.timeout(15_000) });
-	const channel = child.stdio[5];
+	const stdio: readonly unknown[] = child.stdio;
+	const channel = stdio[5];
 	if (!(channel instanceof Socket)) throw new Error("fixture did not receive a duplex");
 	let received = "";
 	let stderr = "";
