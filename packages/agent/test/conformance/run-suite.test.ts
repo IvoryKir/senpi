@@ -105,6 +105,10 @@ describe("the ./conformance export", () => {
 		expect(Object.keys(conformanceExport).sort()).toEqual([
 			"ADAPTER_KINDS",
 			"CONFORMANCE_REGISTRY",
+			"DurableStoreError",
+			"KILL_STORE_CASES",
+			"KILL_STORE_DECLARATIONS",
+			"STORE_CASES",
 			"buildManifest",
 			"computeSuiteHash",
 			"findImplementationGaps",
