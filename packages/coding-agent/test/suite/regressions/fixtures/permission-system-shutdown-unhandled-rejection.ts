@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +88,11 @@ try {
 	});
 
 	await Promise.all([permissionAsked.promise, promptOpened.promise]);
+	// Keep the prompt open until the parent observes it and requests shutdown.
+	const shutdownRequested = once(process.stdin, "data");
+	process.stdout.write("permission prompt open\n");
+	await shutdownRequested;
+	process.stdin.pause();
 	await runner.emit({ type: "session_shutdown", reason: "quit" });
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	releasePrompt.resolve();
