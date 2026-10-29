@@ -14,7 +14,7 @@ const rethrow = (_key: string, error: unknown): never => {
 async function claimedStore(epoch = 1) {
 	const medium = createMemoryStoreMedium();
 	const store = openMemoryStore(medium);
-	await store.claim(0, epoch);
+	for (let next = 1; next <= epoch; next++) await store.claim(next - 1, next);
 	return { medium, store };
 }
 

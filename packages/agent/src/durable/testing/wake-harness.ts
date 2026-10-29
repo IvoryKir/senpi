@@ -112,7 +112,7 @@ export async function createSlot(adapters: WakeCaseAdapters, epoch = 1): Promise
 	const { store: storeAdapter, wake } = adapters;
 	const medium = await storeAdapter.createMedium();
 	const reader = await storeAdapter.open(medium);
-	await reader.claim(0, epoch);
+	for (let next = 1; next <= epoch; next++) await reader.claim(next - 1, next);
 	const base = wake.now();
 	const trace: string[] = [];
 	let live: SessionInstance | undefined;
