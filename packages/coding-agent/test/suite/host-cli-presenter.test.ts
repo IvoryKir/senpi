@@ -146,7 +146,11 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 			const model = await heldModel(qa);
 			const first = owned
 				? await launched(qa, ["ensure", ...enforcement])
-				: { payload: onlyJsonLine(await runHostCli(qa, ["ensure"])), enrolled: undefined };
+				: await (async () => {
+						const result = await runHostCli(qa, ["ensure"]);
+						expect(result.exitCode, result.stderr).toBe(0);
+						return { payload: onlyJsonLine(result), enrolled: undefined };
+					})();
 			const { peer, sessionId } = await busy(qa);
 			let management: Socket | undefined;
 			if (first.enrolled) {
@@ -180,7 +184,9 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 				{ mode: 0o600 },
 			);
 			// An ensure reports THIS CLI's target build while reusing the busy generation, never enrolling it.
-			const target = onlyJsonLine(await runHostCli(qa, ["ensure", "--policy", "never", "--launch-spec", spec]));
+			const targetResult = await runHostCli(qa, ["ensure", "--policy", "never", "--launch-spec", spec]);
+			expect(targetResult.exitCode, targetResult.stderr).toBe(0);
+			const target = onlyJsonLine(targetResult);
 			const pending = await runHostCli(qa, [
 				"handoff",
 				"--when",
@@ -260,7 +266,9 @@ describe.skipIf(process.platform === "win32")("public host presenter deployment 
 	it("reuse does not enroll or upgrade a foreign busy host; default remains off", async () => {
 		const qa = await hostCliSandbox("pr");
 		const model = await heldModel(qa);
-		const first = onlyJsonLine(await runHostCli(qa, ["ensure"]));
+		const firstResult = await runHostCli(qa, ["ensure"]);
+		expect(firstResult.exitCode, firstResult.stderr).toBe(0);
+		const first = onlyJsonLine(firstResult);
 		expect(first.capabilities).not.toContain("mcp_form_presenter_v1");
 		const { peer } = await busy(qa);
 		const received: string[] = [];
