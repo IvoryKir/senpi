@@ -22,37 +22,47 @@ export type TreeSitterFolderOptions = {
 type Loaded = { readonly parser: ParserType; readonly language: TreeSitterLanguage };
 
 const runtimes = new Map<string | undefined, Promise<typeof import("web-tree-sitter") | undefined>>();
-const grammars = new Map<TreeSitterLanguage, Promise<Loaded | undefined>>();
+const grammars = new Map<TreeSitterLanguage, Promise<Loaded | null | undefined>>();
+// Parser.init and Language.load share process-global state, even across cache resets.
+let runtimeLoads: Promise<void> = Promise.resolve();
 
-async function loadRuntime(
-	resolveRuntime: () => Promise<string | undefined>,
-): Promise<typeof import("web-tree-sitter") | undefined> {
-	try {
-		const wasm = await resolveRuntime();
-		const existing = runtimes.get(wasm);
-		if (existing) return existing;
-		const pending = (async () => {
+function loadRuntime(wasm: string | undefined): Promise<typeof import("web-tree-sitter") | undefined> {
+	const existing = runtimes.get(wasm);
+	if (existing) return existing;
+	const pending = runtimeLoads
+		.then(async () => {
 			const module = await import("web-tree-sitter");
 			await module.Parser.init(wasm ? { locateFile: () => wasm } : undefined);
 			return module;
-		})().catch(() => {
-			runtimes.delete(wasm);
+		})
+		.catch(() => {
+			if (runtimes.get(wasm) === pending) runtimes.delete(wasm);
 			return undefined;
 		});
-		runtimes.set(wasm, pending);
+	runtimes.set(wasm, pending);
+	return pending;
+}
+
+async function loadParser(
+	language: TreeSitterLanguage,
+	options: TreeSitterFolderOptions,
+): Promise<Loaded | null | undefined> {
+	try {
+		const grammar = await (options.resolveGrammar ?? resolveGrammarPath)(language);
+		// A missing grammar is a stable negative cache entry, not a failed load.
+		if (!grammar) return null;
+		const wasm = await (options.resolveRuntime ?? resolveRuntimePath)();
+		const runtime = loadRuntime(wasm);
+		const pending = runtimeLoads.then(async () => {
+			const module = await runtime;
+			return module && instantiate(module, grammar, language);
+		});
+		// Reserve the whole init/grammar operation before another path can enqueue an init.
+		runtimeLoads = pending.then(() => undefined);
 		return pending;
 	} catch {
 		return undefined;
 	}
-}
-
-async function loadParser(language: TreeSitterLanguage, options: TreeSitterFolderOptions): Promise<Loaded | undefined> {
-	const resolveGrammar = options.resolveGrammar ?? resolveGrammarPath;
-	const resolveRuntime = options.resolveRuntime ?? resolveRuntimePath;
-	const grammar = await resolveGrammar(language);
-	if (!grammar) return undefined;
-	const module = await loadRuntime(resolveRuntime);
-	return module && instantiate(module, grammar, language);
 }
 
 async function instantiate(
@@ -104,7 +114,7 @@ export async function loadTreeSitterFolder(
 		: (grammars.get(language) ??
 			(() => {
 				const pending = load().then((loaded) => {
-					if (!loaded) grammars.delete(language);
+					if (loaded === undefined && grammars.get(language) === pending) grammars.delete(language);
 					return loaded;
 				});
 				grammars.set(language, pending);
