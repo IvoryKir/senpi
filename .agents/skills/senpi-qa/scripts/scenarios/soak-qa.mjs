@@ -30,7 +30,7 @@ import {
 	spawnCli,
 } from "../lib/common.mjs";
 import { hermeticEnv, writeMockModelsJson } from "../lib/mock-loop-support.mjs";
-import { ownerCommand } from "../lib/owner-receipt.mjs";
+import { soakOwner } from "../lib/owner-receipt.mjs";
 import {
 	buildBands,
 	checkBudgets,
@@ -571,12 +571,16 @@ function report(opts, out, summary, facts) {
 	};
 	const pass = valid && soak.post_wave_levels_ok && soak.slopes_in_band && soak.latency_in_band;
 	const run = { argv: ["node", ".agents/skills/senpi-qa/scripts/scenarios/soak-qa.mjs", ...argv], exit: pass ? 0 : 1 };
+	const owner = soakOwner({
+		writeBaseline: opts.writeBaseline,
+		smoke: opts.smoke,
+		argv: run.argv,
+		childRuntime: childRuntime().label,
+		exit: run.exit,
+	});
 	const receipt = {
-		manifest_id: "QA.soak",
-		// A smoke run (shortened durations) is not the manifest entry, so it carries no PGATE coverage row.
-		commands: opts.smoke
-			? []
-			: [ownerCommand({ manifestId: "QA.soak", kind: "soak", argv: run.argv, childRuntime: childRuntime().label, exit: run.exit })],
+		manifest_id: owner.manifestId,
+		commands: owner.commands,
 		kind: "soak",
 		argv: run.argv,
 		child_runtime: childRuntime().label,
