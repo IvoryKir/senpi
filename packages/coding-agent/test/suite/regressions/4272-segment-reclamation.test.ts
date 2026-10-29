@@ -99,7 +99,7 @@ it("keeps a round's nodes in RAM and the previous base readable when the segment
 		const kept: boolean[] = [];
 		vi.spyOn(store, "flushLeaves").mockImplementation(async (ids, operation) => {
 			const batch = [...ids].filter((id) => leaves.has(id));
-			failing = batch.length > 1;
+			failing = operation === "node_write" && batch.length > 1;
 			await flushLeaves(batch, operation);
 			if (failing) kept.push(...batch.map((id) => leaves.get(id)?.state === "ram"));
 		});
