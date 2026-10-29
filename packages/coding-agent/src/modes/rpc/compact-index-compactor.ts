@@ -61,9 +61,10 @@ export class CompactIndexCompactor {
 		});
 	}
 
-	/** Ready keys only, oldest first: a pass never re-looks-up the still-pending backlog (senpi#4575). */
+	/** Key-ordered ready keys preserve page locality without looking up the pending backlog (senpi#4575). */
 	private *readyEntries(cut: FrozenIndex): Generator<readonly [string, IndexOverride]> {
-		for (const key of this.index.ready) {
+		for (const key of [...this.index.ready].sort()) {
+			if (!this.index.ready.has(key)) continue;
 			const value = this.index.overlays.get(cut.overrides, key);
 			if (value) yield [key, value];
 		}
@@ -89,7 +90,6 @@ export class CompactIndexCompactor {
 			const entries = this.readyEntries(cut);
 			let exhausted = false;
 			while (selected.size < 128 && !exhausted) {
-				// Only committed candidates are located: a pending key's path is never read for nothing.
 				const batch: (readonly [string, IndexOverride])[] = [];
 				while (batch.length < 128) {
 					const next = entries.next();
@@ -97,7 +97,7 @@ export class CompactIndexCompactor {
 						exhausted = true;
 						break;
 					}
-					if (!i.pending.has(next.value[0])) batch.push(next.value);
+					batch.push(next.value);
 				}
 				if (!batch.length) break;
 				const locations = await i.bases.getMany(
@@ -141,8 +141,7 @@ export class CompactIndexCompactor {
 					}
 				}
 			}
-			// Readiness order picks the rows; each pass still writes its folded rows in key order.
-			for (const [key, change] of [...selected].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+			for (const [key, change] of selected) {
 				removed.add(key);
 				if (change.deleted) {
 					rows.delete(key);
