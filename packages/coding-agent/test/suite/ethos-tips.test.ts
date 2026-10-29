@@ -14,6 +14,7 @@ describe("ethos tips", () => {
 
 		for (const id of [
 			"ethos.tools-transparent",
+			"ethos.spend-tokens",
 			"ethos.deep-work",
 			"ethos.monitor-subscribe",
 			"ethos.cache-budget",
