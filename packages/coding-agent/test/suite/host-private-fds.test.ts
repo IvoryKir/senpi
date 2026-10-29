@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type StdioOptions } from "node:child_process";
 import { once } from "node:events";
 import { Socket } from "node:net";
 import { join } from "node:path";
@@ -174,3 +174,103 @@ describe("private host descriptors", () => {
 		expect(result.code).not.toBe(0);
 	});
 });
+
+const probeFixture = join(import.meta.dirname, "../fixtures/private-fd-probe.ts");
+
+/** The runtimes a launcher may start: this test's runtime, and Node when the host has a working one. */
+function runtimes(): [string, string][] {
+	const node = spawnSync("node", ["--version"], { encoding: "utf8" });
+	const found: [string, string][] = [["current", process.execPath]];
+	if (node.status === 0 && node.stdout.startsWith("v") && !process.execPath.endsWith("/node"))
+		found.push(["node", "node"]);
+	return found;
+}
+
+async function probe(runtime: string, args: readonly string[], table: string, stdio: StdioOptions) {
+	const child = spawn(runtime, [...args], {
+		env: { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, SENPI_PRIVATE_FDS: table, PI_OFFLINE: "1" },
+		stdio,
+	});
+	const closed = once(child, "close", { signal: AbortSignal.timeout(20_000) });
+	let stdout = "";
+	let stderr = "";
+	child.stdout?.on("data", (chunk: Buffer) => {
+		stdout += chunk.toString();
+	});
+	child.stderr?.on("data", (chunk: Buffer) => {
+		stderr += chunk.toString();
+	});
+	const slots: readonly unknown[] = child.stdio;
+	for (const slot of slots.slice(3)) if (slot instanceof Socket) slot.end();
+	child.on("message", () => {});
+	const [code] = await closed;
+	return { code, stdout, stderr };
+}
+
+const pipes = (...fds: number[]): StdioOptions => {
+	const stdio: StdioOptions = ["ignore", "pipe", "pipe"];
+	for (let fd = 3; fd <= Math.max(...fds); fd++) stdio.push(fds.includes(fd) ? "pipe" : "ignore");
+	return stdio;
+};
+
+// #4771 review: only a handed-over socket in the range every runtime marks close-on-exec is adopted.
+describe.skipIf(process.platform === "win32").each(runtimes())(
+	"private descriptor adoption under %s",
+	(_label, runtime) => {
+		it("a tool child with ignored stdio holds no private descriptor, even one above the protected range", async () => {
+			const result = await probe(
+				runtime,
+				[probeFixture, "leak-probe"],
+				'{"sample-channel":5,"high":20}',
+				pipes(5, 20),
+			);
+			expect(result.code, result.stderr).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual({ open: "", high: { declared: true, available: false } });
+		});
+
+		it("a named descriptor the launcher never passed is declared but unavailable", async () => {
+			for (const table of ['{"sample-channel":5}', '{"sample-channel":6}', '{"sample-channel":9}']) {
+				const result = await probe(runtime, [probeFixture, "report"], table, ["ignore", "pipe", "pipe"]);
+				expect(JSON.parse(result.stdout), table).toEqual({
+					available: false,
+					declared: true,
+					present: true,
+					unparseable: false,
+				});
+			}
+		});
+
+		it("a descriptor replaced by execve is declared but unavailable", async () => {
+			const hop = `process.execve(process.execPath, [process.execPath, ${JSON.stringify(probeFixture)}, "report"], process.env)`;
+			const result = await probe(runtime, ["-e", hop], '{"sample-channel":5}', pipes(5));
+			expect(JSON.parse(result.stdout), result.stderr).toEqual({
+				available: false,
+				declared: true,
+				present: true,
+				unparseable: false,
+			});
+		});
+
+		it("the runtime's own IPC channel is never adopted", async () => {
+			const result = await probe(runtime, [probeFixture, "report"], '{"sample-channel":5}', [
+				"ignore",
+				"pipe",
+				"pipe",
+				"ignore",
+				"ignore",
+				"ipc",
+			]);
+			expect(JSON.parse(result.stdout), result.stderr).toEqual({
+				available: false,
+				declared: true,
+				present: true,
+				unparseable: false,
+			});
+		});
+
+		it("a second spawn still declares every name, without the descriptor", async () => {
+			const result = await probe(runtime, [probeFixture, "double-spawn"], '{"sample-channel":5}', pipes(5));
+			expect(JSON.parse(result.stdout), result.stderr).toEqual(['{"sample-channel":5}', '{"sample-channel":null}']);
+		});
+	},
+);
