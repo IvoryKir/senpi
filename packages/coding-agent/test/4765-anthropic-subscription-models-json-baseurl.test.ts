@@ -21,7 +21,12 @@ import {
 } from "../src/core/extensions/builtin/anthropic-subscription/sdk-boundary.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { ProviderConfigInput } from "../src/core/provider-composer.ts";
-import { createRuntime, type ModelsJsonFile, modelsJsonFile, requireModel } from "./support/baseurl-override-fixture.ts";
+import {
+	createRuntime,
+	type ModelsJsonFile,
+	modelsJsonFile,
+	requireModel,
+} from "./support/baseurl-override-fixture.ts";
 import {
 	type FetchGuard,
 	installLoopbackFetchGuard,
@@ -41,7 +46,10 @@ function subscriptionRegistration(cwd: string): ProviderConfigInput {
 		},
 		{ get: (target, key) => (key in target ? target[key as keyof typeof target] : () => undefined) },
 	) as unknown as ExtensionAPI;
-	registerAnthropicSubscriptionExtension(pi, { readSettings: () => ({ enabled: true }), readAmbientAuthStatus: async () => true });
+	registerAnthropicSubscriptionExtension(pi, {
+		readSettings: () => ({ enabled: true }),
+		readAmbientAuthStatus: async () => true,
+	});
 	const registration = registrations[0];
 	if (!registration) throw new Error("anthropic-subscription registered no provider");
 	return registration;
