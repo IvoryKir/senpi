@@ -13,7 +13,12 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { InMemoryCodingAgentModelsStore } from "../src/core/models-store.ts";
 import type { ProviderConfigInput } from "../src/core/provider-composer.ts";
-import { createRuntime, type ModelsJsonFile, modelsJsonFile, requireModel } from "./support/baseurl-override-fixture.ts";
+import {
+	createRuntime,
+	type ModelsJsonFile,
+	modelsJsonFile,
+	requireModel,
+} from "./support/baseurl-override-fixture.ts";
 import {
 	type FetchGuard,
 	installLoopbackFetchGuard,
@@ -62,7 +67,9 @@ afterEach(async () => {
 
 const cursorAccount = () => ({
 	...emptyCredential(),
-	accounts: [{ name: "default", access: "access", refresh: "refresh", expires: Date.now() + 60_000, source: "login" as const }],
+	accounts: [
+		{ name: "default", access: "access", refresh: "refresh", expires: Date.now() + 60_000, source: "login" as const },
+	],
 });
 
 const cursorNotices = (warnings: readonly string[]): string[] =>
