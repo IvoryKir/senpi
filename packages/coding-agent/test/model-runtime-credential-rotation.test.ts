@@ -679,7 +679,13 @@ describe("committed pool health publishes an account-change notice", () => {
 	function rotate(source: CredentialSlotRepository, runAttempt: () => AsyncGenerator<AssistantMessageEvent>) {
 		return collect(
 			streamWithCredentialRotation({
-				sources: { providerId: "test", credential: solo, env: () => undefined, repository: source, now: () => LATER },
+				sources: {
+					providerId: "test",
+					credential: solo,
+					env: () => undefined,
+					repository: source,
+					now: () => LATER,
+				},
 				runAttempt,
 			}),
 		);
@@ -703,19 +709,24 @@ describe("committed pool health publishes an account-change notice", () => {
 	test.each([
 		["429 rate limited", "rate_limit"],
 		["401 unauthorized", "auth_error"],
-	] as const)("a %s on the only account publishes once its block is on disk, and the reread shows it", async (failure, reason) => {
-		const watch = watchNotices();
-		try {
-			const seen = await rotate(repository, () => stream(startEvent(), errorEvent(failure)));
-			await watch.arrived();
+	] as const)(
+		"a %s on the only account publishes once its block is on disk, and the reread shows it",
+		async (failure, reason) => {
+			const watch = watchNotices();
+			try {
+				const seen = await rotate(repository, () => stream(startEvent(), errorEvent(failure)));
+				await watch.arrived();
 
-			expect(seen.at(-1)?.type).toBe("error");
-			expect(watch.notices).toEqual([{ provider: "test", atNotice: expect.objectContaining({ blockReason: reason }) }]);
-			expect(await listedSolo()).toMatchObject({ blocked: true, blockedReason: reason });
-		} finally {
-			watch.unsubscribe();
-		}
-	});
+				expect(seen.at(-1)?.type).toBe("error");
+				expect(watch.notices).toEqual([
+					{ provider: "test", atNotice: expect.objectContaining({ blockReason: reason }) },
+				]);
+				expect(await listedSolo()).toMatchObject({ blocked: true, blockedReason: reason });
+			} finally {
+				watch.unsubscribe();
+			}
+		},
+	);
 
 	test("a success that lifts a live block publishes once the release is on disk; a healthy success publishes nothing", async () => {
 		await seedLiveBlock();
