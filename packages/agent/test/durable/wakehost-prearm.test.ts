@@ -27,7 +27,7 @@ const IMPLEMENTATIONS = new Map<string, CaseImplementation<WakeCaseAdapters>>([
 ]);
 const WAKE_REGISTRY = CONFORMANCE_REGISTRY.filter((entry) => /^(KILL-)?WAKE-|^MULTI-HOST-/.test(entry.id));
 const WAKE_IDS = ["WAKE-01", "WAKE-02", "WAKE-03", "WAKE-RET-01"];
-const KILL_IDS = ["01", "02", "03", "04", "05", "06", "07"].map((n) => `KILL-WAKE-${n}`);
+const KILL_IDS = ["01", "02", "03", "04", "05", "06", "07", "08"].map((n) => `KILL-WAKE-${n}`);
 const T0 = 1_800_000_000_000;
 const rethrow = (_key: string, error: unknown): never => {
 	throw error;
@@ -106,6 +106,7 @@ describe("the WAKE, KILL-WAKE and MULTI-HOST registration", () => {
 			"KILL-WAKE-05 fire everywhere",
 			"KILL-WAKE-06 fire everywhere",
 			"KILL-WAKE-07 fire everywhere",
+			"KILL-WAKE-08 admit everywhere",
 		]);
 	});
 });
@@ -146,6 +147,7 @@ describe("the cases fail a host that breaks the contract", () => {
 				"KILL-WAKE-05",
 				"KILL-WAKE-06",
 				"KILL-WAKE-07",
+				"KILL-WAKE-08",
 			],
 		},
 	];

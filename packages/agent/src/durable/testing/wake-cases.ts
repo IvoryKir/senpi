@@ -17,8 +17,8 @@ const preArm: WakeCase = async (adapters) => {
 	});
 	expectEqual(
 		slot.trace,
-		[`set:+${HEARTBEAT_MS}`, `work alarm=+${HEARTBEAT_MS}`],
-		"admit arms durably before work starts",
+		[`set:+${HEARTBEAT_MS}`, `work alarm=+${HEARTBEAT_MS}`, "clear"],
+		"admit arms durably before work starts, and arms from the idle loop's wake when the work ends",
 	);
 
 	const failing = session.host.admit(async () => {
@@ -56,7 +56,11 @@ const update: WakeCase = async (adapters) => {
 
 	slot.trace.length = 0;
 	await schedule("a", TEN_MINUTES);
-	expectEqual(slot.trace, [`set:+${HEARTBEAT_MS}`, `set:+${TEN_MINUTES}`], "after the commit, the alarm is the wake");
+	expectEqual(
+		slot.trace,
+		[`set:+${HEARTBEAT_MS}`, `set:+${HEARTBEAT_MS}`, `set:+${TEN_MINUTES}`],
+		"the commit's update keeps the heartbeat while the admission is in flight; after it, the alarm is the wake",
+	);
 	await schedule("b", 300_000);
 	expectEqual(await slot.alarmAt(), 300_000, "an earlier wake lowers the alarm");
 	await schedule("c", 900_000);

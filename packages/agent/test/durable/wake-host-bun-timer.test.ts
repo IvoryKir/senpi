@@ -11,10 +11,10 @@ const rethrow = (_key: string, error: unknown): never => {
 	throw error;
 };
 
-async function claimedStore(epoch = 1) {
+async function claimedStore() {
 	const medium = createMemoryStoreMedium();
 	const store = openMemoryStore(medium);
-	for (let next = 1; next <= epoch; next++) await store.claim(next - 1, next);
+	await store.claim(0, 1);
 	return { medium, store };
 }
 

@@ -4,7 +4,9 @@
  * a sleep, so the host keeps a durable alarm and follows one ordering, shared by every host here:
  *
  * - admit: arm a recovery heartbeat durably BEFORE work that can commit starts. A commit whose host dies before the
- *   alarm update would otherwise strand its wake; an early alarm is harmless, a missing one loses work.
+ *   alarm update would otherwise strand its wake; an early alarm is harmless, a missing one loses work. The host counts
+ *   admissions in flight and arms as active while any is, so no concurrent update or fire can clear that heartbeat
+ *   before the admitted work commits; when the last admitted work succeeds, it arms from the loop's wake.
  * - update: after each commit, arm min(heartbeat if active, the loop's earliest wake); clear only when idle.
  * - fire: re-arm the heartbeat before resuming, so a resume that dies is retried; then arm from the loop's wake.
  * - start (a new instance): arm a fallback before anything can throw, then resume what a lost instance left.
@@ -78,8 +80,10 @@ export function createWakeHost(options: WakeHostOptions): WakeHost {
 	const heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
 	const point = (op: WakePoint["op"]): void => options.onWakePoint?.({ op, at: "armed" });
 
+	let admitted = 0;
+
 	const arm = async (state: Wake): Promise<void> => {
-		const at = recoveryAlarmAt(state, now(), heartbeatMs);
+		const at = recoveryAlarmAt(admitted > 0 ? { ...state, active: true } : state, now(), heartbeatMs);
 		if (at === undefined) await alarm.clear();
 		else await alarm.set(at);
 	};
@@ -93,10 +97,18 @@ export function createWakeHost(options: WakeHostOptions): WakeHost {
 			await resume();
 			await arm(wake());
 		},
-		async admit(work) {
-			await arm({ ...wake(), active: true });
-			point("admit");
-			return work();
+		async admit<T>(work: () => Promise<T>): Promise<T> {
+			admitted++;
+			let result: T;
+			try {
+				await arm({ ...wake(), active: true });
+				point("admit");
+				result = await work();
+			} finally {
+				admitted--;
+			}
+			if (admitted === 0) await arm(wake());
+			return result;
 		},
 		update: (state) => arm(state),
 		async fire() {

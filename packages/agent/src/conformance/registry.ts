@@ -160,4 +160,9 @@ export const CONFORMANCE_REGISTRY: readonly RegisteredCase[] = [
 		KILL_WAKE_IMPL,
 		"everywhere: eviction during the alarm clear after the work; the next fire is harmless and clears it",
 	),
+	wakeCase(
+		"KILL-WAKE-08",
+		KILL_WAKE_IMPL,
+		"everywhere: a concurrent fire's updates cannot clear an uncommitted admission's heartbeat; a kill after its commit recovers the wake, run once",
+	),
 ];

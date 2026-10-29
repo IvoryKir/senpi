@@ -8,6 +8,7 @@ import {
 	cutWake,
 	expectWakeCut,
 	HEARTBEAT_MS,
+	type SessionInstance,
 	type SessionSlot,
 	type WakeCaseAdapters,
 } from "./wake-harness.ts";
@@ -71,6 +72,38 @@ async function recoversAfterKilledFire(adapters: WakeCaseAdapters, slot: Session
 	expectEqual(slot.fires(), 2, "no fire beyond the recovery");
 }
 
+/**
+ * An admission B runs while a fire resumes other work on the same instance. The fire's updates see an idle loop (B's
+ * task is not committed yet), so they must not clear the heartbeat B armed; B is killed after its commit is durable,
+ * before its own update. The session runs at epoch 2.
+ */
+async function admissionDuringFire(adapters: WakeCaseAdapters): Promise<SessionSlot> {
+	const fireDone = Promise.withResolvers<void>();
+	let admission: Promise<void> | undefined;
+	let session: SessionInstance | undefined;
+	const slot = await createSlot(adapters, 2);
+	const first = await slot.instance({
+		store: cutStore("commit", "durable", 3),
+		onWakePoint: (point) => {
+			if (point.op !== "fire" || session === undefined || admission !== undefined) return;
+			const { host, loop } = session;
+			admission = host.admit(async () => {
+				await fireDone.promise;
+				await loop.schedule("b", slot.base + LATER);
+			});
+		},
+	});
+	session = first;
+	await first.host.admit(() => first.loop.schedule("a", slot.base + DUE));
+	await adapters.wake.advanceTo(slot.base + DUE);
+	expectEqual(await slot.ran(), ["a"], "the fire resumed its due task");
+	if (admission === undefined) throw new Error("the admission did not start during the fire");
+	fireDone.resolve();
+	await expectWakeCut(admission, "the admission killed after its commit");
+	slot.kill();
+	return slot;
+}
+
 const KILL_CASES: readonly KillWakeCase[] = [
 	killCase("KILL-WAKE-01", "admit", "alarm write before durable", async (adapters) => {
 		const slot = await killedAdmission(adapters, { alarm: cutAlarm("set", "before", 2) });
@@ -111,6 +144,20 @@ const KILL_CASES: readonly KillWakeCase[] = [
 		expectEqual(await slot.ran(), ["a"], "the work is durable");
 		await recoversAfterKilledFire(adapters, slot);
 	}),
+	killCase(
+		"KILL-WAKE-08",
+		"admit",
+		"a concurrent fire's updates while the admission is uncommitted, then a kill after its commit",
+		async (adapters) => {
+			const slot = await admissionDuringFire(adapters);
+			expectEqual(await slot.alarmAt(), DUE + HEARTBEAT_MS, "the admission's heartbeat outlived the fire's updates");
+			await adapters.wake.advanceTo(slot.base + DUE + HEARTBEAT_MS);
+			expectEqual(await slot.alarmAt(), LATER, "the heartbeat's instance armed the committed wake");
+			await adapters.wake.advanceTo(slot.base + LATER);
+			expectEqual(await slot.ran(), ["a", "b"], "each task ran exactly once");
+			expectEqual(await slot.alarmAt(), undefined, "and the alarm is cleared");
+		},
+	),
 ];
 
 export const KILL_WAKE_DECLARATIONS: readonly KillWakeDeclaration[] = KILL_CASES.map(
