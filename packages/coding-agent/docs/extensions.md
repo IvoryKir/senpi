@@ -1416,7 +1416,7 @@ Cache prewarm consumes the first activity per session generation. It is opt-in v
 
 ### ctx.afterSessionStart()
 
-Optional hook for work a `session_start` handler must not publish until startup is prepared. `ctx.afterSessionStart(publish)` runs `publish` synchronously once every `session_start` handler of the current dispatch has returned, in the order calls were made (the same point where turns requested during `session_start` start). Outside a `session_start` dispatch it runs `publish` immediately. It never waits for anything `publish` starts: use it to publish a question, not to await its answer. The built-in ask-user extension uses it for questions recovered on resume or reload. Hand-built contexts and older hosts may omit it; call `publish` directly then.
+Optional hook for work a `session_start` handler must not publish until startup is prepared. `ctx.afterSessionStart(publish)` runs `publish` synchronously once every `session_start` handler of the current dispatch has returned, in the order calls were made (the same point where turns requested during `session_start` start). Outside a `session_start` dispatch it runs `publish` immediately. If the session is switched, replaced, reloaded or disposed before the dispatch ends, `publish` does not run, because its `ctx` is stale. `publish` may return a promise; a rejection is reported as an extension error instead of becoming an unhandled rejection. It never waits for anything `publish` starts: use it to publish a question, not to await its answer. The built-in ask-user extension uses it for questions recovered on resume or reload. Hand-built contexts and older hosts may omit it; call `publish` directly then.
 
 ### ctx.modelRegistry / ctx.model / ctx.thinkingLevel / ctx.scopedModels
 

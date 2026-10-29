@@ -64,9 +64,10 @@ export default function askUserExtension(pi: ExtensionAPI): void {
 		for (const entry of getPendingQuestions(sessionId)) entry.reattach();
 		// senpi#4827: publish a recovered question only after every startup handler returned, so its answer
 		// cannot be admitted while later handlers still prepare the session. Never awaits the answer.
-		const recover = () => void resumeDanglingQuestion(pi, event, ctx);
+		// The runner skips it once this session is retired and reports its rejection.
+		const recover = () => resumeDanglingQuestion(pi, event, ctx);
 		if (ctx.afterSessionStart) ctx.afterSessionStart(recover);
-		else recover();
+		else void recover();
 	});
 	pi.on("model_select", async (event, ctx) => {
 		sync(ctx, event.model);

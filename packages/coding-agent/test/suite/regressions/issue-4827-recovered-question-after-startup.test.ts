@@ -2,7 +2,12 @@ import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { afterEach, expect, it } from "vitest";
 import askUserExtension from "../../../src/core/extensions/builtin/ask-user/index.ts";
 import { getPendingQuestions } from "../../../src/core/extensions/builtin/ask-user/registry.ts";
-import type { ExtensionAPI, ExtensionContext, QuestionResponse } from "../../../src/core/extensions/types.ts";
+import {
+	type ExtensionAPI,
+	type ExtensionContext,
+	type QuestionResponse,
+	RUNTIME_EXTENSION_PATH,
+} from "../../../src/core/extensions/types.ts";
 import { createTestExtensionsResult, createTestResourceLoader } from "../../utilities.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
@@ -100,6 +105,7 @@ async function startWithLaterStartupHandler() {
 	harness.session.sessionManager.appendMessage({ role: "user", content: "pick a library", timestamp: 1 });
 	harness.session.sessionManager.appendMessage(danglingQuestion());
 	return {
+		harness,
 		runner,
 		order,
 		delivered,
@@ -133,6 +139,38 @@ it("publishes a recovered question only after a suspended later startup handler 
 	started.answer.resolve(ANSWER);
 	await entry.completion;
 	expect(started.delivered).toHaveLength(1);
+});
+
+it("drops the deferred publish without an unhandled rejection when the session is replaced mid-startup", async () => {
+	const started = await startWithLaterStartupHandler();
+	const hold = started.holdLaterHandler();
+	const unhandled: unknown[] = [];
+	const onUnhandled = (reason: unknown) => unhandled.push(reason);
+	process.on("unhandledRejection", onUnhandled);
+	// The later test handler itself touches its retired ctx after release; only the deferred publish is under test.
+	const publishErrors: string[] = [];
+	started.runner.onError((error) => {
+		if (error.extensionPath === RUNTIME_EXTENSION_PATH) publishErrors.push(error.error);
+	});
+	const sessionId = started.harness.session.sessionManager.getSessionId();
+	try {
+		const resumed = started.runner.emit({ type: "session_start", reason: "resume" });
+		await hold.entered.promise;
+		// A switch or new session disposes the old session (and invalidates its runner) while its
+		// session_start dispatch is still suspended in a later handler.
+		started.harness.session.dispose();
+		hold.release.resolve();
+		await resumed;
+		// One macrotask turn: Node reports unhandled rejections after the microtask queue drains.
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+
+	expect(unhandled).toEqual([]);
+	expect(publishErrors).toEqual([]);
+	expect(started.order).not.toContain(`question:${CALL_ID}`);
+	expect(getPendingQuestions(sessionId)).toEqual([]);
 });
 
 it("keeps the same startup-then-question order when no startup handler suspends", async () => {
