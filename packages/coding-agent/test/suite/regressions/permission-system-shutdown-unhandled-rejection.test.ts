@@ -53,9 +53,11 @@ describe("permission system shutdown unhandled rejection", () => {
 
 	it("survives session_shutdown while the permission prompt is open in a strict child process", async () => {
 		const fixturePath = fileURLToPath(
-			new URL("./fixtures/permission-system-shutdown-unhandled-rejection.ts", import.meta.url),
+			new URL("./fixtures/permission-system-shutdown-unhandled-rejection.mjs", import.meta.url),
 		);
-		const child = spawn(process.execPath, ["--import", "tsx", fixturePath], {
+		// No tsx startup or source graph: this fixture drives the already-built runtime.
+		// Disabling stripping makes an accidental source .ts import fail instead of restoring that cost.
+		const child = spawn(process.execPath, ["--no-experimental-strip-types", fixturePath], {
 			env: {
 				...process.env,
 				NODE_OPTIONS: [process.env.NODE_OPTIONS, "--unhandled-rejections=strict"].filter(Boolean).join(" "),
@@ -70,8 +72,12 @@ describe("permission system shutdown unhandled rejection", () => {
 			await closed;
 		});
 		let spawnError: Error | undefined;
+		let stdinError: Error | undefined;
 		child.once("error", (error) => {
 			spawnError = error;
+		});
+		child.stdin.once("error", (error) => {
+			stdinError = error;
 		});
 		let stdout = "";
 		let stderr = "";
@@ -88,8 +94,14 @@ describe("permission system shutdown unhandled rejection", () => {
 		});
 
 		const result = await closed;
-		const diagnostics = JSON.stringify({ ...result, spawnError: spawnError?.message, stderr });
+		const diagnostics = JSON.stringify({
+			...result,
+			spawnError: spawnError?.message,
+			stdinError: stdinError?.message,
+			stderr,
+		});
 		expect(spawnError, diagnostics).toBeUndefined();
+		expect(stdinError, diagnostics).toBeUndefined();
 		expect(result.exitCode, diagnostics).toBe(0);
 		expect(result.signalCode, diagnostics).toBeNull();
 		expect(promptOpened, diagnostics).toBe(true);
