@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { type Credential, normalizeProviderId } from "@earendil-works/pi-ai";
 import { slotsOfOwnKind } from "@earendil-works/pi-ai/auth/pool/kinds";
-import { applyAccountOrder, withoutOrderedAccount } from "@earendil-works/pi-ai/auth/pool/select";
+import { applyAccountOrder, isSlotBlocked, withoutOrderedAccount } from "@earendil-works/pi-ai/auth/pool/select";
 import {
 	accountDisplayName,
 	listSlots,
@@ -16,6 +16,7 @@ import { type ModelBlocks, pruneModelBlocks } from "./credential-pool/model-scop
 import { CredentialSlotRepository, type CredentialSlotState, slotHealth } from "./credential-pool/state-store.ts";
 import { emitProviderAccountsChanged } from "./extensions/builtin/anthropic-subscription/account-events.ts";
 import { SENTINEL_OAUTH_FIELDS } from "./extensions/builtin/anthropic-subscription/accounts.ts";
+import { isAccountBlocked } from "./extensions/builtin/anthropic-subscription/affinity.ts";
 
 export type CredentialAccountSource = "login" | "import" | "env";
 
@@ -110,13 +111,36 @@ function sidecarBlock(sidecar: CredentialSlotState | undefined, now: number): Sl
 	return liveBlock(sidecar?.blockReason, sidecar?.blockedUntil, now);
 }
 
-function slotBlocked(slot: object, sidecar: CredentialSlotState | undefined, now: number): SlotBlock {
+/**
+ * A block a provider lane stored on its own slot holds exactly while that lane's selector skips the slot, so a
+ * listing never calls a skipped account available (senpi#4365 follow-up). The Claude lane re-probes an auth block
+ * whose deadline passed; the pool engine (and the Cursor lane) keep one until re-login, with no deadline to report.
+ */
+function storedSlotBlock(provider: string, slot: object, now: number): SlotBlock {
+	const blockReason = stringField(slot, "blockReason");
+	const blockedUntil = numberField(slot, "blockedUntil");
+	const blockedReason = accountBlockedReason(blockReason);
+	if (blockedReason === "disabled") return { blocked: true, blockedReason };
+	const skipped =
+		normalizeProviderId(provider) === "anthropic-subscription"
+			? isAccountBlocked({ blockedUntil }, now)
+			: isSlotBlocked({ blockReason, blockedUntil }, now);
+	if (!skipped) return UNBLOCKED;
+	return {
+		blocked: true,
+		...(blockedReason === undefined ? {} : { blockedReason }),
+		...(blockedUntil === undefined || blockedUntil <= now ? {} : { blockedUntil }),
+	};
+}
+
+function slotBlocked(provider: string, slot: object, sidecar: CredentialSlotState | undefined, now: number): SlotBlock {
 	const fromSidecar = sidecarBlock(sidecar, now);
-	const fromSlot = liveBlock(stringField(slot, "blockReason"), numberField(slot, "blockedUntil"), now);
+	const fromSlot = storedSlotBlock(provider, slot, now);
 	// A disabled account outranks a timed block from the other source: it never lifts on its own.
 	if (fromSlot.blockedReason === "disabled") return fromSlot;
 	if (fromSidecar.blockedReason === "disabled" || !fromSlot.blocked) return fromSidecar;
-	if (!fromSidecar.blocked) return fromSlot;
+	// So does a stored block with no deadline: only a re-login lifts it, so no expiry may be borrowed for it.
+	if (!fromSidecar.blocked || fromSlot.blockedUntil === undefined) return fromSlot;
 	// Both sources hold a timed block: the account is usable only once the later one lifts, and a
 	// rejected key stays the reason so a client still skips it.
 	const later = (fromSlot.blockedUntil ?? 0) > (fromSidecar.blockedUntil ?? 0) ? fromSlot : fromSidecar;
@@ -215,7 +239,7 @@ async function summarizeInStoredOrder(
 				name: slot.name,
 				...(displayName === undefined ? {} : { displayName }),
 				source: slot.source ?? "login",
-				...slotBlocked(slot, applicable, now),
+				...slotBlocked(provider, slot, applicable, now),
 				pinned: pinned === slot.name,
 				...blockedModels(now, applicable?.modelBlocks, storedModelBlocks(slot)),
 				...(usable.has(slot.name) ? {} : { unused: true as const }),

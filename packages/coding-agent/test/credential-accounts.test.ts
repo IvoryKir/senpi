@@ -4,15 +4,100 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import {
+	type CredentialAccountSummary,
 	getCredentialAccounts,
 	pinCredentialAccount,
 	removeCredentialAccount,
 } from "../src/core/credential-accounts.ts";
+import { listRotationSlots } from "../src/core/credential-pool/rotation-slots.ts";
 import { CredentialSlotRepository } from "../src/core/credential-pool/state-store.ts";
 import { getProviderAccounts } from "../src/core/extensions/builtin/anthropic-subscription/account-management.ts";
 import { emptyCredential } from "../src/core/extensions/builtin/anthropic-subscription/accounts.ts";
+import {
+	AllAccountsBlockedError,
+	selectAccount as selectClaudeAccount,
+} from "../src/core/extensions/builtin/anthropic-subscription/affinity.ts";
+import { emptyCredential as emptyCursorCredential } from "../src/core/extensions/builtin/cursor-cli-oauth/accounts.ts";
+import {
+	AllCursorAccountsBlockedError,
+	selectAccount as selectCursorAccount,
+} from "../src/core/extensions/builtin/cursor-cli-oauth/affinity.ts";
 
 const NOW_FAR_FUTURE = 4_102_444_800_000;
+const ELAPSED = 1;
+
+type StoredBlock = { readonly blockReason?: "auth_error" | "rate_limit"; readonly blockedUntil?: number };
+type ListedBlock = Pick<CredentialAccountSummary, "blocked" | "blockedReason" | "blockedUntil">;
+
+const storedSlot = (block: StoredBlock) => ({
+	name: "default",
+	access: "fake-a",
+	refresh: "fake-r",
+	expires: NOW_FAR_FUTURE,
+	source: "login" as const,
+	...block,
+});
+
+/** Whether the provider lane's own selector hands this stored account to a request right now. */
+function laneSelectorAccepts(provider: string, block: StoredBlock): boolean {
+	try {
+		if (provider === "anthropic-subscription") selectClaudeAccount([storedSlot(block)]);
+		else selectCursorAccount([storedSlot(block)]);
+		return true;
+	} catch (error) {
+		if (error instanceof AllAccountsBlockedError || error instanceof AllCursorAccountsBlockedError) return false;
+		throw error;
+	}
+}
+
+// Every block state a provider lane stores on its own slot, with the listing it must produce. The Cursor lane keeps an
+// auth block until re-login; the Claude lane re-probes one whose deadline passed or that predates deadlines (senpi#3264).
+const STORED_BLOCK_CASES: readonly { provider: string; label: string; stored: StoredBlock; listed: ListedBlock }[] = [
+	{ provider: "cursor-cli-oauth", label: "healthy", stored: {}, listed: { blocked: false } },
+	{
+		provider: "cursor-cli-oauth",
+		label: "auth block with no deadline",
+		stored: { blockReason: "auth_error" },
+		listed: { blocked: true, blockedReason: "auth_error" },
+	},
+	{
+		provider: "cursor-cli-oauth",
+		label: "auth block whose deadline passed",
+		stored: { blockReason: "auth_error", blockedUntil: ELAPSED },
+		listed: { blocked: true, blockedReason: "auth_error" },
+	},
+	{
+		provider: "cursor-cli-oauth",
+		label: "live rate limit",
+		stored: { blockReason: "rate_limit", blockedUntil: NOW_FAR_FUTURE },
+		listed: { blocked: true, blockedReason: "rate_limit", blockedUntil: NOW_FAR_FUTURE },
+	},
+	{
+		provider: "cursor-cli-oauth",
+		label: "elapsed rate limit",
+		stored: { blockReason: "rate_limit", blockedUntil: ELAPSED },
+		listed: { blocked: false },
+	},
+	{ provider: "anthropic-subscription", label: "healthy", stored: {}, listed: { blocked: false } },
+	{
+		provider: "anthropic-subscription",
+		label: "auth block with no deadline",
+		stored: { blockReason: "auth_error" },
+		listed: { blocked: false },
+	},
+	{
+		provider: "anthropic-subscription",
+		label: "auth block whose deadline passed",
+		stored: { blockReason: "auth_error", blockedUntil: ELAPSED },
+		listed: { blocked: false },
+	},
+	{
+		provider: "anthropic-subscription",
+		label: "live auth block",
+		stored: { blockReason: "auth_error", blockedUntil: NOW_FAR_FUTURE },
+		listed: { blocked: true, blockedReason: "auth_error", blockedUntil: NOW_FAR_FUTURE },
+	},
+];
 
 let dir: string;
 let storage: AuthStorage;
@@ -195,6 +280,47 @@ describe("provider-neutral credential accounts", () => {
 
 		expect(accounts[0]).toMatchObject({ blocked: true, blockedReason: "auth_error", blockedUntil: NOW_FAR_FUTURE });
 		expect(Object.keys(accounts[1] ?? {}).sort()).toEqual(["blocked", "name", "pinned", "source"]);
+	});
+
+	// The listing must never call an account available that selection skips, or a client routes to it (senpi#4365 follow-up).
+	test.each(STORED_BLOCK_CASES)(
+		"$provider $label: the listing agrees with the lane's selector",
+		async ({ provider, stored, listed }) => {
+			const base = provider === "anthropic-subscription" ? emptyCredential() : emptyCursorCredential();
+			await storage.modify(provider, async () => ({ ...base, accounts: [storedSlot(stored)] }));
+
+			const [account] = await getCredentialAccounts(storage, provider, {}, repository);
+
+			const {
+				name: _name,
+				source: _source,
+				pinned: _pinned,
+				...block
+			} = account ?? { name: "", source: "", pinned: false };
+			expect(block).toEqual(listed);
+			expect(account?.blocked).toBe(!laneSelectorAccepts(provider, stored));
+			if (provider === "anthropic-subscription")
+				expect(getProviderAccounts(storage, provider, {})).toEqual([account]);
+		},
+	);
+
+	test("a re-login clears a pool block in the listing exactly as selection drops it", async () => {
+		await seedPool("openai");
+		const oldRevision = await repository.storedCredentialRevision("openai", "work", { key: "key-work-old" });
+		await repository.mutateSlotState("openai", "stored", "work", () => ({
+			blockedUntil: NOW_FAR_FUTURE,
+			blockReason: "auth_error",
+			credentialRevision: oldRevision,
+		}));
+
+		const accounts = await getCredentialAccounts(storage, "openai", {}, repository);
+		const slots = await listRotationSlots(
+			{ providerId: "openai", credential: storage.get("openai"), env: () => undefined, repository },
+			{ acquireLeases: false },
+		);
+
+		expect(accounts.find((account) => account.name === "work")).toMatchObject({ blocked: false });
+		expect(slots.find((slot) => slot.name === "work")).not.toHaveProperty("blockReason");
 	});
 
 	test("pinning marks exactly one account and unpinning clears it", async () => {
