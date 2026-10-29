@@ -465,5 +465,24 @@ describe(
 			expect(runtime.session.settingsManager.isProjectTrusted()).toBe(true);
 			expect(loads()).toBe(1);
 		});
+
+		it("a trust store that cannot be read fails one sync, and the next Full access change still applies", async () => {
+			const runtime = runtimeOf(await open("full-access"));
+			expect(loads()).toBe(1);
+			const trustPath = join(agentDir, "trust.json");
+			await writeFile(trustPath, "{ not json");
+
+			runtime.setPermissionPreset("ask");
+			await runtime.projectTrustChange;
+			expect(runtime.session.settingsManager.isProjectTrusted()).toBe(true);
+			expect(runtime.diagnostics).toContainEqual(
+				expect.objectContaining({ type: "error", message: expect.stringContaining("Reading the project trust") }),
+			);
+
+			await writeFile(trustPath, "{}");
+			runtime.setPermissionPreset("ask");
+			await runtime.projectTrustChange;
+			expect(runtime.session.settingsManager.isProjectTrusted()).toBe(false);
+		});
 	},
 );

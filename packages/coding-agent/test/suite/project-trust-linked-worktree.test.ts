@@ -5,7 +5,7 @@
  * "Trust project folder?" before its first turn. The fixtures write exactly the files
  * `git worktree add` writes (no git is spawned, as the trust store spawns none either).
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -179,6 +179,25 @@ describe("a linked git worktree inherits its main checkout's project trust", () 
 			expect(spy.prompts).toHaveLength(1);
 		},
 	);
+
+	it("a worktree created with relative paths inherits, also when its .git file reaches the admin dir through a symlink", async () => {
+		const realProjects = join(scratch, "deep", "nested", "projects");
+		const main = join(realProjects, "repo");
+		const admin = join(main, ".git", "worktrees", "wt");
+		const worktree = join(scratch, "workspaces", "repo", "wt");
+		mkdirSync(admin, { recursive: true });
+		mkdirSync(worktree, { recursive: true });
+		symlinkSync(realProjects, join(scratch, "projects"));
+		writeFileSync(join(main, ".git", "HEAD"), "ref: refs/heads/main\n");
+		// `git worktree add --relative-paths` writes every pointer relative to the real directories.
+		writeFileSync(join(admin, "commondir"), "../..\n");
+		writeFileSync(join(admin, "gitdir"), `${relative(admin, join(worktree, ".git"))}\n`);
+		const linkedAdmin = join(scratch, "projects", "repo", ".git", "worktrees", "wt");
+		writeFileSync(join(worktree, ".git"), `gitdir: ${relative(worktree, linkedAdmin)}\n`);
+		store.set(main, true);
+
+		expect(await getSavedProjectTrust(store, worktree)).toBe(true);
+	});
 
 	it("starting in a worktree of a trusted repository does not ask, and an untrusted one still asks", async () => {
 		const { main, worktree } = linkedWorktree();
