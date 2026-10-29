@@ -6,7 +6,7 @@ import { HostAdmission } from "./host-admission.ts";
 import { classifyChildExit, noteChildExit } from "./host-child-exit.ts";
 import { hostCrashCleanupPaths } from "./host-cleanup-paths.ts";
 import { isCliModuleEntry } from "./host-cli-entry.ts";
-import { createHostDaemonPaths, generationPaths } from "./host-daemon-paths.ts";
+import { createGenerationDirectory, createHostDaemonPaths, generationPaths } from "./host-daemon-paths.ts";
 import { HOST_INSTANCE_ID_ENV } from "./host-identity-env.ts";
 import { SupervisorActivity, SupervisorOwner } from "./host-lifecycle-activity.ts";
 import { drainOnPublicSocketLoss, SupervisorDrain, watchWin32ChildIdentity } from "./host-lifecycle-drain.ts";
@@ -77,6 +77,8 @@ export async function runHostSupervisor(launch: SupervisorLaunch): Promise<void>
 	const told = process.env[HOST_INSTANCE_ID_ENV];
 	const instanceId = told !== undefined && told.trim() !== "" ? told : randomUUID();
 	const generation = generationPaths(paths, instanceId);
+	// A direct launch has no ensure to provision its records before the child can write them.
+	await createGenerationDirectory(generation);
 	const policy = resolveHostPolicy(await readSettingsFile(paths.settingsFile), process.env);
 	const publicSocket = launch.socket;
 	const publicEndpoint =
@@ -225,7 +227,7 @@ export async function runHostSupervisor(launch: SupervisorLaunch): Promise<void>
 	// default kill, which would leave that directory behind.
 	registerSupervisorSignals(shutdown, () => drain.drain());
 	try {
-		// Direct supervisor launches predate owner records and may have no generation directory.
+		// Direct supervisor launches predate owner records and may have no generation settings.
 		// Ensured starts create it before spawning and always carry an explicit owner/null record.
 		if (launch.ownerFd !== undefined || (await readSettingsFile(generation.settingsFile))) {
 			await owner.start(launch.ownerFd);
