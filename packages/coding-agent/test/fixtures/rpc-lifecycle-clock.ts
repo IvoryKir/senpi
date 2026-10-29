@@ -8,10 +8,13 @@ import { type HostActivity, IdleExitDecider, runHostSupervisor } from "../../src
 let now = 0;
 let tick: (() => void) | undefined;
 let shuttingDown = false;
+let currentActivity: HostActivity | undefined;
+let currentDecision: string | undefined;
+const idleExitMs = Number(process.env.SENPI_RPC_HOST_IDLE_EXIT_MS ?? 800);
 mock.method(Date, "now", () => now);
 const setInterval = globalThis.setInterval;
 mock.method(globalThis, "setInterval", (callback: () => void, interval: number) => {
-	if (interval === 200) {
+	if (interval === Math.max(20, Math.min(1_000, idleExitMs / 4))) {
 		tick = callback;
 		return setInterval(() => {}, 2_147_483_647);
 	}
@@ -20,6 +23,11 @@ mock.method(globalThis, "setInterval", (callback: () => void, interval: number) 
 const update = IdleExitDecider.prototype.update;
 mock.method(IdleExitDecider.prototype, "update", function (this: IdleExitDecider, activity: HostActivity) {
 	const decision = update.call(this, activity);
+	if (this.idleExitMs === idleExitMs) {
+		currentActivity = activity;
+		currentDecision = decision;
+		process.send?.({ type: "activity", activity, decision, now });
+	}
 	if (decision === "exit") shuttingDown = true;
 	return decision;
 });
@@ -44,7 +52,7 @@ process.on("message", (message: unknown) => {
 		if (!tick) throw new Error("supervisor timer not registered");
 		tick();
 	}
-	process.send?.({ type: "clock", shuttingDown });
+	process.send?.({ type: "clock", shuttingDown, activity: currentActivity, decision: currentDecision, now });
 });
 const socket = process.argv[2];
 const agentDir = process.argv[3];
@@ -52,5 +60,5 @@ if (!socket || !agentDir) throw new Error("socket and agent directory required")
 await runHostSupervisor({
 	socket,
 	agentDir,
-	hostArgs: [],
+	hostArgs: process.argv.slice(4),
 });
