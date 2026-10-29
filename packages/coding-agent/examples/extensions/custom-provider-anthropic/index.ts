@@ -613,5 +613,7 @@ export default function (pi: ExtensionAPI) {
 		},
 
 		streamSimple: streamCustomAnthropic,
+		// streamCustomAnthropic builds its client from model.baseUrl, so a models.json baseUrl reaches it.
+		honorsModelBaseUrl: true,
 	});
 }

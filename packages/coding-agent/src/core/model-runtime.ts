@@ -485,7 +485,8 @@ export class ModelRuntime implements Models {
 
 	/** The provider without virtual models, or undefined when nothing defines it. */
 	private composeProvider(providerId: string): Provider | undefined {
-		const base = this.nativeExtensionProviders.get(providerId) ?? this.builtins.get(providerId);
+		const nativeBase = this.nativeExtensionProviders.get(providerId);
+		const base = nativeBase ?? this.builtins.get(providerId);
 		const extension = this.extensionProviders.get(providerId);
 		if (!this.config.getProvider(providerId) && !extension) {
 			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
@@ -498,7 +499,10 @@ export class ModelRuntime implements Models {
 				const credential = await this.credentials.read(sourceId);
 				return credential?.type === "api_key" && credential.env ? { ...credential.env } : undefined;
 			};
-			const provider = composeModelProvider(providerId, base, this.config, extension, { storedProviderEnv });
+			const provider = composeModelProvider(providerId, base, this.config, extension, {
+				storedProviderEnv,
+				baseOrigin: nativeBase ? "native-extension" : "builtin",
+			});
 			this.compositionErrors.delete(providerId);
 			return provider;
 		} catch (error) {

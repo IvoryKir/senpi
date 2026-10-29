@@ -2796,7 +2796,7 @@ pi.registerProvider("local-server", {
   }
 });
 
-// Override baseUrl for an existing provider (keeps all models)
+// Override baseUrl for an existing provider (keeps all models; a models.json baseUrl still wins)
 pi.registerProvider("anthropic", {
   baseUrl: "https://proxy.example.com"
 });
@@ -2830,7 +2830,7 @@ The object form accepts a complete pi-ai `Provider`, including native `auth`, `g
 
 **Legacy config options:**
 - `name` - Display name for the provider in UI such as `/login`.
-- `baseUrl` - API endpoint URL. Required when defining models.
+- `baseUrl` - API endpoint URL. Required when defining models. A user's `models.json` `baseUrl` for the provider, or `models[i].baseUrl` for one model, takes precedence over this value and over model-level `baseUrl` values, for chat, image, and classifier models alike, and also becomes the provider's reported `baseUrl`.
 - `apiKey` - API key literal, environment interpolation (`$ENV_VAR` or `${ENV_VAR}`), or leading `!command`. Required when defining models (unless `oauth` provided). `$$` escapes `$`, and `$!` escapes a literal `!` without triggering command execution.
 - `api` - API type: `"anthropic-messages"`, `"openai-completions"`, `"openai-responses"`, etc.
 - `headers` - Custom headers to include in requests.
@@ -2839,6 +2839,7 @@ The object form accepts a complete pi-ai `Provider`, including native `auth`, `g
 - `refreshModels` - Async dynamic discovery callback. Its returned models replace extension-provided models. `context.stored` contains the persisted provider snapshot; use generation-checked `context.publish({ persist: entry })` only when updated catalog data should persist. Use `persist: null` to delete that snapshot.
 - `oauth` - OAuth provider config for `/login` support. When provided, the provider appears in the login menu.
 - `streamSimple` - Custom streaming implementation for non-standard APIs.
+- `honorsModelBaseUrl` - Set to `true` when `streamSimple`, `images`, and `classifiers` send each request to `model.baseUrl`. A `models.json` baseUrl override is then applied to the models those transports serve. Without it, those models keep the `baseUrl` this registration declares, because the composer cannot tell whether a custom transport reads `model.baseUrl`. A native `Provider` registered with `pi.registerProvider(provider)` declares the same thing with `Provider.honorsModelBaseUrl`.
 
 See [custom-provider.md](custom-provider.md) for advanced topics: custom streaming APIs, OAuth details, model definition reference.
 

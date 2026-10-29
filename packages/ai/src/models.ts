@@ -164,6 +164,12 @@ export interface Provider<TApi extends Api = Api> {
 	readonly name: string;
 
 	readonly baseUrl?: string;
+	/**
+	 * Declares that this provider's own transports send each request to `model.baseUrl`, so a
+	 * user's models.json baseUrl override reaches them when the provider is registered by an
+	 * extension. Builtin providers do this by construction and need not declare it.
+	 */
+	readonly honorsModelBaseUrl?: boolean;
 	readonly headers?: ProviderHeaders;
 	/** Omitting it means the shipped senpi default profile applies. */
 	readonly retryPolicy?: RetryPolicyProfile;

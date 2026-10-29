@@ -50,8 +50,8 @@ describe("senpi#4765 models.json baseUrl routes requests", () => {
 
 		const reply = await runtime.completeSimple(requireModel(runtime, "ext-proxy", "chat-a"), userContext);
 
-		expect(reply.errorMessage).toBeUndefined();
 		expect(guard.blocked).toEqual([]);
+		expect(reply.errorMessage).toBeUndefined();
 		expect(server.requests).toEqual(["/v1/chat/completions"]);
 		expect(reply.stopReason).toBe("stop");
 	});

@@ -2887,9 +2887,12 @@ export interface ExtensionAPI {
 	 * Register or override a model provider.
 	 *
 	 * If `models` is provided: replaces all existing models for this provider.
-	 * If only `baseUrl` is provided: overrides the URL for existing models.
+	 * If only `baseUrl` is provided: overrides the URL for existing models, unless the user's
+	 * models.json sets a `baseUrl` for this provider or model, which always wins.
 	 * If `oauth` is provided: registers OAuth provider for /login support.
-	 * If `streamSimple` is provided: registers a custom API stream handler.
+	 * If `streamSimple` is provided: registers a custom API stream handler. Set
+	 * `honorsModelBaseUrl` when it sends requests to `model.baseUrl`, so a models.json
+	 * baseUrl override reaches it.
 	 *
 	 * During initial extension load this call is queued and applied once the
 	 * runner has bound its context. After that it takes effect immediately, so
@@ -2916,7 +2919,7 @@ export interface ExtensionAPI {
 	 * });
 	 *
 	 * @example
-	 * // Override baseUrl for an existing provider
+	 * // Override baseUrl for an existing provider (a models.json baseUrl still wins)
 	 * pi.registerProvider("anthropic", {
 	 *   baseUrl: "https://proxy.example.com"
 	 * });
@@ -3001,7 +3004,11 @@ export interface ExtensionVirtualModel<TState = unknown> extends Omit<VirtualMod
 export interface ProviderConfig {
 	/** Display name for the provider in UI. */
 	name?: string;
-	/** Base URL for the API endpoint. Required when defining models. */
+	/**
+	 * Base URL for the API endpoint. Required when defining models. A models.json `baseUrl` for this
+	 * provider (or a models.json `models[i].baseUrl`) takes precedence over it and over model-level
+	 * `baseUrl` values declared here.
+	 */
 	baseUrl?: string;
 	/** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or leading !command. Required when defining models (unless oauth provided). */
 	apiKey?: string;
@@ -3022,6 +3029,13 @@ export interface ProviderConfig {
 		context: TranscriptContext,
 		options?: SimpleStreamOptions,
 	) => AssistantMessageEventStream;
+	/**
+	 * Declares that `streamSimple`, `images` and `classifiers` send each request to `model.baseUrl`.
+	 * When set, a models.json baseUrl override is applied to the models these transports serve; when
+	 * unset, those models keep this registration's own `baseUrl`. Models served by built-in APIs
+	 * always follow the models.json override.
+	 */
+	honorsModelBaseUrl?: boolean;
 	/** Image-generation implementations keyed by image API. */
 	images?: Partial<Record<ImageApi, ProviderImages>>;
 	/** Classifier implementations keyed by classifier API. */
