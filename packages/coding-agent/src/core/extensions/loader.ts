@@ -41,6 +41,7 @@ import { validateChildModuleRegistration } from "../tool-dispatch/offload.ts";
 import { type ReadClassifier, registerReadClassifier } from "../tools/read-classifiers.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import { validateMcpServerDeclaration } from "./builtin/mcp/config-schema.ts";
+import { McpServerRegistry } from "./mcp-server-registry.ts";
 import { readPermissionPreset } from "./builtin/permission-system/preset-registry.ts";
 import type { PermissionPresetName } from "./builtin/permission-system/types.ts";
 import type { EvalHandleHost } from "./eval-handle-host.ts";
@@ -52,7 +53,9 @@ import {
 	extensionModuleImporter,
 	rememberExtensionFactory,
 } from "./extension-module-cache.ts";
+import { kernelToolInvokerStorage } from "./kernel-tools-context.ts";
 import { createLifecycleApi } from "./lifecycle-api.ts";
+import { withProviderLoginStart } from "./provider-login-start.ts";
 import { StaleExtensionContextError } from "./stale-context-error.ts";
 import type {
 	AppendEntryOptions,
@@ -63,6 +66,7 @@ import type {
 	EntryRendererOptions,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionSessionProfile,
@@ -74,9 +78,11 @@ import type {
 	MemoryReporter,
 	MessageRenderer,
 	PendingProviderRegistration,
+	ProjectTrustContext,
 	ProviderConfig,
 	RegisteredChildModule,
 	RegisteredCommand,
+	RegisteredMcpServer,
 	RegisteredMcpServerDeclaration,
 	SendMessageItem,
 	SendMessageOptions,
@@ -302,6 +308,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		pendingProviderRegistrations: [],
 		pendingNativeProviderRegistrations: [],
 		pendingVirtualModelRegistrations: [],
+		mcpServers: new McpServerRegistry(),
 		createContext: notInitialized,
 		assertActive,
 		invalidate: (message) => {
@@ -356,6 +363,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 				({ definition }) => definition.provider !== provider || definition.id !== id,
 			);
 		},
+		emitProviderLoginStart: async () => {},
 	};
 
 	return runtime;
@@ -391,6 +399,21 @@ export function drainPendingProviderRegistrations(runtime: ExtensionRuntime): Pe
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
+/**
+ * The session a handler's host context belongs to. A stale context (session replacement still reports
+ * `session_extensions_removed` on the invalidated runner) has none: its handler runs with no ambient
+ * invoker, and its own guarded getters, kernelTools included, still refuse it.
+ */
+function handlerSessionId(context: ExtensionContext | ProjectTrustContext | undefined): string | undefined {
+	if (!context || !("sessionManager" in context)) return undefined;
+	try {
+		return context.sessionManager?.getSessionId();
+	} catch (error) {
+		if (error instanceof StaleExtensionContextError) return undefined;
+		throw error;
+	}
+}
+
 function createExtensionAPI(
 	extension: Extension,
 	runtime: ExtensionRuntime,
@@ -430,7 +453,15 @@ function createExtensionAPI(
 			options?: BeforeAgentStartHandlerOptions & ContextHandlerOptions,
 		): () => void {
 			assertActive();
-			const registeredHandler: HandlerFn = ownedBy(extension, (...args: unknown[]) => handler(...args));
+			const registeredHandler: HandlerFn = ownedBy(extension, (...args: unknown[]) => {
+				// A child event can run inside its parent's task-tool async scope.
+				// Bind the host context here, preserving registered-handler metadata.
+				const sessionId = handlerSessionId(args[1] as ExtensionContext | ProjectTrustContext | undefined);
+				const invoke = () => handler(...args);
+				return sessionId
+					? kernelToolInvokerStorage.run({ sessionId }, invoke)
+					: kernelToolInvokerStorage.exit(invoke);
+			});
 			const list = extension.handlers.get(event) ?? [];
 			list.push(registeredHandler);
 			extension.handlers.set(event, list);
@@ -605,17 +636,28 @@ function createExtensionAPI(
 		},
 
 		registerMcpServer(name: string, config: RegisteredMcpServerDeclaration["config"]): void {
-			runtime.assertActive();
+			assertActive();
 			const error = validateMcpServerDeclaration(name, config);
 			if (error) {
 				throw new Error(error);
 			}
 			extension.mcpServers.set(name, {
 				name,
-				config,
+				config: structuredClone(config),
 				extensionPath: extension.path,
 				registrationCwd: extension.registrationCwd,
 			});
+			runtime.mcpServers.changed();
+		},
+
+		unregisterMcpServer(name: string): void {
+			assertActive();
+			if (extension.mcpServers.delete(name)) runtime.mcpServers.changed();
+		},
+
+		getMcpServers(): RegisteredMcpServer[] {
+			assertActive();
+			return runtime.mcpServers.list();
 		},
 
 		// Flag access - checks extension registered it, reads from runtime
@@ -785,7 +827,10 @@ function createExtensionAPI(
 			assertActive();
 			if (typeof providerOrName === "string") {
 				if (!config) throw new Error("Provider config is required when registering by name");
-				applyRuntimeChange(() => runtime.registerProvider(providerOrName, config, extension.path));
+				const wrapped = withProviderLoginStart(providerOrName, config, (event) =>
+					runtime.emitProviderLoginStart(event),
+				);
+				applyRuntimeChange(() => runtime.registerProvider(providerOrName, wrapped, extension.path));
 				return;
 			}
 			applyRuntimeChange(() => runtime.registerNativeProvider(providerOrName, extension.path));
@@ -993,6 +1038,7 @@ async function initializeExtension(
 ): Promise<Extension> {
 	const extension = createExtension(extensionPath, resolvedPath, cwd);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus, session);
+	runtime.mcpServers.track(extension);
 	try {
 		await runOwnedBy(extension, () => factory(load.api));
 		load.commit();
@@ -1002,6 +1048,7 @@ async function initializeExtension(
 			runtimeFactories.set(runtime, factories);
 		}
 	} catch (error) {
+		runtime.mcpServers.untrack(extension);
 		load.discard();
 		throw error;
 	}

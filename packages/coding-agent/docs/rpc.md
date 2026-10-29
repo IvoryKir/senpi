@@ -185,6 +185,13 @@ The shared `SessionLifecycle` type is exported by `@code-yeongyu/senpi`:
   between runs, a refresh while the last end is still bound may set or update that run's stop.
   Goal guards are captured during their bound end's own processing, never inherited from
   another run. Provider errors and policy rejections carry no `lastStop`, even if a deadline fired.
+- Wire-only `observedAt` is the host's ISO wall-clock time when it serializes or enqueues
+  that lifecycle delivery: push, `get_state`, `open_session`, classic stdio, worker-host,
+  TUI-control, and attach replay. Replay re-stamps a wire copy at send time. It is never
+  persisted and never changes `activityRevision.instanceId`, activity revision, `seq`, `epoch`,
+  `since`, completion identity, or activity content. Forwarding preserves the engine owner's
+  activity key, including absent activity; inspecting or replaying never mints a revision.
+  It is not a heartbeat or proof of liveness.
 - Optional `activity` is present only while `state` is `running` and a live activity is known:
   `{ kind: "tool", toolName, toolCallId, since, outstanding }` represents the oldest outstanding
   top-level tool operation, including preparation, approval and dependency waits. Nested calls
@@ -231,6 +238,19 @@ Clients must not notify or settle while `restoring` is true or `persisted` is fa
 Use `completionId` to deduplicate root completion/failure, not `agent_settled` or
 `agent_idle`: a queued result or background source can still own unfinished work.
 An ordinary reply completing is not itself a request to mark a thread Done.
+
+Clients order lifecycle content by session + `seq`, never by wall clock. An equal lifecycle
+`seq` may refresh receipt information and, under the activity ordering rule, the activity projection.
+It never re-runs ordinary state or completion effects. Activity revisions and `observedAt` never
+authorize replacing ordinary lifecycle content at an equal or older lifecycle `seq`.
+An older `seq` never replaces a newer one. Measure "last seen" age on the client's own receipt clock,
+not from `observedAt`. A disconnect never infers a terminal state and never erases a known
+`done`, `failed`, or `cancelled`. An old `running` means "last known running".
+
+Terminal child `lost` means the runner's FINAL loss of custody or contact for that reported
+run. It is not proof that the work or its side effects stopped. A transient transport failure
+must not publish terminal `lost`. Revival uses a higher `runEpoch`; a late same-epoch report
+never reopens a terminal. These delivery rules change no lifecycle transition.
 
 #### request_self_settle
 
@@ -364,6 +384,8 @@ model context or history.
 
 `get_provider_accounts` returns secret-free descriptors containing `name`, `source`, `blocked`, `pinned`, and optional `displayName`. Render a named account as `displayName (name)`; keep using the immutable `name` for `account_pin`, `account_remove`, and comparisons. Legacy accounts omit `displayName`.
 
+A blocked account also says why: `blockedReason` is `auth_error` (the provider rejected the key; it is skipped until one request re-probes it at `blockedUntil`), `rate_limit` (a cooldown that ends at `blockedUntil`) or `disabled` (no end time; replace the credential). Both fields appear only while `blocked` is true, and `blockedReason` is absent when the stored block names no reason. A client choosing an account for a new request should skip `auth_error` accounts rather than send a request that will fail with 401.
+
 Use `/account <provider> rename <id> <display name...>` or the corresponding `/gpt-account` and `/claude-account` commands to name saved accounts; `clear-name <id>` removes only the label. `/gpt-account add` offers optional naming after login is saved, and only when Senpi generated the account ID itself; the Claude lane names accounts through its own login prompt and never asks twice. Blank input or cancellation keeps that login usable. Environment accounts cannot be renamed.
 
 A label is stored NFC-normalized with internal whitespace collapsed, must contain at least one visible character, and may not exceed 32 terminal columns (measured in grapheme clusters, so CJK and emoji count two columns each). Uniqueness within a provider folds case, Unicode compatibility forms, invisible code points, and Cyrillic lookalikes, so two labels that render identically are refused.
@@ -389,6 +411,54 @@ Set the order, or clear it with `names: null`:
 `names` may name a subset; accounts it leaves out come after it. The command fails without changing anything when a name is not one of the provider's accounts, appears twice, or the list is empty, and when the provider has no stored credential (the order is kept beside the pin in `auth.json`). Removing an account drops it from the order. Success emits `auth_accounts_changed`. Only account names cross RPC, never credential material.
 
 ## Starting RPC Mode
+
+### Attach the TUI to an RPC endpoint
+
+```bash
+senpi --attach /path/to/endpoint.sock --session <ref>
+senpi --attach unix:///path/to/endpoint.sock --session <ref>
+```
+
+On Windows, pass the endpoint's logical filesystem path, not the derived pipe name.
+The existing socket transport derives the named pipe and reads its secret file.
+POSIX host endpoints use the existing challenge-response authentication; terminal
+control endpoints use their adjacent secret file. `SENPI_RPC_KEY_ROOT` selects a
+host credential root without changing the attached session's configuration.
+
+Both stdin and stdout must be terminals. `--attach` cannot be combined with
+`--mode rpc`, `--mode json`, `--print`, or session creation options.
+The reference is an existing routing id, durable id, unambiguous durable-id prefix,
+or listed session path. An absent session is refused, never created or resumed.
+
+This presentation declares `interactive_user`, calls `attach_session`, reads
+`get_state` and `get_entries {tail:100}`, and subscribes with `mirror:"all"`.
+`/history` reads an earlier page with `before:next_before`. Enter sends a prompt,
+or steers a running turn; `/steer <text>` explicitly steers. Escape or `/abort`
+sends Stop. Inputs carry `clientMessageId`; dialog responses carry `answerId`.
+The existing selector, text editor, and question UI collect permission and
+question answers. No retry automatically repeats an unacknowledged mutation.
+
+The presentation attaches only to a session no release of its own can end: its
+`list_sessions` row must report `retain_on_disconnect: true` (a session opened with
+`open_session {retain_on_disconnect: true}`, or a terminal's own session on its control
+endpoint). Any other session is refused before `attach_session` with
+`AttachRefusedError` code `session_not_retained`, because a non-retained session closes
+when its last attachment leaves, and this view could be that attachment. Retention is
+never revoked once granted, so the check holds for the whole attachment.
+
+`/quit` or the configured exit shortcut releases only this presentation through
+`release_attachment`. On a retained session that never closes the session or stops the
+endpoint, and neither does a dropped connection. A disconnect leaves the last transcript
+and state visible with a Disconnected status (and its reason when the endpoint sent a
+record the view could not read). Exit and attach again to reconnect.
+
+A dialog answer is tracked by its reply. When the endpoint refuses it (for example
+`question_incomplete`, or `grant_answer_refused` from a connection that may not answer a
+grant) or sends no acknowledgement in time, the dialog comes back with the reason. When
+the endpoint no longer waits on it (`question_already_resolved`,
+`unknown_extension_ui_request`), the dialog stays dismissed and the status says why. A
+refused prompt or steer keeps its text in the editor. A width change sends
+`set_client_info {width}`.
 
 ### RPC client lifecycle
 
@@ -761,6 +831,8 @@ for its child to exit, even if the child no longer responds. `senpi host status`
 and `status --all` expose the same `lifecycle` field (`null` for an older or
 unreachable host). Session counts during stopping are unobserved and represented
 by the existing empty listing, not a claim that the child has already exited.
+Shutdown signals the child immediately, then waits for its observed exit and any
+pending startup publication before removing the generation's ownership state.
 
 A ready probe does not reserve an open: a later `open_session` can fail with
 `errorCode: "host_stopping"` and `errorData.instanceId`, including on a connection
@@ -2739,7 +2811,7 @@ names a valid preset.
 | `get_protocol_info` | - | `{ protocolVersion: 1, serverVersion: string, capabilities: string[], mode: "classic"\|"multi", instanceId: string, generation: number, engineVersion: string, engineOrdinal: [y, m, d, n, epoch], launch_profile: { profile_id, core }, memory_pressure?: boolean }` | Answered in BOTH modes; side-effect-free; the capability probe. Multi-session hosts include `multi_session`, `session_held` (the active foreign-holder admission guard, in both runtimes), `retain_on_disconnect`, `session_kind`, `session_context`, `auto_title_per_session`, `durable_session_id`, `moved_path_guard` (senpi resolves and guards paths the OmO desktop moved with its data home), `prompt_surface` and `prompt_surface_chat` plus the negotiated launch capabilities. Those are HOST capabilities (a client never sends them) and are advertised only in multi-session mode, where the host owns the attachment refcount and the per-session launch profile. The identity fields are described under "Host identity" above; compatibility is decided from `protocolVersion`, `capabilities` and `engineOrdinal`, NEVER from `serverVersion`. |
 | `open_session` | `sessionPath?`, `cwd?`, `provider?`, `modelId?`, `thinkingLevel?`, `permissionPreset?`, `retain_on_disconnect?`, `kind?`, `context?`, `auto_title?`, `durableSessionId?`, `promptSurface?`, `browserEngine?`, `retryFallback?` (all optional; paths MUST be absolute) | `{ sessionId, state: RpcSessionState, attached?: true }` | `sessionPath` = today's `--session` semantics (open-if-exists else create persisting there, `session-manager.ts:926-940`); `provider`/`modelId` applied only on create (resume restores the session's model — mirrors `SenpiSessionRuntime.ts:198-200`); params form the immutable launch profile (D8). When the path is already held by a fully-open session, the open ATTACHES to it: same routing handle, `attached: true`, one more attachment counted; the runtime is torn down only when the last attachment closes. Idle sessions past the eviction window are closed by the host itself. `retain_on_disconnect: true` (default false) makes a dropped connection DETACH from this session instead of closing it — see "Retained sessions" below. `kind` (default `interactive`) and the opaque `context` map are described under "Session kind and context" above; both are stored frozen for the session's life and never influence auth, model or resource resolution. |
 | `close_session` | `sessionId` | `{}` | Refused with `unknown_session` when the requesting connection never attached to that handle (a close releases the CALLER's attachment, and `list_sessions` publishes every handle). Otherwise aborts active work, awaits agent idle + settled persistence for up to the host grace window (default 10s), then quarantines any worker that has not exited without releasing its path reservation; its response is the LAST record tagged with that handle for the first closer — no events after (test-pinned). An admitted concurrent close joins the same teardown and receives its own successful response; output saturation rejects admission with the bounded close-overflow/resync notice described above. |
-| `list_sessions` | `include_workers?` (default false) | `{ sessions: [{ sessionId, durableSessionId, sessionPath, cwd, name, status, attachments, kind, context? }] }` | Includes `opening`/`closing` entries. Internally quarantined workers remain externally `closing` until exit. `attachments` is the session's live client attachment count; `0` on an `open` row is a retained session with no client attached. Every row carries `kind`. Rows with `kind: "worker"` are omitted unless `include_workers: true`, and `context` is published ONLY on that listing — a default listing carries no `context` at all. |
+| `list_sessions` | `include_workers?` (default false) | `{ sessions: [{ sessionId, durableSessionId, sessionPath, cwd, name, status, attachments, retain_on_disconnect, kind, context? }] }` | Includes `opening`/`closing` entries. `retain_on_disconnect` is true when the session outlives its last attachment (an open or attach asked for it; retention is never revoked), so no client's release or disconnect can end it. Internally quarantined workers remain externally `closing` until exit. `attachments` is the session's live client attachment count; `0` on an `open` row is a retained session with no client attached. Every row carries `kind`. Rows with `kind: "worker"` are omitted unless `include_workers: true`, and `context` is published ONLY on that listing — a default listing carries no `context` at all. |
 | `detach_connection` | - | `{ deferred: string[] }` | Multi-session hosts that advertise `detach_connection`. Meant as the connection's last request: the host releases every session attachment this connection holds and answers only after that, so another connection's next `list_sessions` no longer counts it. `deferred` names the sessions that still count it (see `#### detach_connection`). Closing the socket afterwards releases nothing more. `senpi host session` sends it before closing, bounded at 5 s; on a host without the capability, or after a request timed out or the connection was lost, it relies on the release at socket close. |
 | `release_session` | `sessionId`, `reason: "takeover" \| "move"`, `moveId?` (required for `move`), `target?`, `interrupt?`, `force?` | `{ released: true, session_path, attachments }` | Hands the session to a runtime outside this host. See "Handing a session over (`release_session`)" below. |
 | `move_session` | `op` and its fields (see "Moving a session to another device (`move_session`)") | per `op` | Drives one step of a session move between hosts. Capability `move_session`. |
@@ -5039,6 +5111,53 @@ capability:
 }
 ```
 
+#### Job widgets
+
+The `job-widgets` builtin emits `job_widget_state` on the same path: live, display-ready widgets for the
+session's long background jobs (bash sessions started with `run_in_background` or auto-detached, and jobs a
+host registers, such as background tasks). Clients receive it only when they advertise `extension_events`;
+the in-process `pi.events` channel carries the same payload. It is sent at most once per second per session
+and only when what a client draws changed, so a timestamp moving alone sends nothing. `jobWidgets.enabled:
+false` ([settings](settings.md#job-widgets)) turns it off.
+
+`data` is `{ v: 1, sessionId, jobs }`. Each job has `id` (`bash_N` or a task id), `kind` (`bash` or `task`),
+`state` (`pending`, `live`, `done`, `skipped`, `fallback`), `updatedAtMs`, and, except for `skipped`, a
+`view`: `title`, optional `headline` (`text`, `label`, `trend`), optional `stage`, up to four `blocks`
+(`spark`, `bars`, `meter`, `stat`, `grid`, `text`) whose numbers arrive formatted, and `lines` for
+`pending` and `fallback`. A job appears once its widget is being built; `done` keeps the last view frozen
+after the job exits. Ignore a payload whose `v` you do not know and any block `kind` you do not draw.
+
+```json
+{
+  "type": "extension_event",
+  "name": "job_widget_state",
+  "data": {
+    "v": 1,
+    "sessionId": "session_1",
+    "jobs": [
+      {
+        "id": "bash_3",
+        "kind": "bash",
+        "state": "live",
+        "updatedAtMs": 1710000000000,
+        "view": {
+          "title": "Blender render",
+          "headline": { "text": "120", "label": "rendered" },
+          "blocks": [{ "kind": "meter", "label": "frames", "value": 0.48, "text": "120 / 250" }]
+        }
+      }
+    ]
+  }
+}
+```
+
+Extensions that run their own long jobs offer them through the root package export:
+`registerJobWidgetSource({ sessionId, id, kind, sources, brief, startedAtMs })` returns a handle (`notify`,
+`update`, `settle`, `dispose`), or `undefined` when the session has no widgets; a source is any
+`JobTextSource`, for example a `TextTap` the extension appends text to. `setJobWidgetAuthorResolver(resolver)`
+routes spec writing to a host-chosen model (behind an explicit `jobWidgets.model`), and
+`getJobWidgetState(sessionId)` reads the current state.
+
 ### agent_start
 
 Emitted when the agent begins processing a prompt.
@@ -5084,15 +5203,16 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | --- | --- |
 | `auth` | re-authenticate the provider |
 | `request_refused` | send the message again or choose another model; if it keeps failing, re-authenticate `<provider>` |
+| `model_unavailable` | choose another model, or check that your plan or key includes this model |
 | `rate_limit` | retry later or set a fallback model |
 | `quota` | check the plan or credits |
 | `context_limit` | compact or shorten the conversation |
-| `invalid_request` | report it with the code |
+| `invalid_request` | send the message again; if it repeats, choose another model or start a new session |
 | `provider_unavailable` | retry or switch provider |
 | `network` | check connectivity |
-| `unknown` | retry once; if it repeats, switch the model or report the code |
+| `unknown` | send the message again; if it repeats, choose another model |
 
-`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` names the provider and the code or status, for example `the provider returned an error that could not be classified (openai, status 429)`. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. Retry and fallback decisions do not read `failure`.
+`unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. An `unknown` failure the provider answered with HTTP 404 is `model_unavailable` instead: a model endpoint returns 404 for a model id this account cannot use, as the ChatGPT subscription backend does for a model not yet rolled out to the plan. Retry and fallback decisions do not read `failure`.
 
 `request_refused` is an `auth` failure whose credential (same provider, endpoint and key) served a response within the last 10 minutes: the provider refused this one request, and the key may still be valid. If failures persist, re-authenticate the named provider: a recently working key may have been revoked. The failed assistant message carries `credentialServedRecently: true` and keeps the provider's own `errorMessage`. The in-memory record drops expired entries on each record/check and retains at most 1,024 credentials, evicting the least recently served first. Header-based, ADC and SigV4 authentication do not supply an `apiKey`, so their fingerprint reduces to provider + baseUrl; different credentials on that endpoint share the record.
 
@@ -5486,6 +5606,7 @@ Logins are fire-command-then-subscribe: the command answers as soon as the flow 
 
 - `login_start` `{provider}`: responds immediately with `success: true` (flow started). A second `login_start` for the same provider aborts the earlier attempt.
 - `auth_login_url` `{provider, url}`: the URL (or device-code verification URL) the user must open.
+- `auth_login_progress` `{provider, text}`: a status line while the login prepares or runs, for example an extension's `provider_login_start` handler reporting `Downloading Claude Code 2.1.306: 10% of 200 MB`. Zero or more per login, always before `auth_login_end`. Every provider progress and info line is forwarded as written, so `text` may name the local callback address a login listens on (for example `Listening for OpenRouter OAuth callback on http://<host>:<port>/<path>`), the same redirect address the `auth_login_url` already carries; the URL the user must open arrives only in `auth_login_url`. Built-in providers put no authorization code or token in these lines.
 - `auth_login_end` `{provider, success, error?, replaced?, backupPath?}`: exactly one per login; `error` is a non-secret message. When a successful login replaced the provider's credential of the other kind (an OAuth login over a stored API key), `replaced` names that kind (`"api_key"` or `"oauth"`) and `backupPath` is the copy of `auth.json` taken before it (absent when the credential store is not a file). A login of the same kind adds an account and carries neither field.
 - `login_cancel` `{provider}`: aborts the in-flight login; the client then sees `auth_login_end` with `success: false`.
 
