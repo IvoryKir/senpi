@@ -20,6 +20,16 @@ export interface RegisteredCase {
  */
 const STORE_CASES_IMPL = "packages/agent/src/durable/testing/store-cases.ts";
 const KILL_STORE_IMPL = "packages/agent/src/durable/testing/kill-store.ts";
+const WAKE_CASES_IMPL = "packages/agent/src/durable/testing/wake-cases.ts";
+const MULTI_HOST_IMPL = "packages/agent/src/durable/testing/multi-host-cases.ts";
+const KILL_WAKE_IMPL = "packages/agent/src/durable/testing/kill-wake.ts";
+const wakeCase = (id: string, impl: string, expected: string): RegisteredCase => ({
+	id,
+	impl,
+	intro: "#4735",
+	adapters: ["store", "wake"],
+	expected,
+});
 const storeCase = (id: string, impl: string, expected: string): RegisteredCase => ({
 	id,
 	impl,
@@ -93,5 +103,61 @@ export const CONFORMANCE_REGISTRY: readonly RegisteredCase[] = [
 		"KILL-STORE-06",
 		KILL_STORE_IMPL,
 		"everywhere: kill after an import is durable; after restart it is whole and a re-import adds nothing",
+	),
+	wakeCase(
+		"WAKE-01",
+		WAKE_CASES_IMPL,
+		"pre-arm: a recovery alarm is durable before admitted work starts and before a new instance resumes",
+	),
+	wakeCase(
+		"WAKE-02",
+		WAKE_CASES_IMPL,
+		"update: after each commit the alarm is min(heartbeat if active, earliest wake), cleared only when idle",
+	),
+	wakeCase(
+		"WAKE-03",
+		WAKE_CASES_IMPL,
+		"resume: a fire re-arms before resume, runs due work once, and an early fire is harmless",
+	),
+	wakeCase(
+		"WAKE-RET-01",
+		WAKE_CASES_IMPL,
+		"retention: an alarm survives host restarts and reopened instances, fires once, and is cleared after the work",
+	),
+	wakeCase("MULTI-HOST-01", MULTI_HOST_IMPL, "many sessions on one host instance: records and wakes stay per session"),
+	wakeCase(
+		"KILL-WAKE-01",
+		KILL_WAKE_IMPL,
+		"everywhere: kill during admit's alarm write; nothing is durable and a retried admission runs once",
+	),
+	wakeCase(
+		"KILL-WAKE-02",
+		KILL_WAKE_IMPL,
+		"everywhere: kill after admit's arm, before work; the alarm fires harmlessly and ends cleared",
+	),
+	wakeCase(
+		"KILL-WAKE-03",
+		KILL_WAKE_IMPL,
+		"everywhere: kill between a commit and its alarm update; the pre-armed heartbeat recovers the wake, run once",
+	),
+	wakeCase(
+		"KILL-WAKE-04",
+		KILL_WAKE_IMPL,
+		"everywhere: eviction during the update's alarm write; the heartbeat recovers the wake, run once",
+	),
+	wakeCase(
+		"KILL-WAKE-05",
+		KILL_WAKE_IMPL,
+		"everywhere: kill after a fire's re-arm, before resume; the next fire runs the due work once",
+	),
+	wakeCase(
+		"KILL-WAKE-06",
+		KILL_WAKE_IMPL,
+		"everywhere: kill after a resumed task's commit is durable; the task never runs twice and the alarm clears",
+	),
+	wakeCase(
+		"KILL-WAKE-07",
+		KILL_WAKE_IMPL,
+		"everywhere: eviction during the alarm clear after the work; the next fire is harmless and clears it",
 	),
 ];
