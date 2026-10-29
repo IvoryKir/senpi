@@ -1665,6 +1665,9 @@
         "src/modes/rpc/tool-child/gated-bun.test.ts": ["unresolved"],
         // pre-existing at origin main aceb1cc1d9: imports that do not resolve ../../dist/core/cursor-exec-bridge-session.js
         "test/manual-qa/cursor-bridge-late-frame-qa.mjs": ["unresolved"],
+        // Plain-node fixture spawned by path; it imports the built ../../../../dist/ modules, which CI's static job does
+        // not build before knip (senpi#4799 moved it to .mjs to skip per-spawn TypeScript transpilation).
+        "test/suite/regressions/fixtures/permission-system-shutdown-unhandled-rejection.mjs": ["unresolved"],
       },
     },
     "packages/coding-agent/examples/extensions/*": {
