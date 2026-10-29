@@ -28,7 +28,7 @@ function alive(pid: number): boolean {
 	}
 }
 
-/** Failure-only diagnostics for #4724. Observers return the original values/promises, without deadlines. */
+/** Failure-only diagnostics for #4724. Observers preserve values/rejections, without deadlines. */
 export class ShutdownDiagnostics {
 	private readonly generations = new Map<object, Generation>();
 	private readonly sessions = new Set<TerminalSession>();
@@ -50,8 +50,13 @@ export class ShutdownDiagnostics {
 		const clear = () => {
 			if (this.active === entry) this.active = undefined;
 		};
-		void result.then(clear, clear);
-		return result;
+		return result.then(
+			() => clear(),
+			(error) => {
+				clear();
+				throw error;
+			},
+		);
 	}
 
 	observe<T>(phase: string, action: () => T, processInfo: { pid?: number; signal?: TerminalSessionSignal } = {}): T {
@@ -65,11 +70,17 @@ export class ShutdownDiagnostics {
 		try {
 			const result = action();
 			if (result instanceof Promise)
-				void result.then(
-					() => finish("fulfilled"),
-					() => finish("rejected"),
-				);
-			else finish("fulfilled");
+				return result.then(
+					(value) => {
+						finish("fulfilled");
+						return value;
+					},
+					(error) => {
+						finish("rejected");
+						throw error;
+					},
+				) as T;
+			finish("fulfilled");
 			return result;
 		} catch (error) {
 			finish("rejected");

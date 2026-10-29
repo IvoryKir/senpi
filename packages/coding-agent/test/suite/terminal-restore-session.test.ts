@@ -481,7 +481,7 @@ await new Promise((resolve) => setTimeout(resolve, 3000));`;
 	});
 });
 
-it("shutdown diagnostics retain a pending restore without replacing its completion promise (#4724)", async () => {
+it("shutdown diagnostics retain a pending restore and its completion outcome (#4724)", async () => {
 	const diagnostics = new ShutdownDiagnostics();
 	const generation = {};
 	diagnostics.register(generation);
@@ -499,7 +499,6 @@ it("shutdown diagnostics retain a pending restore without replacing its completi
 	});
 	const root = join(tmpdir(), "senpi-diagnostics-no-directory");
 	const pending = diagnostics.snapshot([generation], root, [{ pid: process.pid }], join(root, "session.lease"));
-	expect(observed).toBe(restore.promise);
 	expect(pending.generations[0]?.phases).toMatchObject([
 		{ phase: "shutdown", status: "pending" },
 		{ phase: "restore", status: "pending" },
@@ -515,10 +514,53 @@ it("shutdown diagnostics retain a pending restore without replacing its completi
 	]);
 });
 
+it.each([
+	["observe", false],
+	["shutdown", false],
+	["observe", true],
+	["shutdown", true],
+] as const)("shutdown diagnostics preserve rejection reporting: %s, handled=%s (#4724)", async (phase, handled) => {
+	const child = spawn(
+		process.execPath,
+		[
+			"--import",
+			"tsx",
+			join(import.meta.dirname, "../fixtures/terminal-restore-shutdown-rejection.ts"),
+			phase,
+			String(handled),
+		],
+		{ stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 },
+	);
+	const closed = once(child, "close");
+	let stdout = "";
+	let stderr = "";
+	child.stdout.on("data", (chunk) => {
+		stdout += chunk.toString();
+	});
+	child.stderr.on("data", (chunk) => {
+		stderr += chunk.toString();
+	});
+	const [code, signal] = await closed;
+	expect(signal, stderr).toBeNull();
+	expect(code, stderr).toBe(0);
+	const report = JSON.parse(stdout);
+	expect(report.unhandled).toEqual(handled ? [] : [true]);
+	expect(report.caught).toBe(handled);
+	expect(report.phases).toEqual(
+		phase === "observe"
+			? [
+					{ phase: "shutdown", status: "fulfilled" },
+					{ phase: "restore", status: "rejected" },
+				]
+			: [{ phase: "shutdown", status: "rejected" }],
+	);
+});
+
 it.runIf(process.platform !== "win32")(
 	"shutdown diagnostics report fixture lease and socket paths (#4724)",
 	async () => {
-		const root = mkdtempSync(join(tmpdir(), "senpi-shutdown-diag-"));
+		// Match the Unix socket fixtures: inherited TMPDIR may exceed sun_path by itself.
+		const root = mkdtempSync(join("/tmp", "senpi-shutdown-diag-"));
 		const lease = join(root, "session.lease");
 		const socket = join(root, "watch.sock");
 		writeFileSync(lease, "{}");
