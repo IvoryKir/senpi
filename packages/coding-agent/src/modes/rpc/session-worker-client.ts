@@ -26,6 +26,7 @@ import { subscriptionLimits } from "../../core/subscription-limits/limit-store.t
 import { SessionWorkerRequests, type WorkerRequestInput } from "./session-worker-requests.ts";
 import { acknowledge, acknowledgeGrant } from "./session-worker-signals.ts";
 import { WorkerOwnerGates } from "./session-worker-owners.ts";
+import { sessionWorkerDataRegistry } from "./session-worker-data.ts";
 import { randomUUID } from "node:crypto";
 import type { McpFormBinding } from "../../core/mcp-form-types.ts";
 
@@ -45,6 +46,28 @@ const compiledWorkerEntry =
 		? SENPI_RPC_SESSION_WORKER_ENTRY
 		: "./src/modes/rpc/session-worker.ts";
 
+function spawnSessionWorker(webviewBroker: ReturnType<typeof createWebViewBroker>) {
+	return sessionWorkerDataRegistry.spawn(
+		(issued) =>
+			new Worker(
+				isBunBinary
+					? fileURLToPath(new URL(compiledWorkerEntry, import.meta.url)).replaceAll("\\", "/")
+					: new URL(
+							import.meta.url.endsWith(".ts") ? "./session-worker.ts" : "./session-worker.js",
+							import.meta.url,
+						),
+				{
+					workerData: {
+						hostProcessStartedAtMs: ownProcessStartedAtMs(),
+						extensionData: issued.extensionData,
+						...(webviewBroker ? { webviewBroker: webviewBroker.port } : {}),
+					},
+					transferList: [...(webviewBroker ? [webviewBroker.port] : []), ...issued.transfer],
+				},
+			),
+	);
+}
+
 export class SessionWorkerClient {
 	private privateBinding?: McpFormBinding;
 	private stopPrivateBinding?: () => void;
@@ -54,18 +77,8 @@ export class SessionWorkerClient {
 	>();
 	/** The worker's own route to the main-thread Bun.WebView service; released when the worker exits. */
 	private readonly webviewBroker = createWebViewBroker();
-	readonly worker = new Worker(
-		isBunBinary
-			? fileURLToPath(new URL(compiledWorkerEntry, import.meta.url)).replaceAll("\\", "/")
-			: new URL(import.meta.url.endsWith(".ts") ? "./session-worker.ts" : "./session-worker.js", import.meta.url),
-		{
-			workerData: {
-				hostProcessStartedAtMs: ownProcessStartedAtMs(),
-				...(this.webviewBroker ? { webviewBroker: this.webviewBroker.port } : {}),
-			},
-			...(this.webviewBroker ? { transferList: [this.webviewBroker.port] } : {}),
-		},
-	);
+	private readonly spawned: ReturnType<typeof spawnSessionWorker>;
+	readonly worker: Worker;
 	readonly exited: Promise<void>;
 	snapshot?: WorkerSnapshot;
 	/** Main marks this only after installing the unique routing binding. */
@@ -93,11 +106,15 @@ export class SessionWorkerClient {
 
 	constructor(callbacks: SessionWorkerCallbacks) {
 		this.callbacks = callbacks;
+		// Spawned here, with nothing between it and the exit listener that owns its cleanup (senpi#4728).
+		this.spawned = spawnSessionWorker(this.webviewBroker);
+		this.worker = this.spawned.result;
 		this.exited = new Promise((resolve, reject) => {
 			this.worker.once("exit", () => {
 				this.stopPrivateBinding?.();
 				this.privateBinding?.dispose();
 				this.owners.retireAll();
+				this.spawned.issued.dispose();
 				for (const operation of this.privateOperations.values()) operation.operation.abort();
 				this.privateOperations.clear();
 				if (!this.stopped && !this.closeTimer) this.fail("session_worker_exited");
