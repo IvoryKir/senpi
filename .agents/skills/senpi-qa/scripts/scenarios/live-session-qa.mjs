@@ -24,6 +24,7 @@ import { setUpSandbox } from "../../scenarios/live-session/fixture/support/sandb
 import { driveSession } from "../../scenarios/live-session/fixture/support/session-driver.mjs";
 import { childRuntime, guardRealAuth, installCleanupHooks } from "../lib/common.mjs";
 import { evaluateLiveRun, MAX_BUDGET } from "../lib/live-invariants.mjs";
+import { ownerCommand } from "../lib/owner-receipt.mjs";
 
 /** Placements whose producers come later in the plan, or that are gated on Q's C6 pick: refused, never a PASS. */
 const NOT_AVAILABLE = {
@@ -130,8 +131,11 @@ async function main() {
 	const verdict = evaluateLiveRun(record);
 	printChecks(options.placement, verdict);
 	guard.assertUnchanged();
+	const exit = verdict.pass ? 0 : 1;
+	const argv = ["node", ".agents/skills/senpi-qa/scripts/scenarios/live-session-qa.mjs", ...process.argv.slice(2)];
 	const receipt = {
 		command,
+		commands: [ownerCommand({ manifestId: "QA.live", kind: "live", argv, childRuntime: childRuntime().label, exit })],
 		kind: "live",
 		placement: options.placement,
 		model: { provider: options.provider, id: options.modelId, upstream: options.upstream.origin },
@@ -149,7 +153,7 @@ async function main() {
 	process.stdout.write(
 		`\nlive-session-qa ${options.placement}: ${verdict.pass ? "PASS" : "FAIL"} (${session.meter.used} tokens)\nevidence: ${out}\n`,
 	);
-	process.exitCode = verdict.pass ? 0 : 1;
+	process.exitCode = exit;
 }
 
 main().catch((error) => {
