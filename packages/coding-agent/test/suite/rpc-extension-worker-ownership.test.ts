@@ -6,28 +6,28 @@ import { startWorkerHost } from "./rpc-worker-host-support.ts";
 
 // #4728: real session isolates, real socket transports, contexts observed only through a loaded extension.
 const extension = `export default function (pi) {
-	let gate;
-	let dispatched = 0;
-	let refused = 0;
+	// Session replacement reloads this extension, so the probe state lives on one worker-wide key: the
+	// replacement instance must release, and count, the previous instance's held handler.
+	const probe = (globalThis.__ownershipProbe ??= { gate: undefined, dispatched: 0, refused: 0 });
 	pi.rpc.handle("probe.owner", (_data, context) =>
 		context ? { ownerId: context.ownerId, aborted: context.disconnectSignal.aborted } : { supported: false });
 	pi.rpc.handle("probe.hold", async (_data, context) => {
 		if (!context) return { supported: false };
-		gate = Promise.withResolvers();
+		probe.gate = Promise.withResolvers();
 		pi.rpc.emit("probe.held", {});
-		await gate.promise;
+		await probe.gate.promise;
 		try {
-			context.admit(() => { dispatched += 1; });
+			context.admit(() => { probe.dispatched += 1; });
 		} catch {
-			refused += 1;
+			probe.refused += 1;
 		}
 		return { code: "123456" };
 	});
 	pi.rpc.handle("probe.release", () => {
-		gate?.resolve();
-		return { released: gate !== undefined };
+		probe.gate?.resolve();
+		return { released: probe.gate !== undefined };
 	});
-	pi.rpc.handle("probe.count", () => ({ dispatched, refused }));
+	pi.rpc.handle("probe.count", () => ({ dispatched: probe.dispatched, refused: probe.refused }));
 }`;
 
 async function workerHost() {
