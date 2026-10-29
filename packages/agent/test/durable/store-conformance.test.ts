@@ -16,7 +16,7 @@ const readRepoFile = async (path: string): Promise<Uint8Array> => readFile(`${RE
 
 const IMPLEMENTATIONS = new Map<string, CaseImplementation<StoreCaseAdapters>>([...STORE_CASES, ...KILL_STORE_CASES]);
 const STORE_REGISTRY = CONFORMANCE_REGISTRY.filter((entry) => /^(KILL-)?STORE-/.test(entry.id));
-const STORE_IDS = ["01", "02", "03", "04", "05", "06"].map((n) => `STORE-${n}`);
+const STORE_IDS = ["01", "02", "03", "04", "05", "06", "07"].map((n) => `STORE-${n}`);
 const KILL_IDS = ["01", "02", "03", "04", "05", "06"].map((n) => `KILL-STORE-${n}`);
 
 function memoryAdapter(wrap: (store: DurableStore) => DurableStore = (store) => store): StoreConformanceAdapter {
@@ -45,7 +45,7 @@ async function runOnMemory(wrap?: (store: DurableStore) => DurableStore): Promis
 }
 
 describe("the STORE and KILL-STORE registration", () => {
-	it("registers STORE-01..06 and KILL-STORE-01..06 with their implementation files, all needing only a store", () => {
+	it("registers STORE-01..07 and KILL-STORE-01..06 with their implementation files, all needing only a store", () => {
 		expect(STORE_REGISTRY.map((entry) => [entry.id, entry.impl, entry.adapters])).toEqual([
 			...STORE_IDS.map((id) => [id, "packages/agent/src/durable/testing/store-cases.ts", ["store"]]),
 			...KILL_IDS.map((id) => [id, "packages/agent/src/durable/testing/kill-store.ts", ["store"]]),

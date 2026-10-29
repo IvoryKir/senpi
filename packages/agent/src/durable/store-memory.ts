@@ -95,8 +95,11 @@ export function openMemoryStore(medium: MemoryStoreMedium, options: DurableStore
 		async claim(expectedEpoch, nextEpoch) {
 			point({ op: "claim", at: "before" });
 			const state = medium.current;
-			if (!Number.isSafeInteger(nextEpoch) || nextEpoch <= expectedEpoch) {
-				throw new DurableStoreError("invalid-claim", `a claim must raise the epoch above ${expectedEpoch}`);
+			if (!Number.isSafeInteger(nextEpoch) || nextEpoch !== expectedEpoch + 1) {
+				throw new DurableStoreError(
+					"invalid-claim",
+					`a claim must raise the epoch to exactly ${expectedEpoch + 1}`,
+				);
 			}
 			if (state.epoch !== expectedEpoch) {
 				throw new DurableStoreError(

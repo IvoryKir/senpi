@@ -21,7 +21,7 @@ export const stored = (seq: number, id: string, kind = "entry") => ({ seq, id, k
 export async function claimedStore(adapter: StoreConformanceAdapter, epoch = 1) {
 	const medium = await adapter.createMedium();
 	const store = await adapter.open(medium);
-	await store.claim(0, epoch);
+	for (let next = 1; next <= epoch; next++) await store.claim(next - 1, next);
 	return { medium, store };
 }
 
@@ -130,7 +130,7 @@ const delayedOldOwner: StoreCase = async ({ store: adapter }) => {
 		"stale-epoch",
 		"old owner's delayed commit",
 	);
-	await expectStoreError(oldOwner.claim(1, 3), "stale-epoch", "old owner's delayed claim");
+	await expectStoreError(oldOwner.claim(1, 2), "stale-epoch", "old owner's delayed claim");
 	await expectStoreError(newOwner.commit(3, [append("x")], late.adopt), "stale-epoch", "a commit from a future epoch");
 	await expectStoreError(newOwner.claim(2, 2), "invalid-claim", "a claim that does not raise the epoch");
 	const fresh = await adapter.open(await adapter.createMedium());
@@ -177,6 +177,20 @@ const claimAndImport: StoreCase = async ({ store: adapter }) => {
 		{ seqs: [4], head: 4 },
 		"the new owner continues the log",
 	);
+};
+
+const claimRaisesEpochByOne: StoreCase = async ({ store: adapter }) => {
+	const { medium, store } = await claimedStore(adapter);
+	await store.commit(1, [append("r1")], () => {});
+	const baseline = await store.exportSnapshot();
+	const fresh = await adapter.open(await adapter.createMedium());
+
+	await expectStoreError(store.claim(1, 3), "invalid-claim", "a claim that skips an epoch");
+	await expectStoreError(fresh.claim(0, 2), "invalid-claim", "a first claim that skips epoch 1");
+	expectEqual(await fresh.readEpoch(), 0, "a refused first claim leaves the store unclaimed");
+	expectEqual(await reopenSnapshot(adapter, medium), baseline, "a refused claim leaves the epoch and log unchanged");
+	await store.claim(1, 2);
+	expectEqual(await store.readEpoch(), 2, "the next epoch is still claimable");
 };
 
 const idsScansAndDocuments: StoreCase = async ({ store: adapter }) => {
@@ -242,4 +256,5 @@ export const STORE_CASES: ReadonlyMap<string, StoreCase> = new Map([
 	["STORE-04", delayedOldOwner],
 	["STORE-05", claimAndImport],
 	["STORE-06", idsScansAndDocuments],
+	["STORE-07", claimRaisesEpochByOne],
 ]);

@@ -60,6 +60,11 @@ export const CONFORMANCE_REGISTRY: readonly RegisteredCase[] = [
 		"minted IDs are unique; record and document scans, deletes and duplicate-ID refusal behave as specified",
 	),
 	storeCase(
+		"STORE-07",
+		STORE_CASES_IMPL,
+		"a claim raises the epoch by exactly one; a claim that skips an epoch is refused and changes nothing",
+	),
+	storeCase(
 		"KILL-STORE-01",
 		KILL_STORE_IMPL,
 		"everywhere: kill before a commit; after restart nothing is durable and the batch commits with the same IDs",

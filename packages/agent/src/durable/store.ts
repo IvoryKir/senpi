@@ -99,8 +99,9 @@ export interface DurableStore {
 	/** The last committed sequence number; 0 for an empty log. */
 	readHead(): Promise<number>;
 	/**
-	 * Compare-and-set the owner epoch from `expectedEpoch` to `nextEpoch` (> `expectedEpoch`). A claimant whose expected
-	 * epoch is no longer current is refused (`stale-epoch`), so an old owner can never take the store back.
+	 * Compare-and-set the owner epoch from `expectedEpoch` to `nextEpoch`, which must be exactly `expectedEpoch + 1`; any
+	 * other `nextEpoch` (equal, lower, or skipping an epoch) is refused (`invalid-claim`) and changes nothing. A claimant
+	 * whose expected epoch is no longer current is refused (`stale-epoch`), so an old owner can never take the store back.
 	 */
 	claim(expectedEpoch: number, nextEpoch: number): Promise<void>;
 	/**
