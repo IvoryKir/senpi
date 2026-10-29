@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { createNormalizer, diffNormalized } from "./equivalence-normalize.mjs";
+import { createNormalizer, diffNormalized, directoryRoots } from "./equivalence-normalize.mjs";
 
 const U1 = "01a18140-5eea-72cf-aab6-4bbe9aa427cc";
 const U2 = "9d3636a4-3e1f-4346-9fa5-23e139d0478b";
@@ -143,6 +146,24 @@ test("roots and host facts are replaced longest first; other text is never maske
 		os: "- OS: darwin (kernel <host:kernel>)",
 		hex: "deadbeef cafe0001",
 	});
+});
+
+test("a directory root reached through a symlink tokenizes in its allocated and its resolved form", (t) => {
+	const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), "eq-roots-")));
+	t.after(() => rmSync(scratch, { recursive: true, force: true }));
+	const real = join(scratch, "real");
+	const link = join(scratch, "link");
+	mkdirSync(real);
+	symlinkSync(real, link);
+	const normalize = createNormalizer({ roots: directoryRoots(link, "<sandbox>", { keyed: "<sandbox-key>" }) });
+	assert.deepEqual(
+		normalize({
+			allocated: `${link}/work`,
+			resolved: `${real}/work`,
+			sessionKey: `--${real.replaceAll("/", "-")}-work--`,
+		}),
+		{ allocated: "<sandbox>/work", resolved: "<sandbox>/work", sessionKey: "--<sandbox-key>-work--" },
+	);
 });
 
 test("token maps and ranks are scoped to one normalize() call", () => {

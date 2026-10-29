@@ -13,6 +13,8 @@
 //   the host facts the CLI renders about the machine it runs on;
 // - nothing else is masked: every other string, number, key and array order is compared as produced.
 
+import { realpathSync } from "node:fs";
+
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const PURE_UUID = new RegExp("^" + UUID.source + "$", "i");
 // 2026-10-28T06:44:01.898Z, 2026-10-28T06-44-01-898Z (session file names), 2026-10-28 (a bare date).
@@ -73,6 +75,23 @@ function epochOfNumber(value) {
 	if (value >= EPOCH_MS_MIN && value < EPOCH_MS_MAX) return value;
 	if (value >= EPOCH_S_MIN && value < EPOCH_S_MAX) return value * 1000;
 	return undefined;
+}
+
+/**
+ * A run-scoped directory root in every form a child can report it: the path as allocated and the path with its
+ * symlinks resolved (a child reports its resolved cwd, and macOS temp dirs sit behind `/tmp` and `/var` symlinks to
+ * `/private/...`). `keyed` also adds each form as a session-directory key (`/` replaced by `-`) under `keyed`'s token.
+ * @param {string} dir an existing directory
+ * @param {string} token
+ * @param {{ keyed?: string }} [options]
+ * @returns {Array<{ prefix: string, token: string }>}
+ */
+export function directoryRoots(dir, token, { keyed } = {}) {
+	const forms = [...new Set([dir, realpathSync.native(dir)])];
+	return forms.flatMap((form) => [
+		{ prefix: form, token },
+		...(keyed ? [{ prefix: form.replaceAll("/", "-"), token: keyed }] : []),
+	]);
 }
 
 /**
