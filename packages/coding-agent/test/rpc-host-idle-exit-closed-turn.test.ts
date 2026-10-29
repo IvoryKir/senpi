@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { on, once } from "node:events";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { HOST_IDLE_EXIT_MS_ENV } from "../src/modes/rpc/host-lifecycle-policy.ts";
 import { HeldAnthropicModel, JsonlPeer, openedSessionId, type WireRecord } from "./helpers/rpc-generation-support.ts";
 import {
 	endpointScratch,
@@ -41,20 +42,15 @@ async function clockHostWithHeldTurn(label: string, signal: AbortSignal) {
 	const qa = await heldTurnScratch(label);
 	const supervisor = spawn(
 		process.execPath,
-		[
-			"--import",
-			"tsx",
-			join(import.meta.dirname, "fixtures", "rpc-lifecycle-clock.ts"),
-			qa.legacy,
-			qa.agentDir,
-			...hostArgs(),
-		],
+		// Node's built-in TypeScript handling, like `supervisorLaunch`: the host child inherits this
+		// process's exec argv (`runtimeExecArgv`), and a tsx loader there slows every host boot.
+		[join(import.meta.dirname, "fixtures", "rpc-lifecycle-clock.ts"), qa.legacy, qa.agentDir, ...hostArgs()],
 		{
 			env: {
 				...process.env,
 				...hostEnv(qa),
 				SENPI_CODING_AGENT_DIR: qa.agentDir,
-				SENPI_RPC_HOST_IDLE_EXIT_MS: String(IDLE_EXIT_MS),
+				[HOST_IDLE_EXIT_MS_ENV]: String(IDLE_EXIT_MS),
 			},
 			stdio: ["ignore", "ignore", "pipe", "ipc"],
 		},

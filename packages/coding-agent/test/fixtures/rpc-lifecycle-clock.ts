@@ -2,6 +2,7 @@ import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import { mock } from "node:test";
 import { type HostActivity, IdleExitDecider, runHostSupervisor } from "../../src/modes/rpc/host-lifecycle.ts";
+import { HOST_IDLE_EXIT_MS_ENV } from "../../src/modes/rpc/host-lifecycle-policy.ts";
 
 // Drive the real supervisor's clock and timer independently of socket I/O. The
 // child runs in its own process, with the normal clock and transport implementation.
@@ -10,7 +11,7 @@ let tick: (() => void) | undefined;
 let shuttingDown = false;
 let currentActivity: HostActivity | undefined;
 let currentDecision: string | undefined;
-const idleExitMs = Number(process.env.SENPI_RPC_HOST_IDLE_EXIT_MS ?? 800);
+const idleExitMs = Number(process.env[HOST_IDLE_EXIT_MS_ENV] ?? 800);
 mock.method(Date, "now", () => now);
 const setInterval = globalThis.setInterval;
 mock.method(globalThis, "setInterval", (callback: () => void, interval: number) => {
