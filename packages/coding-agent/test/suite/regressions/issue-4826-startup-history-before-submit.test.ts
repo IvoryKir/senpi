@@ -52,7 +52,12 @@ async function startInteractive(extension: ExtensionFactory, history: readonly s
 		});
 		services.settingsManager.applyOverrides({ quietStartup: true });
 		return {
-			...(await createAgentSessionFromServices({ services, sessionManager, sessionStartEvent, model: faux.getModel() })),
+			...(await createAgentSessionFromServices({
+				services,
+				sessionManager,
+				sessionStartEvent,
+				model: faux.getModel(),
+			})),
 			services,
 			diagnostics: services.diagnostics,
 		};
