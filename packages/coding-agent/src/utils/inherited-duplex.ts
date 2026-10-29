@@ -13,7 +13,9 @@ export function inheritedDuplex(fd: number): Duplex | undefined {
 	}
 	const input = createReadStream("", { fd, autoClose: true });
 	const stream = new Duplex({
-		read() { input.resume(); },
+		read() {
+			input.resume();
+		},
 		write(chunk: Buffer, _encoding, done) {
 			if (chunk.length === 0) return done();
 			const send = (offset: number) => {
@@ -34,7 +36,9 @@ export function inheritedDuplex(fd: number): Duplex | undefined {
 			}
 		},
 	});
-	input.on("data", (chunk) => { if (!stream.push(chunk)) input.pause(); });
+	input.on("data", (chunk) => {
+		if (!stream.push(chunk)) input.pause();
+	});
 	input.on("end", () => stream.push(null));
 	input.on("error", (error) => stream.destroy(error));
 	return stream;

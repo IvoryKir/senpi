@@ -22,9 +22,13 @@ function capturedChannels(): Map<string, number> {
 		for (const [name, fd] of entries) {
 			if (
 				!/^[a-z][a-z0-9-]{0,63}$/.test(name) ||
-				typeof fd !== "number" || !Number.isSafeInteger(fd) || fd < 5 || fd > 64 ||
+				typeof fd !== "number" ||
+				!Number.isSafeInteger(fd) ||
+				fd < 5 ||
+				fd > 64 ||
 				descriptors.has(fd)
-			) return channels;
+			)
+				return channels;
 			descriptors.add(fd);
 		}
 		// Validate the entire table before adopting any handle. A missing entry never becomes another fd.

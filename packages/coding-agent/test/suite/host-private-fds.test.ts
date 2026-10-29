@@ -22,13 +22,17 @@ async function exchange(mode: string, table = '{"sample-channel":5}') {
 	let received = "";
 	let stderr = "";
 	let stdout = "";
-	child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+	child.stdout?.on("data", (chunk: Buffer) => {
+		stdout += chunk.toString();
+	});
 	channel.on("data", (chunk: Buffer) => {
 		received += chunk.toString();
 		if (mode === "receiver" && received === "claimed:ping") channel.end();
 	});
 	channel.on("error", () => channel.destroy());
-	child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+	child.stderr?.on("data", (chunk: Buffer) => {
+		stderr += chunk.toString();
+	});
 	channel.write("ping");
 	try {
 		const [code] = await closed;
