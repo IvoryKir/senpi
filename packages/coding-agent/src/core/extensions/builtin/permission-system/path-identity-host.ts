@@ -27,10 +27,7 @@ export {
 	MAX_LEAKED_WORKERS,
 	type ResolverStateEvent,
 } from "./path-identity-breaker.ts";
-export {
-	type ResolverRequestOptions,
-	type ResolverTransport,
-} from "./path-identity-transport.ts";
+export { type ResolverRequestOptions, type ResolverTransport } from "./path-identity-transport.ts";
 
 const DEFAULT_CHECK_DEADLINE_MS = 2000;
 export const RULE_FILL_DEADLINE_MS = 250;
