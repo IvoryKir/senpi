@@ -6,6 +6,15 @@ import * as conformanceExport from "../../src/conformance/index.ts";
 import { buildManifest, type ConformanceManifest, findImplementationGaps } from "../../src/conformance/mapping.ts";
 import { CONFORMANCE_REGISTRY } from "../../src/conformance/registry.ts";
 import { type CaseImplementation, type ConformanceHost, runSuite } from "../../src/conformance/runner.ts";
+import { KILL_STORE_CASES } from "../../src/durable/testing/kill-store.ts";
+import { KILL_WAKE_CASES } from "../../src/durable/testing/kill-wake.ts";
+import { MULTI_HOST_CASES } from "../../src/durable/testing/multi-host-cases.ts";
+import { STORE_CASES } from "../../src/durable/testing/store-cases.ts";
+import { WAKE_CASES } from "../../src/durable/testing/wake-cases.ts";
+import { FAULT_TRANSPORT_CASES } from "../../src/transport/testing/fault-cases.ts";
+import { MULTI_CASES } from "../../src/transport/testing/multi-cases.ts";
+import { TRANSPORT_CASES } from "../../src/transport/testing/transport-cases.ts";
+import type { BunSqliteHostAdapters } from "./hosts/bun-sqlite.ts";
 
 const PACKAGE_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -136,11 +145,24 @@ describe("the ./conformance export", () => {
 	});
 });
 
-type HostFactory = () => Promise<ConformanceHost<unknown>>;
+type HostFactory = () => Promise<ConformanceHost<BunSqliteHostAdapters>>;
 
 // Host adapters register here as they land; a named host that is not registered fails instead of skipping.
-const HOSTS: Readonly<Record<string, HostFactory>> = {};
-const HOST_IMPLEMENTATIONS = new Map<string, CaseImplementation<unknown>>();
+// Documented lazy boundary: a host module loads only when CONFORMANCE_HOST names it, because the bun-sqlite host
+// imports bun:sqlite, which does not exist in the Node runs of this file.
+const HOSTS: Readonly<Record<string, HostFactory>> = {
+	"bun-sqlite": async () => (await import("./hosts/bun-sqlite.ts")).createBunSqliteHost(),
+};
+const HOST_IMPLEMENTATIONS = new Map<string, CaseImplementation<BunSqliteHostAdapters>>([
+	...STORE_CASES,
+	...KILL_STORE_CASES,
+	...WAKE_CASES,
+	...KILL_WAKE_CASES,
+	...MULTI_HOST_CASES,
+	...TRANSPORT_CASES,
+	...MULTI_CASES,
+	...FAULT_TRANSPORT_CASES,
+]);
 
 function resolveHost(name: string, hosts: Readonly<Record<string, HostFactory>>): HostFactory {
 	const factory = hosts[name];
@@ -155,8 +177,8 @@ function resolveHost(name: string, hosts: Readonly<Record<string, HostFactory>>)
 
 describe("the CONFORMANCE_HOST host run", () => {
 	it("fails for a host name with no registered adapter", () => {
-		expect(() => resolveHost("bun-sqlite", HOSTS)).toThrow(
-			'unknown conformance host "bun-sqlite"; registered hosts: (none)',
+		expect(() => resolveHost("no-such-host", HOSTS)).toThrow(
+			'unknown conformance host "no-such-host"; registered hosts: bun-sqlite',
 		);
 	});
 
