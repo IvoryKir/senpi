@@ -3067,7 +3067,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:6>",
       "phase": "update",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se..."
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs pre trace.log"
      },
      {
       "type": "tool_hook_status",
@@ -3078,7 +3078,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:7>",
       "phase": "end",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se...",
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs pre trace.log",
       "completedAt": "<ts:events.completedAt:3>",
       "status": "completed"
      },
@@ -3361,7 +3361,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:27>",
       "phase": "update",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se..."
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs pre trace.log"
      },
      {
       "type": "tool_hook_status",
@@ -3372,7 +3372,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:28>",
       "phase": "end",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se...",
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs pre trace.log",
       "completedAt": "<ts:events.completedAt:13>",
       "status": "completed"
      },
@@ -3614,7 +3614,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:44>",
       "phase": "update",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se..."
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs post trace.log"
      },
      {
       "type": "tool_hook_status",
@@ -3625,7 +3625,7 @@
       "extensionPath": "<builtin:hooks>",
       "startedAt": "<ts:events.startedAt:45>",
       "phase": "end",
-      "statusMessage": "\"/opt/hostedtoolcache/node/24.21.0/x64/bin/node\" \"/home/runner/work/senpi/se...",
+      "statusMessage": ".senpi/eq-node .senpi/eq-hook.mjs post trace.log",
       "completedAt": "<ts:events.completedAt:21>",
       "status": "completed"
      },

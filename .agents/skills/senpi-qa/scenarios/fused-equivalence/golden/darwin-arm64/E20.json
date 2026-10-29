@@ -4199,7 +4199,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "a cell that never finishes",
         "toolCallCount": 0,
@@ -4214,7 +4214,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "queued",
@@ -4248,7 +4248,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "a cell that never finishes",
         "toolCallCount": 0,
@@ -4263,7 +4263,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "running",
@@ -4605,7 +4605,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "a cell that never finishes",
         "toolCallCount": 0,
@@ -4620,7 +4620,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "detached",
@@ -4651,7 +4651,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "a cell that never finishes",
         "toolCallCount": 0,
@@ -4666,7 +4666,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "detached",
@@ -4698,7 +4698,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "a cell that never finishes",
         "toolCallCount": 0,
@@ -4713,7 +4713,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "detached",
@@ -4750,7 +4750,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "a cell that never finishes",
          "toolCallCount": 0,
@@ -4765,7 +4765,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "",
            "status": "detached",
@@ -4842,7 +4842,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "a cell that never finishes",
          "toolCallCount": 0,
@@ -4857,7 +4857,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "",
            "status": "detached",
@@ -5275,7 +5275,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "a cell that never finishes",
          "toolCallCount": 0,
@@ -5290,7 +5290,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "",
            "status": "detached",
@@ -6747,7 +6747,7 @@
        "runtime": {
         "name": "bun",
         "version": "1.4.4",
-        "path": "/Users/yeongyu/.bun/bin/bun"
+        "path": "<host:bun-path>"
        },
        "summary": "a cell that never finishes",
        "toolCallCount": 0,
@@ -6762,7 +6762,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "output": "",
          "status": "detached",

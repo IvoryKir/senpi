@@ -4398,7 +4398,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4413,7 +4413,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "queued",
@@ -4447,7 +4447,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4462,7 +4462,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "",
           "status": "running",
@@ -4496,7 +4496,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4511,7 +4511,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
           "status": "running",
@@ -4853,7 +4853,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4868,7 +4868,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
           "status": "detached",
@@ -4899,7 +4899,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4914,7 +4914,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
           "status": "detached",
@@ -4946,7 +4946,7 @@
         "runtime": {
          "name": "bun",
          "version": "1.4.4",
-         "path": "/Users/yeongyu/.bun/bin/bun"
+         "path": "<host:bun-path>"
         },
         "summary": "G4 detached nested calls",
         "toolCallCount": 0,
@@ -4961,7 +4961,7 @@
           "runtime": {
            "name": "bun",
            "version": "1.4.4",
-           "path": "/Users/yeongyu/.bun/bin/bun"
+           "path": "<host:bun-path>"
           },
           "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
           "status": "detached",
@@ -4998,7 +4998,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "G4 detached nested calls",
          "toolCallCount": 0,
@@ -5013,7 +5013,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
            "status": "detached",
@@ -5090,7 +5090,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "G4 detached nested calls",
          "toolCallCount": 0,
@@ -5105,7 +5105,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
            "status": "detached",
@@ -5523,7 +5523,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "summary": "G4 detached nested calls",
          "toolCallCount": 0,
@@ -5538,7 +5538,7 @@
            "runtime": {
             "name": "bun",
             "version": "1.4.4",
-            "path": "/Users/yeongyu/.bun/bin/bun"
+            "path": "<host:bun-path>"
            },
            "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
            "status": "detached",
@@ -7588,7 +7588,7 @@
        "runtime": {
         "name": "bun",
         "version": "1.4.4",
-        "path": "/Users/yeongyu/.bun/bin/bun"
+        "path": "<host:bun-path>"
        },
        "summary": "G4 detached nested calls",
        "toolCallCount": 0,
@@ -7603,7 +7603,7 @@
          "runtime": {
           "name": "bun",
           "version": "1.4.4",
-          "path": "/Users/yeongyu/.bun/bin/bun"
+          "path": "<host:bun-path>"
          },
          "output": "Note: `handle` shadows a kernel or platform global in your later cells; the kernel and imported libraries keep the original. `delete handle` restores it.\n",
          "status": "detached",
