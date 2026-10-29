@@ -87,6 +87,9 @@ describe("process-group signal detection (senpi#2995)", () => {
 		["# don't run yet\nkill -- -$PG"],
 		["cat <<END-OF\ntext\nEND-OF\nkill -- -$PG"],
 		["echo $((x << y))\nkill -- -5"],
+		// senpi#3019: an escaped ANSI-C quote does not swallow the executable command after it.
+		[String.raw`echo $'it\'s'; kill -- -5`],
+		[String.raw`echo "$(printf %s $'it\'s'; kill -- -5)"`],
 	])("Given %s when scanned then it is a group signal", (command) => {
 		// when / then
 		expect(signalsProcessGroup(command)).toBe(true);
@@ -114,8 +117,23 @@ describe("process-group signal detection (senpi#2995)", () => {
 		// senpi#3019: a quoted delimiter keeps the whole body inert, substitutions included.
 		["cat <<'EOF'\n$(kill -- -5)\nEOF"],
 		['echo "$(case x in x) :;; esac) then kill -- -5"'],
+		[String.raw`echo $'it\'s; kill -- -5'`],
 	])("Given %s when scanned then it is not a group signal", (command) => {
 		// when / then
+		expect(signalsProcessGroup(command)).toBe(false);
+	});
+
+	// senpi#3019: advisory scanning must not exhaust the worker's stack or work on hostile shell text.
+	it.each([
+		["deep quoted substitutions", `echo ${'"$('.repeat(50_000)}printf ok${')"'.repeat(50_000)}`],
+		[
+			"repeated scans within the nesting limit",
+			`echo ${'"$('.repeat(10)}printf ${"x".repeat(20_000)}${')"'.repeat(10)}; kill -- -5`,
+		],
+		["oversized command text", `echo ${"x".repeat(262_144)}; kill -- -5`],
+		["repeated quote-prefix scans", `echo ${"'' ".repeat(20_000)}; kill -- -5`],
+		["unclosed substitutions", `echo "${"$(".repeat(20_000)}`],
+	])("Given %s when scanned then it declines the advisory notice", (_label, command) => {
 		expect(signalsProcessGroup(command)).toBe(false);
 	});
 
