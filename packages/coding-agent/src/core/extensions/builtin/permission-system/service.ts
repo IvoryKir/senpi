@@ -25,7 +25,7 @@ import {
 	type Ruleset,
 } from "./types.ts";
 
-export { type IdentityInput, type KernelCanonical, PATH_PERMISSIONS } from "./identity-decision.ts";
+export type { IdentityInput, KernelCanonical } from "./identity-decision.ts";
 
 type RequestInput = Omit<Request, "id"> & { id?: string };
 

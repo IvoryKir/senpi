@@ -22,7 +22,6 @@ import {
 export {
 	BREAKER_BACKOFF_MAX_MS,
 	BREAKER_BACKOFF_MS,
-	BREAKER_OPEN_AFTER,
 	type BreakerState,
 	LEAK_GRACE_MS,
 	MAX_LEAKED_WORKERS,
@@ -30,13 +29,10 @@ export {
 } from "./path-identity-breaker.ts";
 export {
 	type ResolverRequestOptions,
-	ResolverTimeoutError,
 	type ResolverTransport,
-	ResolverUnavailableError,
-	workerEntryFor,
 } from "./path-identity-transport.ts";
 
-export const DEFAULT_CHECK_DEADLINE_MS = 2000;
+const DEFAULT_CHECK_DEADLINE_MS = 2000;
 export const RULE_FILL_DEADLINE_MS = 250;
 
 /** One derivation for the resolver deadline: three quarters of the slot deadline, capped at 1.5 s. */

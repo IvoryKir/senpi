@@ -30,7 +30,7 @@ export interface DecisionContext {
 /** deny > ask > allow. */
 const RESTRICTIVENESS: Readonly<Record<Rule["action"], number>> = { allow: 0, ask: 1, deny: 2 };
 
-export const unresolvedPattern = (code: string) => `(path could not be resolved: ${code})`;
+const unresolvedPattern = (code: string) => `(path could not be resolved: ${code})`;
 
 export function decideTarget(
 	context: DecisionContext,

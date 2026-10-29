@@ -40,7 +40,7 @@ export function executionPath(value) {
 }
 
 /** The written spelling, the executed spelling, and the kernel-computed canonical form (or why there is none). */
-export function pathIdentityInput(value, executed = requestedPath(executionPath(value))) {
+function pathIdentityInput(value, executed = requestedPath(executionPath(value))) {
 	const requested = requestedPath(value);
 	if (requested === undefined || executed === undefined) return { input: { path: requested }, unsupported: true };
 	const input = { path: requested, executedPath: executed };
