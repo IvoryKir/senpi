@@ -1,12 +1,12 @@
 // senpi#4740 (QX1.win.S03a): under the win32 profile the store opens, commits, recovers and closes with the POSIX
 // results. No Windows host: the profile simulates drive-letter `\` paths, case-insensitive names and EBUSY/EPERM.
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { StoreWrite } from "@earendil-works/pi-agent-core/conformance";
+import { type Win32OpenFileErrorCode, Win32SimFs } from "@earendil-works/pi-agent-core/testing/win32-sim";
 import { afterEach, describe, expect, it } from "vitest";
-import { type BunSqliteMedia, createBunSqliteMedia } from "../src/index.ts";
-import { createWin32SimFileSystem } from "./win32-sim-fs.ts";
+import { type BunSqliteMedia, createBunSqliteMedia, type MediaFileSystem } from "../src/index.ts";
 
 const roots: string[] = [];
 async function scratchRoot(): Promise<string> {
@@ -17,6 +17,21 @@ async function scratchRoot(): Promise<string> {
 afterEach(async () => {
 	for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
+
+/** The store's filesystem seam on P0-03i's shared win32 profile; a held store file is an open file in the profile. */
+function createWin32SimFileSystem(root: string, deleteOpenFileError: Win32OpenFileErrorCode): MediaFileSystem {
+	const sim = new Win32SimFs({ root, deleteOpenFileError });
+	return {
+		join: (...segments) => path.win32.join(...segments),
+		resolve: (target) => sim.resolve(target),
+		mkdir: (target) => sim.mkdir(target),
+		rm: (target) => sim.rm(target),
+		async hold(target) {
+			const file = await sim.open(target);
+			return { close: () => file.close() };
+		},
+	};
+}
 
 const append = (id: string): StoreWrite => ({ op: "append", id, kind: "entry", data: { id } });
 const put = (key: string, data: number): StoreWrite => ({ op: "put", key, data });
@@ -82,6 +97,7 @@ describe("the Bun SQLite store under the win32 profile", () => {
 	it("refuses to delete a medium whose store file is still held open, as Windows does", async () => {
 		const fs = createWin32SimFileSystem(await scratchRoot(), "EBUSY");
 		await fs.mkdir("C:\\Senpi\\M");
+		await writeFile(await fs.resolve("C:\\Senpi\\M\\store.sqlite"), "");
 		const held = await fs.hold("C:\\Senpi\\M\\store.sqlite");
 		await expect(fs.rm("c:\\senpi\\m")).rejects.toMatchObject({ code: "EBUSY" });
 		await held.close();
