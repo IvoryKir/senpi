@@ -297,11 +297,7 @@ export class SocketEventSinkActor {
 						await this.deliver(item);
 						continue;
 					}
-					if ((item.held !== undefined && !item.held()) || item.current?.() === false) {
-						item.onWritten?.();
-						continue;
-					}
-					await this.write(item.line);
+					if ((item.held?.() ?? true) && (item.current?.() ?? true)) await this.write(item.line);
 					item.onWritten?.();
 				}
 			} catch (cause) {
