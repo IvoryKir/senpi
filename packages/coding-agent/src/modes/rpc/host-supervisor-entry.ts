@@ -18,8 +18,9 @@
  * for it: it respawns its host child through the snapshot's `cli.js`, so a prune by a later upgrade
  * must not remove the snapshot while the host child is down between two generations.
  */
-import "../../private-fds.ts";
 import "../../valid-cwd.ts";
+// Second: capture the private descriptor table before anything can spawn (senpi#4749).
+import "../../private-fds.ts";
 import { realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

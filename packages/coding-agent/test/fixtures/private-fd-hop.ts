@@ -42,7 +42,7 @@ if (mode === "engine") {
 	if (mode === "nested") report(0);
 	else {
 		// Before the engine claims anything, a host it starts goes through the same helper as ensure.
-		const nested = spawnWithPrivateFds(process.execPath, [import.meta.filename, "nested"], {
+		const nested = spawnWithPrivateFds(spawn, process.execPath, [import.meta.filename, "nested"], {
 			env: process.env,
 			stdio: ["ignore", "ignore", "inherit"],
 		});

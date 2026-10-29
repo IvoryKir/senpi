@@ -3,7 +3,7 @@
  * argv it parses, and the host child it spawns. Split out of `host-lifecycle.ts`, which keeps the
  * supervisor's orchestration; every name stays re-exported there for existing importers.
  */
-import type { ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { spawnWithPrivateFds } from "../../private-fd-spawn.ts";
 import { Socket } from "node:net";
 import { extname } from "node:path";
@@ -273,6 +273,7 @@ export function spawnHostChild(options: {
 	if (bootstrap) childLaunch.args.push("--mcp-presenter-fd", "4");
 	// Property access also preserves OS-level instrumentation on runtimes with captured builtin exports.
 	const child = spawnWithPrivateFds(
+		(command, args, options) => childProcess.spawn(command, args, options),
 		childLaunch.command,
 		childLaunch.args,
 		{

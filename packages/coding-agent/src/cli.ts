@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import "./private-fds.ts";
 import "./valid-cwd.ts";
+// Second: capture the private descriptor table before anything can spawn (senpi#4749).
+import "./private-fds.ts";
 import "./internal-role.ts";
-import { spawnSync, type StdioOptions } from "node:child_process";
+import { spawn, spawnSync, type StdioOptions } from "node:child_process";
 import { existsSync, fstatSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -160,7 +161,7 @@ async function spawnFullCli(): Promise<number> {
 	releaseInheritedInspectorForChild();
 	const childEnvironment = isBundledNode ? { ...process.env, [ISOLATED_CHILD_ENV]: "1" } : process.env;
 	return await new Promise<number>((resolve, reject) => {
-		const child = spawnWithPrivateFds(process.execPath, [...process.execArgv, fullCliPath, ...args], {
+		const child = spawnWithPrivateFds(spawn, process.execPath, [...process.execArgv, fullCliPath, ...args], {
 			env: childEnvironment,
 			stdio: reexecStdio(),
 		});

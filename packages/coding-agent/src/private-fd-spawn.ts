@@ -1,4 +1,4 @@
-import childProcess, { type ChildProcess, type SpawnOptions, type SpawnSyncOptions } from "node:child_process";
+import type { ChildProcess, SpawnOptions, SpawnSyncOptions } from "node:child_process";
 import { closeSync } from "node:fs";
 import {
 	PRIVATE_FDS_FINAL_ENV,
@@ -50,7 +50,12 @@ export function preparePrivateFdSpawn<T extends SpawnOptions | SpawnSyncOptions>
 	};
 }
 
+/**
+ * Spawns through the caller's own `spawn` reference, so each call site keeps the instrumentation (and test
+ * doubles) it had before descriptors were forwarded.
+ */
 export function spawnWithPrivateFds(
+	spawn: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess,
 	command: string,
 	args: readonly string[],
 	options: SpawnOptions,
@@ -58,7 +63,7 @@ export function spawnWithPrivateFds(
 ): ChildProcess {
 	const transfer = preparePrivateFdSpawn(options, hop);
 	try {
-		return childProcess.spawn(command, args, transfer.options);
+		return spawn(command, args, transfer.options);
 	} finally {
 		transfer.close();
 	}
