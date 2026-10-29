@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
 import { SOURCE_COMPILE_CACHE_ENV } from "../src/experimental/source-compile-cache.ts";
+import setupSourceCompileCache from "./helpers/source-compile-cache-global-setup.ts";
 
 const resolverUrl = new URL("../src/experimental/source-resolver.ts", import.meta.url).href;
 const probePath = fileURLToPath(new URL("./fixtures/source-compile-cache-probe.ts", import.meta.url));
@@ -59,5 +61,35 @@ describe("source process compile cache", () => {
 
 		expect(directory).toBeDefined();
 		await expect(stat(directory ?? "")).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+	});
+});
+
+describe("source compile cache global setup", () => {
+	const inherited = process.env[SOURCE_COMPILE_CACHE_ENV];
+
+	afterEach(() => {
+		if (inherited === undefined) delete process.env[SOURCE_COMPILE_CACHE_ENV];
+		else process.env[SOURCE_COMPILE_CACHE_ENV] = inherited;
+	});
+
+	test("creates one run directory and removes it at teardown", () => {
+		delete process.env[SOURCE_COMPILE_CACHE_ENV];
+
+		const teardown = setupSourceCompileCache();
+		const directory = process.env[SOURCE_COMPILE_CACHE_ENV];
+
+		expect(teardown).toBeTypeOf("function");
+		expect(directory).toBeDefined();
+		expect(existsSync(directory ?? "")).toBe(true);
+		teardown?.();
+		expect(process.env[SOURCE_COMPILE_CACHE_ENV]).toBeUndefined();
+		expect(existsSync(directory ?? "")).toBe(false);
+	});
+
+	test("keeps a directory the caller already named", () => {
+		process.env[SOURCE_COMPILE_CACHE_ENV] = "/caller/chosen/directory";
+
+		expect(setupSourceCompileCache()).toBeUndefined();
+		expect(process.env[SOURCE_COMPILE_CACHE_ENV]).toBe("/caller/chosen/directory");
 	});
 });
