@@ -67,8 +67,16 @@ export function createPermissionRequester(buffer, hooks) {
 				const requested = (generation << 3) | REQUESTED;
 				if (Atomics.compareExchange(control, 0, old, requested) !== old) throw new Error("Permission slot ownership changed");
 				try {
+					const deadline = performance.now() + 2000;
 					hooks.wake(index, generation);
-					(hooks.wait ?? Atomics.wait)(control, 0, requested, 2000);
+					// Claiming the request is not an answer. The host may publish WRITING before
+					// we park (or between our load and wait), making Atomics.wait return not-equal.
+					for (;;) {
+						const pending = Atomics.load(control, 0);
+						if (pending !== requested && pending !== ((generation << 3) | WRITING)) break;
+						const remaining = deadline - performance.now();
+						if (remaining <= 0 || (hooks.wait ?? Atomics.wait)(control, 0, pending, remaining) === "timed-out") break;
+					}
 					const current = Atomics.load(control, 0);
 					if (current === ((generation << 3) | ANSWERED)) {
 						const result = decode(response, control[2]);
