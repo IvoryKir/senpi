@@ -365,6 +365,12 @@ interface WorkingStatusEditor extends EditorComponent {
 	setWorkingStatusIndicator(indicator: StatusIndicator | undefined): void;
 }
 
+/** Copy the default editor's action handlers (clear, suspend, model switching, etc.) onto a custom editor. */
+function adoptDefaultEditorActions(defaultEditor: CustomEditor, editor: EditorComponent): void {
+	if (editor === defaultEditor || !("actionHandlers" in editor) || !(editor.actionHandlers instanceof Map)) return;
+	for (const [action, handler] of defaultEditor.actionHandlers) editor.actionHandlers.set(action, handler);
+}
+
 function isWorkingStatusEditor(editor: EditorComponent): editor is WorkingStatusEditor {
 	return (
 		"embedWorkingStatus" in editor &&
@@ -1805,7 +1811,7 @@ export class InteractiveMode {
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 		this.sessionControlHost?.attachEditor(this.defaultEditor, () => this.composerHold() !== undefined);
-		this.adoptDefaultEditorActions(this.editor);
+		adoptDefaultEditorActions(this.defaultEditor, this.editor);
 		this.ui.requestRender();
 		time("keyHandlers", "tui");
 
@@ -4415,13 +4421,6 @@ export class InteractiveMode {
 		return expandEditorSubmission(this.editor, this.editor.getText());
 	}
 
-	/** Copy the default editor's action handlers (clear, suspend, model switching, etc.) onto a custom editor. */
-	private adoptDefaultEditorActions(editor: EditorComponent): void {
-		if (editor === this.defaultEditor || !("actionHandlers" in editor) || !(editor.actionHandlers instanceof Map))
-			return;
-		for (const [action, handler] of this.defaultEditor.actionHandlers) editor.actionHandlers.set(action, handler);
-	}
-
 	/**
 	 * Set a custom editor component from an extension.
 	 * Pass undefined to restore the default editor.
@@ -4503,7 +4502,7 @@ export class InteractiveMode {
 				if (!customEditor.onExtensionShortcut) {
 					customEditor.onExtensionShortcut = (data: string) => this.defaultEditor.onExtensionShortcut?.(data);
 				}
-				this.adoptDefaultEditorActions(customEditor);
+				adoptDefaultEditorActions(this.defaultEditor, customEditor);
 			}
 
 			this.editor = newEditor;
