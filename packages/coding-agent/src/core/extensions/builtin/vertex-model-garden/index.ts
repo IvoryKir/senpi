@@ -27,7 +27,6 @@ export function registerVertexModelGarden(
 		},
 		models: VERTEX_MODEL_GARDEN_MODELS,
 		streamSimple: (model, context, options) => streamVertexModelGarden(model, context, options, resolveAccess),
-		honorsModelBaseUrl: true,
 		fallbackEligible: () => false,
 	});
 }
