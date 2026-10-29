@@ -41,7 +41,7 @@ function subscriptionRegistration(cwd: string): ProviderConfigInput {
 		},
 		{ get: (target, key) => (key in target ? target[key as keyof typeof target] : () => undefined) },
 	) as unknown as ExtensionAPI;
-	registerAnthropicSubscriptionExtension(pi, { readSettings: () => ({}) });
+	registerAnthropicSubscriptionExtension(pi, { readSettings: () => ({ enabled: true }), readAmbientAuthStatus: async () => true });
 	const registration = registrations[0];
 	if (!registration) throw new Error("anthropic-subscription registered no provider");
 	return registration;
@@ -104,10 +104,13 @@ describe("senpi#4765 anthropic-subscription honors a models.json baseUrl", () =>
 		overrideSdkBoundary({ query: claudeCodeRequesting(spawned) });
 		const modelId = anthropicSubscriptionModels()[0]?.id ?? "";
 
-		await runtime.completeSimple(requireModel(runtime, ANTHROPIC_SUBSCRIPTION_PROVIDER_ID, modelId), {
-			messages: [{ role: "user", content: "hi", timestamp: 0 }],
-		});
+		const reply = await runtime.completeSimple(
+			requireModel(runtime, ANTHROPIC_SUBSCRIPTION_PROVIDER_ID, modelId),
+			{ messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+			{ cwd: directory },
+		);
 
+		expect(reply.errorMessage).toBeUndefined();
 		expect(spawned.map((options) => options.env?.ANTHROPIC_BASE_URL)).toEqual([userBaseUrl]);
 		expect(guard.blocked).toEqual([]);
 		expect(server.requests).toEqual(["/v1/messages"]);
