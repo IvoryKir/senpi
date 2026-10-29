@@ -1,5 +1,6 @@
 import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerBuiltInApiProviders } from "@earendil-works/pi-ai/compat";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	chatDefinition,
 	createRuntime,
@@ -20,6 +21,10 @@ const userContext: Context = { messages: [{ role: "user", content: "hi", timesta
 let server: LoopbackServer;
 let guard: FetchGuard;
 let models: ModelsJsonFile | undefined;
+
+beforeAll(() => {
+	registerBuiltInApiProviders();
+});
 
 beforeEach(async () => {
 	server = await startLoopbackServer();
@@ -45,6 +50,7 @@ describe("senpi#4765 models.json baseUrl routes requests", () => {
 
 		const reply = await runtime.completeSimple(requireModel(runtime, "ext-proxy", "chat-a"), userContext);
 
+		expect(reply.errorMessage).toBeUndefined();
 		expect(guard.blocked).toEqual([]);
 		expect(server.requests).toEqual(["/v1/chat/completions"]);
 		expect(reply.stopReason).toBe("stop");
