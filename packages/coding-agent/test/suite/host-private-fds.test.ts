@@ -28,7 +28,7 @@ async function exchange(mode: string, table = '{"sample-channel":5}') {
 	});
 	channel.on("data", (chunk: Buffer) => {
 		received += chunk.toString();
-		if (mode === "receiver" && received === "claimed:ping") channel.end();
+		if (received === "claimed:ping" || received === "engine-claimed") channel.end();
 	});
 	channel.on("error", () => channel.destroy());
 	child.stderr?.on("data", (chunk: Buffer) => {
@@ -42,6 +42,13 @@ async function exchange(mode: string, table = '{"sample-channel":5}') {
 		channel.destroy();
 		if (child.exitCode === null && child.signalCode === null) child.kill();
 	}
+}
+
+function reports(stderr: string): unknown[] {
+	return stderr
+		.split("\n")
+		.filter((line) => line.startsWith("{"))
+		.map((line): unknown => JSON.parse(line));
 }
 
 // #4749: actual inherited sockets cross the production supervisor spawn, not a mocked spawn table.
@@ -62,8 +69,16 @@ describe("private host descriptors", () => {
 
 	it.skipIf(process.platform === "win32")("claims the named channel only once", async () => {
 		const result = await exchange("receiver");
-		expect(JSON.parse(result.stdout)).toEqual({ available: true, repeated: false });
+		expect(JSON.parse(result.stdout)).toEqual({ available: true, repeated: false, declared: true });
 		expect(result.received).toBe("claimed:ping");
+	});
+
+	it("declares a null entry without adopting any descriptor", async () => {
+		// given a desktop host that declares the channel on a path with no descriptor
+		const result = await exchange("receiver", '{"sample-channel":null}');
+		// then the name is declared, and the open fd 5 is not adopted
+		expect(JSON.parse(result.stdout)).toEqual({ available: false, repeated: false, declared: true });
+		expect(result.received).toBe("");
 	});
 
 	it.each([
@@ -74,10 +89,37 @@ describe("private host descriptors", () => {
 		'{"sample-channel":65}',
 		'{"sample-channel":6}',
 		'{"bad name":5}',
+		'{"sample-channel":"5"}',
+		'{"sample-channel":true}',
+		'{"sample-channel":5,"other":{}}',
 	])("refuses an absent or invalid table %s", async (table) => {
 		const result = await exchange("receiver", table);
-		expect(JSON.parse(result.stdout)).toEqual({ available: false, repeated: false });
+		expect(JSON.parse(result.stdout)).toEqual({ available: false, repeated: false, declared: false });
 		expect(result.received).toBe("");
+	});
+
+	it.skipIf(process.platform === "win32")("forwards a null declaration hop to hop into the engine", async () => {
+		// given a null entry, when the supervisor starts its engine
+		const result = await exchange("supervisor-report", '{"sample-channel":null}');
+		// then the engine sees the declaration without a channel, and its nested host sees neither
+		expect(result.code, result.stderr).toBe(0);
+		expect(reports(result.stderr)).toEqual([
+			{ mode: "nested", declared: false, available: false },
+			{ mode: "engine-report", declared: true, available: false },
+		]);
+		expect(result.received).toBe("");
+	});
+
+	it.skipIf(process.platform === "win32")("ends the chain at the engine: a nested host inherits nothing", async () => {
+		// given the engine received the named duplex
+		const result = await exchange("supervisor-report");
+		// then a host it starts before claiming gets neither the table nor the descriptor; the engine still claims it
+		expect(result.code, result.stderr).toBe(0);
+		expect(reports(result.stderr)).toEqual([
+			{ mode: "nested", declared: false, available: false },
+			{ mode: "engine-report", declared: true, available: true },
+		]);
+		expect(result.received).toBe("engine-claimed");
 	});
 
 	it.runIf(process.platform === "win32")("does not forward unsupported Windows descriptors", async () => {

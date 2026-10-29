@@ -1,31 +1,54 @@
 import childProcess, { type ChildProcess, type SpawnOptions, type SpawnSyncOptions } from "node:child_process";
 import { closeSync } from "node:fs";
-import { takePrivateDescriptors } from "./private-fds.ts";
+import { PRIVATE_FDS_FINAL_ENV, type PrivateFdEntry, takePrivateDescriptors } from "./private-fds.ts";
 
-/** Transfers captured handles only on explicit engine spawns, never via ambient child environments. */
-export function preparePrivateFdSpawn<T extends SpawnOptions | SpawnSyncOptions>(options: T) {
-	const descriptors = takePrivateDescriptors();
+const TABLE_ENV = "SENPI_PRIVATE_FDS";
+
+/**
+ * Transfers the captured table only on explicit engine spawns, never via ambient child environments.
+ * A shell or Windows hop cannot carry a descriptor, so it receives the name as a null declaration.
+ * `final` marks the supervisor-to-engine hop: that engine claims its channels and forwards nothing.
+ */
+export function preparePrivateFdSpawn<T extends SpawnOptions | SpawnSyncOptions>(
+	options: T,
+	hop: { readonly final?: boolean } = {},
+) {
+	const entries = takePrivateDescriptors();
 	const env = { ...(options.env ?? process.env) };
-	delete env.SENPI_PRIVATE_FDS;
+	delete env[TABLE_ENV];
+	delete env[PRIVATE_FDS_FINAL_ENV];
 	const base = options.stdio ?? "pipe";
 	const stdio = typeof base === "string" ? [base, base, base] : [...base];
-	if (!options.shell && descriptors.size > 0) {
-		for (const fd of descriptors.values()) {
-			while (stdio.length <= fd) stdio.push("ignore");
-			stdio[fd] = fd;
+	if (entries.size > 0) {
+		const carries = !options.shell && process.platform !== "win32";
+		const table: Record<string, PrivateFdEntry> = {};
+		for (const [name, fd] of entries) {
+			if (fd !== null && carries) {
+				while (stdio.length <= fd) stdio.push("ignore");
+				stdio[fd] = fd;
+				table[name] = fd;
+			} else {
+				table[name] = null;
+			}
 		}
-		env.SENPI_PRIVATE_FDS = JSON.stringify(Object.fromEntries(descriptors));
+		env[TABLE_ENV] = JSON.stringify(table);
+		if (hop.final) env[PRIVATE_FDS_FINAL_ENV] = "1";
 	}
 	return {
 		options: { ...options, env, stdio },
 		close() {
-			for (const fd of descriptors.values()) closeSync(fd);
+			for (const fd of entries.values()) if (fd !== null) closeSync(fd);
 		},
 	};
 }
 
-export function spawnWithPrivateFds(command: string, args: readonly string[], options: SpawnOptions): ChildProcess {
-	const transfer = preparePrivateFdSpawn(options);
+export function spawnWithPrivateFds(
+	command: string,
+	args: readonly string[],
+	options: SpawnOptions,
+	hop: { readonly final?: boolean } = {},
+): ChildProcess {
+	const transfer = preparePrivateFdSpawn(options, hop);
 	try {
 		return childProcess.spawn(command, args, transfer.options);
 	} finally {

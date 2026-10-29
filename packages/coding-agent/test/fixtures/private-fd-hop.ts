@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { closeSync, createReadStream, writeSync } from "node:fs";
 import { spawnHostChild } from "../../src/modes/rpc/host-lifecycle-launch.ts";
-import { takeInheritedPrivateChannel } from "../../src/private-fds.ts";
+import { spawnWithPrivateFds } from "../../src/private-fd-spawn.ts";
+import { privateChannelDeclared, takeInheritedPrivateChannel } from "../../src/private-fds.ts";
 
 const mode = process.argv[2];
 
@@ -16,22 +17,41 @@ if (mode === "engine") {
 	} catch {
 		process.exit(2);
 	}
+} else if (mode === "engine-report" || mode === "nested") {
+	// Exit only after the claimed channel's write has flushed.
+	const report = (code: number) => {
+		const stream = takeInheritedPrivateChannel("sample-channel");
+		const seen = { mode, declared: privateChannelDeclared("sample-channel"), available: stream !== undefined };
+		writeSync(2, `${JSON.stringify(seen)}\n`);
+		if (stream) stream.end("engine-claimed", () => process.exit(code));
+		else process.exit(code);
+	};
+	if (mode === "nested") report(0);
+	else {
+		// Before the engine claims anything, a host it starts goes through the same helper as ensure.
+		const nested = spawnWithPrivateFds(process.execPath, [import.meta.filename, "nested"], {
+			env: process.env,
+			stdio: ["ignore", "ignore", "inherit"],
+		});
+		nested.once("exit", (code) => report(code ?? 3));
+	}
 } else if (mode === "receiver") {
 	const stream = takeInheritedPrivateChannel("sample-channel");
 	const again = takeInheritedPrivateChannel("sample-channel");
-	writeSync(1, JSON.stringify({ available: stream !== undefined, repeated: again !== undefined }));
+	const declared = privateChannelDeclared("sample-channel");
+	writeSync(1, JSON.stringify({ available: stream !== undefined, repeated: again !== undefined, declared }));
 	if (stream) {
 		stream.once("data", (chunk) => {
 			stream.end(`claimed:${chunk.toString()}`, () => stream.destroy());
 		});
 	}
-} else if (mode === "supervisor") {
+} else if (mode === "supervisor" || mode === "supervisor-report") {
 	const child = spawnHostChild({
 		launch: {
 			socket: "fixture",
 			hostArgs: [],
 			childCommand: process.execPath,
-			childArgs: [import.meta.filename, "engine"],
+			childArgs: [import.meta.filename, mode === "supervisor" ? "engine" : "engine-report"],
 		},
 		internalSocket: "fixture",
 		internal: { secretPath: "unused" },
