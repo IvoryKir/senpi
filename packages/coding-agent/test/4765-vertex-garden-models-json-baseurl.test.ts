@@ -7,7 +7,12 @@ import {
 import type { ResolveVertexAccess } from "../src/core/extensions/builtin/vertex-model-garden/transport.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import type { ProviderConfigInput } from "../src/core/provider-composer.ts";
-import { createRuntime, type ModelsJsonFile, modelsJsonFile, requireModel } from "./support/baseurl-override-fixture.ts";
+import {
+	createRuntime,
+	type ModelsJsonFile,
+	modelsJsonFile,
+	requireModel,
+} from "./support/baseurl-override-fixture.ts";
 import { createGoogleAdcFixture } from "./support/google-adc-fixture.ts";
 import {
 	type FetchGuard,
