@@ -1,5 +1,6 @@
 import { serializeJsonLine } from "./jsonl.ts";
 import { type FrozenFrames, FrozenFramesCursor, type LegacyViewCursor } from "./legacy-view-cursor.ts";
+import { observeLifecycleDelivery } from "./lifecycle-delivery.ts";
 import { carriesMedia, omitNormalInlineMedia } from "./media-placeholders.ts";
 import type { ResyncCut, ResyncReason, RpcSessionResyncRequired } from "./socket-peer-recovery.ts";
 
@@ -154,7 +155,8 @@ export class LegacyReplayStore {
 		const frames: FrozenFrames = {
 			count: head + length + questions.length,
 			frame: (index) => {
-				if (lifecycle !== undefined && index === 0) return variant(lifecycle);
+				if (lifecycle !== undefined && index === 0)
+					return serializeJsonLine(observeLifecycleDelivery(JSON.parse(lifecycle.line)));
 				const at = index - head;
 				if (at < length) return variant(records[at]);
 				return questions[at - length];

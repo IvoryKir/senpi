@@ -1,5 +1,6 @@
 import { compactUpdatesEnabled } from "../../core/engine-socket-flag.ts";
 import { MEDIA_PLACEHOLDERS_CAPABILITY } from "./custom-capability.ts";
+import { ExtensionTransportOwner } from "./extension-owner.ts";
 import { LegacyReplayStore } from "./legacy-replay-store.ts";
 import type { FrozenAcceptedRoot, SessionAcceptanceLane } from "./session-acceptance-lane.ts";
 import { type ShedMode, SocketEventSinkActor } from "./socket-event-fanout.ts";
@@ -32,6 +33,7 @@ const BROADCAST_LIFECYCLE_RECORDS = new Set([
 type RegisteredConnection = {
 	readonly connection: SessionEventWriterConnection;
 	readonly actor: SocketEventSinkActor;
+	readonly owner: ExtensionTransportOwner;
 };
 
 /** A lane root pinned for one frozen view, released once on that view's end (R3.C1.5). */
@@ -57,10 +59,13 @@ export class SessionEventFanout {
 		connection: SessionEventWriterConnection,
 		options: { readonly maxQueueBytes?: number; readonly stallMs?: number } = {},
 	): void {
+		this.unregisterConnection(id);
+		const owner = new ExtensionTransportOwner();
 		const actor = new SocketEventSinkActor(
 			connection,
 			(cause) => {
 				if (this.connections.get(id)?.actor === actor) {
+					owner.retire();
 					this.connections.delete(id);
 					this.connectionCapabilities.delete(id);
 					this.connectionSessions.delete(id);
@@ -76,7 +81,7 @@ export class SessionEventFanout {
 			options.stallMs,
 			this.shedMode,
 		);
-		this.connections.set(id, { connection, actor });
+		this.connections.set(id, { connection, actor, owner });
 		this.connectionCapabilities.set(id, new Set());
 		this.connectionSessions.set(id, new Map());
 	}
@@ -84,6 +89,7 @@ export class SessionEventFanout {
 	unregisterConnection(id: string): void {
 		const registered = this.connections.get(id);
 		if (!registered) return;
+		registered.owner.retire();
 		registered.actor.close();
 		this.connections.delete(id);
 		this.connectionCapabilities.delete(id);

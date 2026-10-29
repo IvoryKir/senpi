@@ -124,11 +124,12 @@ export class SocketEventSinkActor {
 		demotedLine?: string,
 		reply = false,
 		held?: () => boolean,
+		current?: () => boolean,
 	): void {
 		if (this.closed) return;
 		const bytes = Buffer.byteLength(line);
 		if (this.shed.dropsRecords) {
-			if (reply) this.admitReply({ line, bytes, onWritten, reply });
+			if (reply) this.admitReply({ line, bytes, onWritten, reply, current });
 			else onWritten?.();
 			return;
 		}
@@ -138,7 +139,7 @@ export class SocketEventSinkActor {
 				if (this.shed.isPending) this.shed.supersede();
 				else this.cut("overflow");
 				// The cut covers this record; only a reply still needs its own place.
-				if (reply) this.admitReply({ line, bytes, onWritten, reply });
+				if (reply) this.admitReply({ line, bytes, onWritten, reply, current });
 				else onWritten?.();
 				void this.drain();
 				return;
@@ -154,6 +155,7 @@ export class SocketEventSinkActor {
 			onWritten,
 			reply,
 			held: this.shed.isPending ? held : undefined,
+			current,
 		});
 		void this.drain();
 	}
@@ -295,7 +297,7 @@ export class SocketEventSinkActor {
 						await this.deliver(item);
 						continue;
 					}
-					if (item.held !== undefined && !item.held()) {
+					if ((item.held !== undefined && !item.held()) || item.current?.() === false) {
 						item.onWritten?.();
 						continue;
 					}
