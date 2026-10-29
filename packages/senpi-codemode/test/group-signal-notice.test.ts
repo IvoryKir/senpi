@@ -126,15 +126,25 @@ describe("process-group signal detection (senpi#2995)", () => {
 	// senpi#3019: advisory scanning must not exhaust the worker's stack or work on hostile shell text.
 	it.each([
 		["deep quoted substitutions", `echo ${'"$('.repeat(50_000)}printf ok${')"'.repeat(50_000)}`],
+		["unclosed substitutions", `echo "${"$(".repeat(20_000)}`],
+	])("Given %s when scanned then it declines the advisory notice", (_label, command) => {
+		expect(signalsProcessGroup(command)).toBe(false);
+	});
+
+	// senpi#3019 review: bounded masking must not hide a group signal that the raw command still identifies.
+	it.each([
 		[
 			"repeated scans within the nesting limit",
 			`echo ${'"$('.repeat(10)}printf ${"x".repeat(20_000)}${')"'.repeat(10)}; kill -- -5`,
 		],
 		["oversized command text", `echo ${"x".repeat(262_144)}; kill -- -5`],
 		["repeated quote-prefix scans", `echo ${"'' ".repeat(20_000)}; kill -- -5`],
-		["unclosed substitutions", `echo "${"$(".repeat(20_000)}`],
-	])("Given %s when scanned then it declines the advisory notice", (_label, command) => {
-		expect(signalsProcessGroup(command)).toBe(false);
+		["long unquoted heredoc", `cat <<EOF\n${"x".repeat(150_000)}\nEOF\nkill -- -$PG`],
+		["seventy quoted substitutions", `printf %s ${'"$(printf %s '.repeat(70)}ok${')"'.repeat(70)}; kill -- -$PG`],
+		["oversized pgroup pkill", `echo ${"x".repeat(262_144)}; pkill -g 5 sleep`],
+		["oversized killall", `echo ${"x".repeat(262_144)}; killall bun`],
+	])("Given %s when scanned then it keeps the group-signal notice", (_label, command) => {
+		expect(signalsProcessGroup(command)).toBe(true);
 	});
 
 	it("Given no readable process group when the notice is built then it still carries its tag", () => {

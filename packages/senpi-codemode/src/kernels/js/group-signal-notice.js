@@ -296,15 +296,16 @@ function blankQuotedText(text, scan, nesting) {
 export const GROUP_SIGNAL_NOTICE_TAG = "[senpi:group-signal]";
 
 export function signalsProcessGroup(commandText) {
-	// The notice is advisory: oversized, deeply nested or repeatedly scanned input must not stall or fail a cell.
-	if (commandText.length > MAX_SCAN_WORK) return false;
-	try {
-		const text = blankQuotedText(commandText, { remaining: MAX_SCAN_WORK }, 0);
-		return KILL_GROUP.test(text) || PKILL_GROUP.test(text) || KILLALL.test(text);
-	} catch (error) {
-		if (error === SCAN_LIMIT) return false;
-		throw error;
+	// Bound quote masking, but keep a conservative raw-text notice when the scan cannot finish.
+	let text = commandText;
+	if (commandText.length <= MAX_SCAN_WORK) {
+		try {
+			text = blankQuotedText(commandText, { remaining: MAX_SCAN_WORK }, 0);
+		} catch (error) {
+			if (error !== SCAN_LIMIT) throw error;
+		}
 	}
+	return KILL_GROUP.test(text) || PKILL_GROUP.test(text) || KILLALL.test(text);
 }
 
 export function groupSignalNotice(api, readGroup = agentProcessGroup) {
