@@ -35,16 +35,11 @@ const fileContent = (bytes) => {
 };
 const sha = (value) => `sha256:${createHash("sha256").update(value).digest("hex").slice(0, 16)}`;
 /**
- * The session's lifecycle tracker writes its snapshots (`session-lifecycle`) and work-custody records, and the host
- * announces loaded-surface changes (an MCP server connecting), on their own schedule beside the turn's events: where
- * one lands between two turn events is a race (a background delivery or a connect settles a millisecond earlier or
- * later). O6 and O7 keep each channel (lifecycle, surfaces) in its own ordered list, so its sequence is still compared
- * in full while its interleave with the turn and with the other channel is not.
+ * The MCP inventory announcement is emitted on the extension's own schedule: in E11 (darwin-arm64, today's code) it
+ * landed before the startup `pi-websearch` status events in one run and after them in another, and with the servers
+ * connected one at a time through `/mcp reconnect` it landed before or after that command's own notice and
+ * `command_invocation`. No case input orders it, so this one type is compared as its own list.
  */
-const LIFECYCLE_CUSTOM_TYPES = new Set(["session-lifecycle", "work-custody"]);
-const isLifecycleEntry = (entry) => entry?.type === "custom" && LIFECYCLE_CUSTOM_TYPES.has(entry.customType);
-const isLifecycleEvent = (event) =>
-	event.type === "session_lifecycle" || (event.type === "entry_appended" && isLifecycleEntry(event.entry));
 const isSurfacesEvent = (event) => event.type === "loaded_surfaces_changed";
 /**
  * A multi-session host's event-loop watchdog reports a stall when the machine is loaded (`host_stalled` with its drift):
@@ -76,13 +71,13 @@ export const collectors = {
 			),
 		),
 	O5: (run) => ({ calls: effectCalls(run), tree: sandboxTree(run.box.cwd), extra: run.effects }),
+	// One interleaved stream per client, as a TUI or desktop client receives it. The one exception is the event type whose
+	// position was measured to differ between runs of the same code: `loaded_surfaces_changed` (see isSurfacesEvent). It
+	// keeps its own ordered list, compared in full; only its position among the other events is not compared.
 	O6: (run) =>
-		run.clients.map((client) => ({
-			turn: client.events.filter(
-				(event) => !isLifecycleEvent(event) && !isSurfacesEvent(event) && !isHostHealthEvent(event),
-			),
-			lifecycle: client.events.filter(isLifecycleEvent),
-			surfaces: client.events.filter(isSurfacesEvent),
+		run.clients.map((client, index) => ({
+			events: client.events.filter((event) => !isHostHealthEvent(event) && !isSurfacesEvent(event)),
+			surfaces: surfacesChannel(client, run.surfacesSettled?.client === index ? run.surfacesSettled : undefined),
 		})),
 	O7: (run) => {
 		const entries =
@@ -91,12 +86,30 @@ export const collectors = {
 			nonEmpty: entries.length > 0,
 			count: entries.length,
 			durableIdStable: run.sessionIds.length > 0 && run.sessionIds.every((id) => id === run.sessionIds[0]),
-			entries: entries.filter((entry) => !isLifecycleEntry(entry)),
-			lifecycleEntries: entries.filter(isLifecycleEntry),
+			entries,
 		};
 	},
 	O8: (run) => ({ headless: run.states }),
 };
+
+/**
+ * O6 surfaces list. Without a settle barrier: every `loaded_surfaces_changed` in order. With one (E11, whose two eager
+ * MCP servers connect in parallel): how many inventory snapshots the serialized wire-status captures happen to see while
+ * the servers connect is a race in today's code (each connect state change, each tool registration and each
+ * `get_loaded_surfaces` captures one, and an event fires only when the digest differs), so the events before the barrier
+ * are not compared. What is compared exactly: the settled inventory the case read at the barrier, every surfaces event
+ * after it, and the inventory read again after the last turn (a change after the barrier shows in `final` even if its
+ * event shared a stdout chunk with the barrier's response).
+ */
+function surfacesChannel(client, settled) {
+	const surfaces = client.events.filter(isSurfacesEvent);
+	if (!settled) return surfaces;
+	return {
+		settled: settled.mcpServers,
+		after: surfaces.filter((event) => client.events.indexOf(event) >= settled.at),
+		final: settled.final,
+	};
+}
 
 /**
  * O5 calls: every dispatched tool call in dispatch (start) order, with the target it named, the machine it ran on and
