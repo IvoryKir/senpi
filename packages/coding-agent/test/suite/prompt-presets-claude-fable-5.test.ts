@@ -29,7 +29,7 @@ function hasFable5CatalogSignal(model: Model<Api>): boolean {
 }
 
 function getFable5CatalogModels(): Model<Api>[] {
-	return getProviders().flatMap((provider) => (getModels(provider) as Model<Api>[]).filter(hasFable5CatalogSignal));
+	return getProviders().flatMap((provider) => getModels(provider).filter(hasFable5CatalogSignal));
 }
 
 describe("Claude Fable 5 prompt preset", () => {
