@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { type AssistantMessage, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { agentLoop } from "../src/agent-loop.ts";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "../src/types.ts";
 
@@ -12,8 +12,8 @@ import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "..
  * is still cut at the bound, and keep-alives alone are bounded by their own budget.
  */
 
-const SILENCE_BOUND_MS = 300;
-const KEEP_ALIVE_EVERY_MS = 30;
+const SILENCE_BOUND_MS = 2000;
+const KEEP_ALIVE_EVERY_MS = 100;
 const FIRST_TOKEN_AFTER_MS = SILENCE_BOUND_MS * 3;
 
 type KeepAlive = "ping-event" | "comment";
@@ -65,6 +65,7 @@ const ANSWER_TAIL_FRAMES = [
 ].join("");
 
 type Behavior =
+	| { kind: "answer-now" }
 	| { kind: "keep-alive-then-answer"; keepAlive: KeepAlive }
 	| { kind: "answer-paused-by-keep-alives" }
 	| { kind: "keep-alive-forever" }
@@ -85,6 +86,10 @@ async function startProvider(behavior: Behavior): Promise<string> {
 		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 		response.flushHeaders();
 		if (behavior.kind === "silent") return;
+		if (behavior.kind === "answer-now") {
+			response.end(ANSWER_HEAD_FRAMES + ANSWER_TAIL_FRAMES);
+			return;
+		}
 		if (behavior.kind === "answer-paused-by-keep-alives") response.write(ANSWER_HEAD_FRAMES);
 		const frame = KEEP_ALIVE_FRAMES[behavior.kind === "keep-alive-then-answer" ? behavior.keepAlive : "ping-event"];
 		const keepAlive = setInterval(() => response.write(frame), KEEP_ALIVE_EVERY_MS);
@@ -159,6 +164,13 @@ async function runTurn(config: AgentLoopConfig): Promise<AssistantMessage> {
 }
 
 describe("agent loop: transport keep-alives before the first token (senpi#4608)", () => {
+	beforeAll(async () => {
+		const warm = await runTurn(
+			createConfig(await startProvider({ kind: "answer-now" }), { streamStartTimeoutMs: 0 }),
+		);
+		expect(warm.stopReason).toBe("stop");
+	});
+
 	it.each<KeepAlive>(["ping-event", "comment"])(
 		"does not kill a request whose first token arrives after the silence bound while %s keep-alives flow",
 		async (keepAlive) => {
