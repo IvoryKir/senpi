@@ -5134,6 +5134,12 @@ Emitted when an extension calls `pi.rpc.emit(name, data)` and the client adverti
 the specific event name before applying it. In multi-session mode the record also includes the
 routing `sessionId`; delivery preserves the owning session and per-session event order.
 
+Events are not replayed: a client receives those emitted after it starts receiving extension events
+(by its handshake capabilities or a `set_client_info` that declares `extension_events`). At that
+moment Senpi emits `senpi:extension-rpc-subscribed` (no data) on the in-process `pi.events` bus, so an
+extension that keeps a state snapshot can send it once instead of waiting for its next change; other
+subscribed clients may then receive the same snapshot again.
+
 The terminal builtin emits `terminal_monitor_state` on this path whenever the active monitor set
 changes. `data` is `{ activeCount, monitors }`, where each monitor entry has `id`, `description`,
 `paused`, and `startedAtMs`. The matching in-process `pi.events` channel is unchanged and is not
@@ -5164,7 +5170,9 @@ The `job-widgets` builtin emits `job_widget_state` on the same path: live, displ
 session's long background jobs (bash sessions started with `run_in_background` or auto-detached, and jobs a
 host registers, such as background tasks). Clients receive it only when they advertise `extension_events`;
 the in-process `pi.events` channel carries the same payload. It is sent at most once per second per session
-and only when what a client draws changed, so a timestamp moving alone sends nothing. `jobWidgets.enabled:
+and only when what a client draws changed, so a timestamp moving alone sends nothing. A client that starts
+receiving extension events gets the session's current state once (within a second) when some job is shown,
+so a frozen `done` widget reaches a late client too. `jobWidgets.enabled:
 false` ([settings](settings.md#job-widgets)) turns it off.
 
 `data` is `{ v: 1, sessionId, jobs }`. Each job has `id` (`bash_N` or a task id), `kind` (`bash` or `task`),
