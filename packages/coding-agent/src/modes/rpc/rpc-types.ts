@@ -1,5 +1,7 @@
 /** Public RPC protocol surface. Definitions are grouped by responsibility. */
 
+export type { RpcSnapshot, RpcSnapshotMarker, RpcUiRequestEvent } from "./snapshot-types.ts";
+
 export type { SessionContext, SessionKind } from "../../core/extensions/types.ts";
 export type { RpcCommandInvocationEvent } from "./rpc-command-invocation.ts";
 export type { RpcCommandsChangedEvent, RpcSlashCommand } from "./rpc-command-surface.ts";
@@ -29,6 +31,7 @@ export {
 	RPC_ERROR_INVALID_PATH,
 	RPC_ERROR_INVALID_RELEASE_REASON,
 	RPC_ERROR_INVALID_SESSION_CONTEXT,
+	RPC_ERROR_INVALID_SESSION_ENV,
 	RPC_ERROR_INVALID_SESSION_ID,
 	RPC_ERROR_INVALID_SESSION_KIND,
 	RPC_ERROR_INVALID_SUBSCRIPTION,

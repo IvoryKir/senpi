@@ -17,9 +17,11 @@ import {
 	CONTINUE_FROM_LEAF_CAPABILITY,
 	DETACH_CONNECTION_CAPABILITY,
 	DURABLE_SESSION_ID_CAPABILITY,
+	ENTRIES_TAIL_CAPABILITY,
 	EVAL_CELLS_CAPABILITY,
 	MEDIA_PLACEHOLDERS_CAPABILITY,
 	MOVED_PATH_GUARD_CAPABILITY,
+	OBSERVE_READS_CAPABILITY,
 	PROMPT_SURFACE_CAPABILITY,
 	PROMPT_SURFACE_CHAT_CAPABILITY,
 	QUEUED_MESSAGE_REVISION_CAPABILITY,
@@ -27,6 +29,7 @@ import {
 	RETAIN_ON_DISCONNECT_CAPABILITY,
 	RETRY_FALLBACK_PROFILE_CAPABILITY,
 	SESSION_CONTEXT_CAPABILITY,
+	SESSION_ENV_CAPABILITY,
 	SESSION_HELD_CAPABILITY,
 	SESSION_KIND_CAPABILITY,
 	SESSION_RELOCATION_CAPABILITY,
@@ -61,6 +64,9 @@ export function multiSessionHostCapabilities(options: {
 	return [
 		...new Set([
 			"multi_session",
+			"snapshot_cursor",
+			"ui_answer_ledger",
+			"dialog_observer",
 			...(options.mcpPresenters ? ["mcp_form_presenter_v1"] : []),
 			"session_lifecycle",
 			"expected_host_instance",
@@ -85,6 +91,9 @@ export function multiSessionHostCapabilities(options: {
 			SESSION_HELD_CAPABILITY,
 			RESUME_SESSION_CAPABILITY,
 			ATTENDED_CAPABILITY,
+			// `get_state`/`get_entries` marked `observe` never attach, and history reads page backward too (senpi#4267).
+			OBSERVE_READS_CAPABILITY,
+			ENTRIES_TAIL_CAPABILITY,
 			// Host capabilities, not client opt-ins: only a multi-session host owns the
 			// attachment refcount `open_session.retain_on_disconnect` detaches from, the
 			// per-session launch profile `context`/`auto_title` travel on, and the session
@@ -114,6 +123,8 @@ export function multiSessionHostCapabilities(options: {
 			PROMPT_SURFACE_CHAT_CAPABILITY,
 			// Each session's tool subprocesses and eval kernel get its own OMO_BROWSER_ENGINE from its launch profile.
 			BROWSER_ENGINE_CAPABILITY,
+			// Each session's caller env lives on its own launch profile; the host process never holds it (senpi#4381).
+			SESSION_ENV_CAPABILITY,
 			// Each session's fallback chain is its own in-memory settings override, never the host's file.
 			RETRY_FALLBACK_PROFILE_CAPABILITY,
 			ACCEPT_EDITS_PERMISSION_PRESET_CAPABILITY,
