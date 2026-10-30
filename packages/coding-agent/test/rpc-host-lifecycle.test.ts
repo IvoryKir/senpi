@@ -678,7 +678,9 @@ function supervisorGone(supervisor: ChildProcess, type: string): Error {
 function clockSupervisor(qa: Scratch): { supervisor: ChildProcess; exited: Promise<unknown[]> } {
 	const supervisor = spawn(
 		process.execPath,
-		["--import", "tsx", join(import.meta.dirname, "fixtures", "rpc-lifecycle-clock.ts"), qa.socket, qa.agentDir],
+		// The real host child inherits exec argv. Use Node's built-in TypeScript handling,
+		// as in rpc-host-idle-exit-closed-turn, rather than paying for tsx at every cold start.
+		[join(import.meta.dirname, "fixtures", "rpc-lifecycle-clock.ts"), qa.socket, qa.agentDir],
 		{
 			env: {
 				...hostSpawnEnv(),
