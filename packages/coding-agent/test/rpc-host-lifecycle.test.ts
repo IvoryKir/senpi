@@ -400,8 +400,6 @@ describe("ensureHost-spawned host lifecycle", () => {
 		const supervisor = spawn(
 			process.execPath,
 			[
-				"--import",
-				"tsx",
 				hostLifecycleEntry(),
 				"--socket",
 				qa.socket,
