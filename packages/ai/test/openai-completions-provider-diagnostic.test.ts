@@ -98,7 +98,11 @@ describe("openai-completions providerDiagnostic", () => {
 
 	it("still ignores a coarse type bucket when the code is missing", async () => {
 		const result = await run(httpError(429, { message: "slow down", type: "invalid_request_error" }));
-		expect(result.providerDiagnostic).toEqual({ category: "unknown", httpStatus: 429, evidence: "structured_status" });
+		expect(result.providerDiagnostic).toEqual({
+			category: "unknown",
+			httpStatus: 429,
+			evidence: "structured_status",
+		});
 	});
 
 	it("omits the diagnostic when a quota type contradicts the status", async () => {

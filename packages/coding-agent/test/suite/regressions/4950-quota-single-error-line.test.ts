@@ -83,7 +83,9 @@ describe("one error line per provider failure (senpi#4950)", () => {
 	});
 
 	it("still shows the reason and action once when the row had no classified text", async () => {
-		const ended = await agentEndOf(failedTurn("boom", { category: "unknown", httpStatus: 418, evidence: "structured_status" }));
+		const ended = await agentEndOf(
+			failedTurn("boom", { category: "unknown", httpStatus: 418, evidence: "structured_status" }),
+		);
 		const lines = await errorLinesAtAgentEnd(ended);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain("Action:");

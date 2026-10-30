@@ -70,7 +70,10 @@ export function anthropicProviderDiagnosticFromSseData(data: string): ProviderDi
  * `error.type` values an OpenAI-compatible server uses for exactly one failure, so they stand in for a
  * missing `error.code` (senpi#4950). Coarse buckets such as `invalid_request_error` never do.
  */
-const OPENAI_COMPATIBLE_PRECISE_TYPES: ReadonlySet<string> = new Set(["exceeded_current_quota_error", "insufficient_quota"]);
+const OPENAI_COMPATIBLE_PRECISE_TYPES: ReadonlySet<string> = new Set([
+	"exceeded_current_quota_error",
+	"insufficient_quota",
+]);
 
 /**
  * OpenAI SDK `APIError` (HTTP rejection or in-stream error chunk): reads
