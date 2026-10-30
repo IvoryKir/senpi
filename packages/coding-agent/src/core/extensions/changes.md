@@ -1,3 +1,67 @@
+## 2026-10-26 - Bound provider actions receive the registering extension's path (senpi#4334, fixes #4328)
+
+### What changed
+
+- `packages/coding-agent/src/core/extensions/runner.ts`: `bindCore`'s `providerActions.registerProvider` and
+  `registerNativeProvider` take an optional third/second `extensionPath`; the pre-bind queue flush and the
+  post-bind `runtime.registerProvider`/`registerNativeProvider` pass it through. The public `pi.registerProvider`
+  API is unchanged.
+
+### Why
+
+- The model runtime reports which extension defined a provider (`get_auth_providers` `origin.extensionPath`), and
+  only the runner knows the registering extension.
+
+### Why an extension could not handle it
+
+- The registering extension's path is host-side bookkeeping the runner owns; an extension cannot report it for
+  another extension's registration.
+
+### Expected merge conflict zones
+
+- LOW: the `providerActions` parameter type of `bindCore`, the pending-registration flush loop and the post-bind
+  `runtime.registerProvider`/`registerNativeProvider` assignments.
+
+## 2026-10-26 - ambientAuth resolve input can read stored provider env (senpi#4339)
+
+### What changed
+
+- `packages/coding-agent/src/core/extensions/types.ts`: the extension-facing `ProviderConfig.ambientAuth.resolve` input gains optional `storedProviderEnv(providerId)` — a read-only env-only view of another provider's stored credential (routing metadata only, never keys).
+
+### Why
+
+- `packages/coding-agent/src/core/extensions/types.ts`: ambient lanes that share a cloud credential chain (vertex-garden over google-vertex ADC) need the sibling profile's project; `AuthContext` alone cannot express that read.
+
+### Why an extension could not handle it
+
+- `packages/coding-agent/src/core/extensions/types.ts`: the input is part of the public provider contract dispatched by the runner; an extension cannot widen its own resolve input.
+
+### Expected merge conflict zones
+
+- LOW: the `ambientAuth` block inside `ProviderConfig`.
+
+## 2026-10-25 - Ephemeral terminal dialogs for private MCP forms (#4207)
+
+### What changed
+
+- `packages/coding-agent/src/core/extensions/types.ts`: add an optional ephemeral-dialog flag forwarded to the real in-process terminal dialog adapter; private forms produce no generic blocked event or pending marker.
+- `packages/coding-agent/src/core/extensions/runner.ts`: carry an existing host-issued MCP presenter onto the session UI wrapper while retaining its raw UI and lifetime signal.
+
+### Why
+
+- `packages/coding-agent/src/core/extensions/types.ts`: form labels, drafts, identifiers, and interaction state must stay outside generic host-status and persistence surfaces.
+- `packages/coding-agent/src/core/extensions/runner.ts`: extensions see a wrapped UI object, so presenter identity must survive that wrapper without sending private forms through titled prompt events.
+
+### Why an extension could not handle it
+
+- `packages/coding-agent/src/core/extensions/types.ts`: the terminal host owns dialog publication and presentation lifetime, so an extension cannot independently suppress those side effects.
+- `packages/coding-agent/src/core/extensions/runner.ts`: the runner creates the UI wrapper and owns ordinary prompt-event publication; the binding cannot recover raw host identity from a serialized or arbitrary UI object.
+
+### Expected merge conflict zones
+
+- `packages/coding-agent/src/core/extensions/types.ts`: `ExtensionUIDialogOptions` and terminal-only option forwarding; legacy RPC forms keep their existing channel.
+- `packages/coding-agent/src/core/extensions/runner.ts`: `wrapUIPromptContext` and host presenter inheritance.
+
 ## 2026-10-24 - Before-prompt custom message placement (senpi#4166)
 
 ### What changed
