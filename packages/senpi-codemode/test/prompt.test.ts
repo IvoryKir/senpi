@@ -85,6 +85,13 @@ describe("buildEvalPrompt", () => {
 		}
 	});
 
+	it("advertises the eval cell-control action syntax", () => {
+		const prompt = fullPrompt({ py: true, js: true, rb: false, jl: false });
+
+		expect(prompt).toContain('eval({ action: "peek" | "stop", cell_id })');
+		expect(prompt).toContain('eval({ action: "list" })');
+	});
+
 	it("maps model ids to emphasis dialects across provider id shapes", () => {
 		// Given: model ids as they appear across bundled provider catalogs.
 		// When/Then: each id resolves to its family dialect; unknown ids fall back to default.
