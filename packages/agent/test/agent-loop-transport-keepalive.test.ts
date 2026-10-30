@@ -14,6 +14,7 @@ import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "..
 
 const SILENCE_BOUND_MS = 2000;
 const KEEP_ALIVE_EVERY_MS = 100;
+const WARM_UP_BOUND_MS = 120_000;
 const FIRST_TOKEN_AFTER_MS = SILENCE_BOUND_MS * 3;
 
 type KeepAlive = "ping-event" | "comment";
@@ -166,10 +167,14 @@ async function runTurn(config: AgentLoopConfig): Promise<AssistantMessage> {
 describe("agent loop: transport keep-alives before the first token (senpi#4608)", () => {
 	beforeAll(async () => {
 		const warm = await runTurn(
-			createConfig(await startProvider({ kind: "answer-now" }), { streamStartTimeoutMs: 0 }),
+			createConfig(await startProvider({ kind: "answer-now" }), {
+				streamStartTimeoutMs: 0,
+				timeoutMs: WARM_UP_BOUND_MS,
+			}),
 		);
+		expect(warm.errorMessage).toBeUndefined();
 		expect(warm.stopReason).toBe("stop");
-	});
+	}, WARM_UP_BOUND_MS);
 
 	it.each<KeepAlive>(["ping-event", "comment"])(
 		"does not kill a request whose first token arrives after the silence bound while %s keep-alives flow",
