@@ -8,6 +8,18 @@ export function ownerCommand({ manifestId, kind, argv, childRuntime, exit }) {
 	return { manifest_id: manifestId, kind, argv, cwd: "senpi:.", child_runtime: childRuntime, exit };
 }
 
+/**
+ * The manifest entry a soak run owns: `--write-baseline` records B0 for QA.soak.B0, a compare run is QA.soak.
+ * Each mode's receipt covers only its own entry; a smoke run (shortened durations) is neither and carries no row.
+ */
+export function soakOwner({ writeBaseline, smoke, argv, childRuntime, exit }) {
+	const manifestId = writeBaseline ? "QA.soak.B0" : "QA.soak";
+	return {
+		manifestId,
+		commands: smoke ? [] : [ownerCommand({ manifestId, kind: "soak", argv, childRuntime, exit })],
+	};
+}
+
 /** Coverage of one manifest entry by one receipt, judged as PGATE judges it: missing row, failed row, or covered. */
 export function ownerCoverage(receipt, manifestId) {
 	const row = (receipt?.commands ?? []).find((command) => command?.manifest_id === manifestId);
