@@ -122,11 +122,8 @@ describe("formatLoopStatus", () => {
 
 	it("countdown decreases as the fake clock advances", () => {
 		const state = stateWith([makeFixed("a", 300_000)]);
-		const atStart = formatLoopStatus(state, 0);
-		const atHalf = formatLoopStatus(state, 150_000);
-		expect(atStart).toBeDefined();
-		expect(atHalf).toBeDefined();
-		if (atStart === undefined || atHalf === undefined) throw new Error("Expected an armed loop countdown");
+		const atStart = formatLoopStatus(state, 0)!;
+		const atHalf = formatLoopStatus(state, 150_000)!;
 		expect(parseInt(atStart.match(/(\d+)m/)?.[1] ?? "0", 10)).toBeGreaterThan(
 			parseInt(atHalf.match(/(\d+)m/)?.[1] ?? "0", 10),
 		);
