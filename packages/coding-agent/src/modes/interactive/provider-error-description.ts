@@ -21,13 +21,14 @@ export function describedProviderError(message: AssistantMessage): string | unde
 
 /**
  * Whether the turn's failed assistant row already shows classified text, so a turn-end failure line
- * would print the same failure a second time (senpi#4950). A row that renders no error (a tool-call
- * turn, an aborted server fallback) leaves the turn-end line as the only one.
+ * would print the same failure a second time (senpi#4950). Only the text run that ends the message
+ * shows the error (senpi#4954), so a message that ends in a tool call, or an aborted server fallback,
+ * shows no error row and leaves the turn-end line as the only one.
  */
 export function failureAlreadyDescribed(messages: readonly AgentMessage[]): boolean {
 	const last = messages.findLast((message) => message.role === "assistant");
 	if (last?.role !== "assistant" || last.stopReason !== "error") return false;
-	if (last.content.some((content) => content.type === "toolCall")) return false;
+	if (last.content.at(-1)?.type === "toolCall") return false;
 	if (last.diagnostics?.some((entry) => entry.type === SERVER_FALLBACK_ABORTED_DIAGNOSTIC)) return false;
 	return describedProviderError(last) !== undefined;
 }
