@@ -137,7 +137,7 @@ export function registerTerminalExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		state.ctx = ctx;
-		const settingsManager = SettingsManager.create(ctx.cwd);
+		const settingsManager = SettingsManager.create(ctx.cwd, ctx.agentDir);
 		state.settings = loadTerminalSettings(settingsManager);
 		state.shellPath = settingsManager.getShellPath();
 		state.notifier = new TerminalNotifier({
@@ -225,9 +225,8 @@ export function registerTerminalExtension(pi: ExtensionAPI): void {
 	pi.on(
 		"before_agent_start",
 		async (event) => {
-			if (state.steppedAside) return undefined;
 			return {
-				systemPrompt: `${event.systemPrompt}\n${buildTerminalPromptSection({ evalOnly: isEvalOnlyRouting(pi) })}`,
+				systemPrompt: `${event.systemPrompt}\n${buildTerminalPromptSection({ evalOnly: isEvalOnlyRouting(pi), ptyBash: !state.steppedAside })}`,
 			};
 		},
 		{ previewSafe: true },
