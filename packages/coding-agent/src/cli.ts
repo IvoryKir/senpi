@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import "./valid-cwd.ts";
+// Second: capture the private descriptor table before anything can spawn (senpi#4749).
+import "./private-fds.ts";
 import "./internal-role.ts";
 import { spawn, spawnSync, type StdioOptions } from "node:child_process";
 import { existsSync, fstatSync, realpathSync } from "node:fs";
@@ -7,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processBunRuntimeOptions, resolveBunReexec } from "./bun-runtime.ts";
 import { captureStdout, exitAfterOutput, printThenExit } from "./cli/print-then-exit.ts";
+import { dispatchAgentDirectoryCommand } from "./cli/agent-dir-command.ts";
 import { enableStartupCompileCache } from "./compile-cache.ts";
 import {
 	APP_NAME,
@@ -19,6 +22,7 @@ import {
 import { hasInheritedInspectorOption, releaseInheritedInspectorForChild } from "./inspector-policy.ts";
 import { prepareRuntimeSnapshot } from "./runtime-snapshot/enter.ts";
 import { handleBootstrapSelfUpdate } from "./self-update-bootstrap.ts";
+import { preparePrivateFdSpawn, spawnWithPrivateFds } from "./private-fd-spawn.ts";
 
 /** Only a presenter-enabled launch may carry its reserved private channel through CLI re-execution. */
 function reexecStdio(): StdioOptions {
@@ -67,10 +71,17 @@ function reexecUnderBunIfNeeded(): boolean {
 	if (decision.action === "stay") {
 		return false;
 	}
-	const result = spawnSync(decision.bunPath, [scriptRealPath, ...process.argv.slice(2)], {
+	const transfer = preparePrivateFdSpawn({
 		stdio: reexecStdio(),
 		windowsHide: true,
 	});
+	const result = (() => {
+		try {
+			return spawnSync(decision.bunPath, [scriptRealPath, ...process.argv.slice(2)], transfer.options);
+		} finally {
+			transfer.close();
+		}
+	})();
 	if (result.signal) {
 		process.kill(process.pid, result.signal);
 		return true;
@@ -83,6 +94,9 @@ if (reexecUnderBunIfNeeded()) {
 	process.exit();
 }
 
+const args = process.argv.slice(2);
+await dispatchAgentDirectoryCommand(args);
+
 // Must run before cli-main is loaded, by either path: it caches the engine graph this process
 // imports on the fast path below, and it publishes NODE_COMPILE_CACHE so a spawned cli-main child
 // inherits this process's cache directory instead of resolving and re-filling its own.
@@ -93,7 +107,6 @@ process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = APP_NAME;
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
-const args = process.argv.slice(2);
 const PACKAGE_COMMANDS = new Set(["install", "remove", "uninstall", "update", "list", "config"]);
 
 function isRootCommand(args: readonly string[]): boolean {
@@ -148,7 +161,7 @@ async function spawnFullCli(): Promise<number> {
 	releaseInheritedInspectorForChild();
 	const childEnvironment = isBundledNode ? { ...process.env, [ISOLATED_CHILD_ENV]: "1" } : process.env;
 	return await new Promise<number>((resolve, reject) => {
-		const child = spawn(process.execPath, [...process.execArgv, fullCliPath, ...args], {
+		const child = spawnWithPrivateFds(spawn, process.execPath, [...process.execArgv, fullCliPath, ...args], {
 			env: childEnvironment,
 			stdio: reexecStdio(),
 		});

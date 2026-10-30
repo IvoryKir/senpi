@@ -6,6 +6,7 @@ import {
 	readProviderDiagnostic,
 	type SimpleStreamOptions,
 	sanitizeProviderDiagnostic,
+	sanitizeProviderErrorMessage,
 	type TextContent,
 	type ThinkingBudgets,
 	type TranscriptContext,
@@ -162,6 +163,7 @@ export interface AgentOptions {
 	transport?: Transport;
 	timeoutMs?: number;
 	streamStartTimeoutMs?: number;
+	streamKeepAliveTimeoutMs?: number;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
 	removedToolHints?: Record<string, string>;
@@ -332,6 +334,8 @@ export class Agent {
 	public timeoutMs?: number;
 	/** Optional bound on the wait for the first provider stream event. */
 	public streamStartTimeoutMs?: number;
+	/** Optional bound on how long keep-alives alone may hold a provider request without content. */
+	public streamKeepAliveTimeoutMs?: number;
 	/** Optional cap for provider-requested retry delays. */
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
@@ -379,6 +383,7 @@ export class Agent {
 		this.transport = runtimeOptions.transport ?? "auto";
 		this.timeoutMs = runtimeOptions.timeoutMs;
 		this.streamStartTimeoutMs = runtimeOptions.streamStartTimeoutMs;
+		this.streamKeepAliveTimeoutMs = runtimeOptions.streamKeepAliveTimeoutMs;
 		this.maxRetryDelayMs = runtimeOptions.maxRetryDelayMs;
 		this.toolExecution = runtimeOptions.toolExecution ?? "parallel";
 		this.removedToolHints = runtimeOptions.removedToolHints ?? {};
@@ -771,6 +776,7 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			timeoutMs: this.timeoutMs,
 			streamStartTimeoutMs: this.streamStartTimeoutMs,
+			streamKeepAliveTimeoutMs: this.streamKeepAliveTimeoutMs,
 			initialRequestTimeoutMs: options.initialRequestTimeoutMs,
 			initialRequestStreamStartTimeoutMs: options.initialRequestStreamStartTimeoutMs,
 			maxRetryDelayMs: this.maxRetryDelayMs,
@@ -921,6 +927,8 @@ export class Agent {
 			...(!aborted && isLocalFailure(error) ? { failureSource: "local" as const } : {}),
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
+		// A thrown provider error never passed the stream boundary: classify and redact it the same way (senpi#4282).
+		sanitizeProviderErrorMessage(failureMessage);
 		await this.processEvents({ type: "message_start", message: failureMessage });
 		await this.processEvents({ type: "message_end", message: failureMessage });
 		await this.processEvents({ type: "turn_end", message: failureMessage, toolResults: [] });

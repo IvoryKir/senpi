@@ -1,3 +1,121 @@
+## 2026-10-29 - Share tree-sitter runtime initialization (senpi#4748)
+
+### What changed
+
+- `packages/agent/src/harness/utils/read-folders/tree-sitter/engine.ts`: share initialization by resolved runtime path independently of parser caching. Serialize each initialization and its grammar loads on one process-global queue that survives cache resets. Discard only failed runtime and grammar loads, checking that the failing promise still owns its cache entry; retain genuinely missing grammars as negative cache entries.
+- `packages/agent/src/harness/utils/read-folders/index.ts` and the read-summary selection receipt refresh the engine source hash and receipt digest only. Historical measurements, measurement commit, language choices, and every receipt assertion remain unchanged; the boundary safety and harness suites requalify this initialization-only change.
+
+### Why
+
+- Concurrent uncached TypeScript and JavaScript loads reinitialized process-global web-tree-sitter state while a grammar was loading, producing an incompatible-language failure. Different injected runtime paths have the same process-global race, and pre-reset failures must not discard newer entries. Missing grammars must not repeat filesystem resolution on every cached read.
+
+### Why an extension could not handle it
+
+- Runtime initialization and parser caching are internal to the read folder engine, before any extension receives a folder.
+
+### Expected merge conflict zones
+
+- LOW: the runtime and grammar caches in `engine.ts`, plus the selection receipt hash binding in `index.ts`.
+
+## 2026-10-27 - Win32 simulation profile for code-level Windows tests (senpi#4510)
+
+### What changed
+
+- `packages/agent/src/testing/win32-sim.ts` (fork-only, test support): drive-letter `\` paths over a backing directory, case-insensitive and case-preserving names, `\\.\pipe\<name>` endpoints, `EBUSY`/`EPERM` with Windows errno values on rename or delete of an open file, and signal-less termination (`win32Kill`: supported signals terminate at once with no handler; others throw `ENOSYS`).
+
+### Why
+
+- `packages/agent/src/testing/win32-sim.ts`: Windows behavior is verified by code-level tests with simulated OS behavior rather than a VM, so every suite needs the same profile.
+
+### Why an extension could not handle it
+
+- `packages/agent/src/testing/win32-sim.ts`: it is test support imported by package test suites, not runtime behavior.
+
+### Expected merge conflict zones
+
+- None upstream: the file is fork-only.
+
+## 2026-10-26 - Thrown provider errors pass the provider error boundary (senpi#4282)
+
+### What changed
+
+- `packages/agent/src/assistant-terminal-state.ts`: `createTerminalFailureAssistantMessage` runs pi-ai's `sanitizeProviderErrorMessage` on the message it builds from a thrown error, so the terminal message is classified (`errorCause: { type: "model_config" }`) and redacted before `message_start`/`message_end`.
+- `packages/agent/src/agent.ts`: `handleRunFailure` runs `sanitizeProviderErrorMessage` on the failure message of a run that threw between turns.
+- `packages/agent/src/harness/pico3/kinds/generation.ts`: the terminal message the generation builds from a thrown stream error runs `sanitizeProviderErrorMessage`, so it is classified and redacted before it is recorded.
+
+### Why
+
+- An error the stream function throws, or one that fails the run between turns, never passes `AssistantMessageEventStream`: its raw text reached every event and the session file, and a thrown `404 model_not_found` lost its classification, so the session retried it and walked the fallback chain onto another model.
+
+### Why an extension could not handle it
+
+- Both messages are built inside the agent loop and published to every subscriber before an extension sees them.
+
+### Expected merge conflict zones
+
+- LOW: the end of `createTerminalFailureAssistantMessage`; the two lines before the first `processEvents` call in `handleRunFailure` and the `pi-ai` import block of `agent.ts`; the `pi-ai` import block and the stream `catch` of `generation.ts`.
+
+## 2026-10-25 - Identify assistant stream starts for lifecycle activity (senpi#3864)
+
+### What changed
+
+- `types.ts` adds optional `streaming: true` to the `message_start` event.
+- `agent-loop.ts` sets the marker only at the provider assistant stream-start boundary; prepared messages, user messages, tool results, and synthetic failures do not set it.
+
+### Why
+
+- An assistant role alone cannot distinguish a live model stream from a prepared or synthetic assistant message.
+
+### Why an extension could not handle it
+
+- Only the agent loop knows whether a message start came from the provider stream or from prepared input.
+
+### Expected merge conflict zones
+
+- `agent-loop.ts`: provider stream-start event.
+- `types.ts`: additive message-start event metadata.
+
+## 2026-10-26 - Hand the internal channel to Agent at construction (senpi#4349, part of #4272)
+
+### What changed
+
+- `packages/agent/src/index.ts`: exposes only the internal channel factory and types for the session layer, never
+  `subscribeInternalAgent` or `dispatchInternalAgent`. `createInternalAgentChannel`, `InternalAgentChannel`,
+  `OrderedAgentRecord` and the `AgentOptions.internalChannel` constructor option DO ship in the published `.d.ts`
+  (marked `@internal`; no `stripInternal`): they are published surface, but construction-only. Passing a channel
+  when an Agent is built is the only way to receive its records; an existing Agent has no attach path.
+- `packages/agent/src/agent.ts`: consumes the internal channel option at construction and stores it in a private
+  field, with no getter or attach method. Only that channel receives this Agent's ordered records.
+- `packages/agent/src/internal-events.ts`: owns channel-local sequencing and listeners, acquiring capture on the
+  first listener and releasing it on the last. A run started without a listener still gets no progress sink.
+
+### Why
+
+- `packages/agent/src/index.ts`, `packages/agent/src/agent.ts`, and `packages/agent/src/internal-events.ts`: an
+  extension holding an existing Agent cannot attach a channel; a package subpath is public npm API, not privacy.
+
+### Why an extension could not handle it
+
+- `packages/agent/src/index.ts`, `packages/agent/src/agent.ts`, and `packages/agent/src/internal-events.ts`: this
+  construction-time capability belongs below extension delivery, inside the session-owned agent pipeline.
+
+### Expected merge conflict zones
+
+- LOW: `packages/agent/src/index.ts` export list; `packages/agent/src/agent.ts` constructor options and internal
+  dispatch wiring; `packages/agent/src/internal-events.ts` channel implementation.
+
+## 2026-10-26 - Empty-assistant recovery forwards the kept attempt's records (senpi#4307, part of #4272)
+
+### What changed
+
+- `empty-assistant-recovery.ts` (fork-only): reads attempts with `assistantEvents`, holds controls beside the events
+  they follow, forwards both when the attempt commits and discards both with a discarded attempt; replaced terminals
+  relay their capture.
+
+### Expected merge conflict zones
+
+- None upstream: the file is fork-only.
+
 ## 2026-10-25 - Internal-only ordered agent channel for capture records (senpi#4277, part of #4272)
 
 ### What changed

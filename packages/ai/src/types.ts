@@ -272,6 +272,12 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * Adapter support is explicit; unsupported adapters do not invoke it.
 	 */
 	onProviderStreamEvent?: (data: unknown, model: Model<Api>) => void | Promise<void>;
+	/**
+	 * Called whenever the response body delivers bytes, keep-alives included (SSE `ping` events, `:` comments).
+	 * Liveness only: it says the connection is alive, not that the model produced anything. Adapter support is
+	 * explicit; unsupported adapters do not invoke it.
+	 */
+	onTransportActivity?: () => void;
 	temperature?: number;
 	/**
 	 * Arbitrary sampling parameters merged into the request body as-is, after the named request
@@ -768,8 +774,11 @@ export interface AssistantMessage {
 	stopDetails?: AssistantStopDetails;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
-	/** Redaction-safe cause retained when a session projects a provider limit as user-facing advice. */
-	errorCause?: { type: "usage_limit"; scope: "account" | "model" };
+	/**
+	 * Redaction-safe cause: a provider limit projected as user-facing advice, or a model id its route does not
+	 * serve (`model_config`, never retried or fallen back).
+	 */
+	errorCause?: { type: "usage_limit"; scope: "account" | "model" } | { type: "model_config"; model: string };
 	/** Structured provider failure family, minted only by a provider adapter from structured error metadata. */
 	providerDiagnostic?: ProviderDiagnostic;
 	/** Explicit owner for an abort initiated by the provider retry watchdog. */
@@ -779,6 +788,11 @@ export interface AssistantMessage {
 	 * No model produced the failure, so retry and model fallback must not act on it.
 	 */
 	failureSource?: "local";
+	/**
+	 * Set by the model runtime on a failed response when the same credential (provider, endpoint and key) served a
+	 * response moments before: an `auth` failure then means the provider refused this request, not the key.
+	 */
+	credentialServedRecently?: true;
 	rawStopReason?: string;
 	/**
 	 * Provider indication of whether the model explicitly ended its turn.
