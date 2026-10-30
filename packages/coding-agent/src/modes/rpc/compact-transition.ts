@@ -56,7 +56,9 @@ export type CompactTransition =
 	| (BlockAddress & { readonly type: "block_delta"; readonly offset: number; readonly text: string })
 	| (BlockAddress & { readonly type: "block_replace"; readonly text: string })
 	| { readonly type: "message_status"; readonly messageId: string; readonly persistence: CompactPersistence }
-	| { readonly type: "message_remove"; readonly messageId: string };
+	| { readonly type: "message_remove"; readonly messageId: string }
+	/** A JSON-normal host-origin lifecycle, run-state or dialog record (`COMPONENT_RECORDS`). */
+	| { readonly type: "component"; readonly record: object };
 
 type CompactRejection =
 	| "invalid_start_identity"

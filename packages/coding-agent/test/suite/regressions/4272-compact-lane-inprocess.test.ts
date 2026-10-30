@@ -50,12 +50,14 @@ it("T6 Q2 in-process canonical records fold with their legacy record at one lane
 	expect(folds.some(({ t }) => t.type === "seeded_block")).toBe(true);
 	for (const fold of folds.filter((each) => each.t.type === "seeded_message"))
 		expect(laneSequences).toContain(fold.sequence);
+	await lane.idle();
 	const root = lane.freeze();
 	try {
 		expect(root.current?.sequence).toBe(folds.at(-1)?.sequence);
 		const { messages } = await lane.readCurrent(root);
 		const role = (name: string) => messages.find((message) => message.message?.role === name);
-		expect(role("user")).toMatchObject({ persistence: "pending" });
+		// S03b-3b: the owned append of the user message settles its compact persistence after acceptance.
+		expect(role("user")).toMatchObject({ persistence: "appended" });
 		expect(
 			role("assistant")
 				?.blocks.map((block) => block.text)

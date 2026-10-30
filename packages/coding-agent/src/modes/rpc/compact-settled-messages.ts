@@ -34,15 +34,22 @@ export interface OwnerRow {
 	readonly entryId: string;
 }
 
-type Row = TerminalRow | OwnerRow | { readonly kind: "ended" };
+type Row = TerminalRow | OwnerRow;
 export type SettledRoot = FrozenIndex;
 
 /** One spillable collection owns payloads, end markers and both directions of the durable join. */
 export class CompactSettledMessages {
 	private readonly store: CompactContentStore;
 	private readonly rows: CompactContentIndex<Row>;
-	/** Resident membership of the paged rows, the synchronous check acceptance needs (pruning: carried item 9). */
-	private readonly keys = new Set<string>();
+	/**
+	 * Resident membership: one state key per message (`end:` ended but unjoined, `owner:` -> entry id joined before its
+	 * end, `settled:` -> entry id both), `terminal:` per pending terminal row and `entry:` per joined entry. Settling a
+	 * message folds its end marker into its join and drops its terminal row, so what a settled message keeps resident is
+	 * exactly the two id-sized facts the duplicate-end and conflicting-owner checks need (carried item 9, senpi#4460):
+	 * residency is O(settled messages) per epoch, two id keys per message, payloads zero. Bounding it independently of
+	 * message count needs a paged synchronous membership filter, carried to S08/S11 (RULING-48 item 9).
+	 */
+	private readonly keys = new Map<string, string>();
 	private readonly epoch: string;
 	private readonly diagnose: (reason: SettledDiagnostic) => void;
 
@@ -57,16 +64,25 @@ export class CompactSettledMessages {
 		return carrier !== undefined && carrier.epoch === this.epoch;
 	}
 
-	end(record: object, carrier: RecoveryCarrier | undefined, sequence: number, turnId: string | null): void {
-		if (!this.valid(carrier)) return this.diagnose("unknown_message");
+	/** Returns whether this end joined the message to its durable entry: the only end that settles persistence. */
+	end(record: object, carrier: RecoveryCarrier | undefined, sequence: number, turnId: string | null): boolean {
+		if (!this.valid(carrier)) return this.reject("unknown_message");
 		const id = carrier.messageId;
-		if (this.keys.has(`end:${id}`)) return this.diagnose("duplicate_end");
-		if (carrier.durableEntryId && !this.keys.has(`owner:${id}`)) {
-			if (this.keys.has(`entry:${carrier.durableEntryId}`)) return this.diagnose("conflicting_owner");
+		if (this.keys.has(`end:${id}`) || this.keys.has(`settled:${id}`)) return this.reject("duplicate_end");
+		const owned = this.keys.get(`owner:${id}`);
+		if (carrier.durableEntryId && owned !== undefined && owned !== carrier.durableEntryId)
+			return this.reject("conflicting_owner");
+		let joined = false;
+		if (carrier.durableEntryId && owned === undefined) {
+			if (this.keys.has(`entry:${carrier.durableEntryId}`)) return this.reject("conflicting_owner");
 			this.join(id, carrier.durableEntryId);
+			joined = true;
 		}
-		this.put(`end:${id}`, { kind: "ended" });
-		if (this.keys.has(`owner:${id}`)) return;
+		if (this.keys.has(`owner:${id}`)) {
+			this.settle(id);
+			return joined;
+		}
+		this.keys.set(`end:${id}`, "");
 		const message: unknown = Reflect.get(record, "message");
 		const role = String(Reflect.get(Object(message), "role"));
 		const payload: LeafId[] = [];
@@ -94,6 +110,12 @@ export class CompactSettledMessages {
 		});
 		for (const leaf of payload) this.store.adjust(leaf, -1, 0);
 		if (!["user", "assistant", "toolResult", "custom"].includes(role)) this.diagnose("unsupported_role");
+		return false;
+	}
+
+	private reject(reason: SettledDiagnostic): false {
+		this.diagnose(reason);
+		return false;
 	}
 
 	fail(carrier: RecoveryCarrier | undefined, errorMessage: string): void {
@@ -106,7 +128,7 @@ export class CompactSettledMessages {
 		const id = transition.owningMessageId;
 		if (id === undefined) return;
 		if (transition.recoveryEpoch !== this.epoch) return this.diagnose("retired_owner");
-		if (this.keys.has(`owner:${id}`) || this.keys.has(`entry:${transition.id}`))
+		if (this.keys.has(`owner:${id}`) || this.keys.has(`settled:${id}`) || this.keys.has(`entry:${transition.id}`))
 			return this.diagnose("conflicting_owner");
 		this.join(id, transition.id);
 	}
@@ -117,11 +139,36 @@ export class CompactSettledMessages {
 		this.put(`entry:${entryId}`, owner);
 		this.rows.delete(`terminal:${messageId}`);
 		this.keys.delete(`terminal:${messageId}`);
+		this.keys.set(`owner:${messageId}`, entryId);
+		if (this.keys.has(`end:${messageId}`)) this.settle(messageId);
+	}
+
+	/** Ended and joined: its rows stay paged; its end marker folds into its join, its entry stays claimed. */
+	private settle(messageId: string): void {
+		this.keys.set(`settled:${messageId}`, this.keys.get(`owner:${messageId}`) ?? "");
+		this.keys.delete(`owner:${messageId}`);
+		this.keys.delete(`end:${messageId}`);
 	}
 
 	private put(key: string, row: Row): void {
 		this.rows.set(key, row);
-		this.keys.add(key);
+		this.keys.set(key, "");
+	}
+
+	/** The message each entry joined in this epoch, read in order from one cut of the paged rows; undefined for none. */
+	async messagesOf(entryIds: readonly string[]): Promise<(string | undefined)[]> {
+		const cut = this.rows.freeze();
+		try {
+			const ids: (string | undefined)[] = [];
+			for (const entryId of entryIds) {
+				const row = await this.rows.lookup(cut, `entry:${entryId}`);
+				const owner: unknown = row && (await this.rows.values.read(row.value));
+				ids.push(owner ? String(Reflect.get(Object(owner), "messageId")) : undefined);
+			}
+			return ids;
+		} finally {
+			this.rows.release(cut);
+		}
 	}
 
 	freeze(): SettledRoot {
@@ -148,7 +195,7 @@ export class CompactSettledMessages {
 	}
 
 	storageStatus() {
-		return { ...this.store.status(), ...this.rows.status() };
+		return { ...this.store.status(), ...this.rows.status(), residentSettledKeys: this.keys.size };
 	}
 
 	idle(): Promise<void> {

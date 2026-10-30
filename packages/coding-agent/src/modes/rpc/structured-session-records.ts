@@ -135,6 +135,6 @@ export function subscribeStructuredSessionRecords(
 			} catch (cause) {
 				failed(cause);
 			}
-		}),
+		}, failed),
 	);
 }

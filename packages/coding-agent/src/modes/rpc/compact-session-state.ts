@@ -2,6 +2,7 @@ import { type ActiveBlock, adjustBlock, appendBlock, deltaBlock } from "./compac
 import { CompactActiveMessages } from "./compact-active-messages.ts";
 import { type CompactColdFlow, coldFlowOperations } from "./compact-cold-flows.ts";
 import type { CompactColdOperation } from "./compact-cold-operations.ts";
+import { CompactCurrentComponents } from "./compact-current-components.ts";
 import { CompactReadError, CompactReadLease } from "./compact-read-lease.ts";
 import { foldSeededBlock } from "./compact-seeded-block.ts";
 import { CompactSeededDraft } from "./compact-seeded-draft.ts";
@@ -14,6 +15,7 @@ export type { CompactSessionStateOptions } from "./compact-state-storage.ts";
 export class CompactSessionState extends CompactActiveMessages {
 	private frozenTailBytes = 0;
 	private readonly cuts = new WeakMap<FrozenCompactState, CompactReadLease>();
+	private readonly components = new CompactCurrentComponents(this.store);
 
 	get acceptedSequence(): number {
 		return this.sequence;
@@ -84,6 +86,9 @@ export class CompactSessionState extends CompactActiveMessages {
 			case "message_remove":
 				this.dropActive(t.messageId);
 				break;
+			case "component":
+				this.components.apply(t.record);
+				break;
 		}
 		this.sequence = sequence;
 		return sequence;
@@ -104,13 +109,19 @@ export class CompactSessionState extends CompactActiveMessages {
 		const tails = this.residentTailBytes;
 		if (active) this.store.adjust(active.owner, 0, 1);
 		this.frozenTailBytes += tails;
-		const frozen = { sequence: this.sequence, active, settled: this.settled.freeze() };
+		const frozen = {
+			sequence: this.sequence,
+			active,
+			settled: this.settled.freeze(),
+			components: this.components.freeze(),
+		};
 		this.cuts.set(
 			frozen,
 			new CompactReadLease(() => {
 				if (active) this.store.adjust(active.owner, 0, -1);
 				this.frozenTailBytes -= tails;
 				this.settled.release(frozen.settled);
+				this.components.release(frozen.components);
 			}),
 		);
 		return frozen;
@@ -140,6 +151,17 @@ export class CompactSessionState extends CompactActiveMessages {
 				valid,
 			),
 		);
+	}
+
+	/** Run state, lifecycle and open dialogs at the cut (RULING-26 Q4). */
+	readComponents(frozen: FrozenCompactState) {
+		const lease = this.cutLease(frozen);
+		const valid = () => {
+			lease.assert();
+			this.store.assertReadable();
+		};
+		valid();
+		return lease.run(() => this.components.read(frozen.components, valid));
 	}
 
 	private cutLease(frozen: FrozenCompactState): CompactReadLease {

@@ -123,6 +123,7 @@ class WorkerEventWriter extends SessionEventWriter {
 		if (ordered && replaced) {
 			journaled = session.sessionManager;
 			stamp.forget();
+			canonicalLost = false;
 		}
 		const transitions = ordered && !replaced ? (journaled?.drainTranscript() ?? []) : [];
 		const epochSignal = ordered && replaced ? new SharedArrayBuffer(36) : undefined;
@@ -166,7 +167,9 @@ class WorkerEventWriter extends SessionEventWriter {
 		exchange((signal) => ({ type: "canonical", ordinal, firstOrdinal, recovery, record, signal }));
 	}
 	override canonicalUnavailable(_sessionId: string, cause: unknown): void {
-		if (!ordered) return;
+		// The host's compact state for this epoch is already gone after the first; later ones would only cost exchanges.
+		if (!ordered || canonicalLost) return;
+		canonicalLost = true;
 		const { ordinal } = stamp.stamp(undefined, undefined);
 		const reason = cause instanceof Error ? cause.message : String(cause);
 		exchange((signal) => ({ type: "canonical_unavailable", ordinal, reason, signal }));
@@ -186,6 +189,8 @@ let closing = false;
 let ordered = false;
 /** The output-frame ordinal (S04a) is the compact producer ordinal: one numbering (RULING-36). */
 const stamp = new CompactProducerStamp();
+/** One `canonical_unavailable` frame per epoch: set by the first, cleared with `stamp.forget()` at a replacement. */
+let canonicalLost = false;
 /** The manager whose committed transcript changes ride the next output frame; replaced with the session. */
 let journaled: SessionManager | undefined;
 let unsubscribe: (() => void) | undefined;

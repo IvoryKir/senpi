@@ -1,6 +1,7 @@
 import type { CompactComponentRoots } from "./compact-component-roots.ts";
 import type { CompactContentIndex, FrozenIndex } from "./compact-content-index.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
+import type { FrozenComponents } from "./compact-current-components.ts";
 import { readSeededBlock, readSeededFields } from "./compact-seeded-block-view.ts";
 import type { SeededFields } from "./compact-seeded-draft.ts";
 import { type CompactMessageView, type FrozenBlock, readCompactBlocks } from "./compact-text-view.ts";
@@ -21,6 +22,7 @@ export interface FrozenCompactState {
 	readonly sequence: number;
 	readonly active: ValueRef | undefined;
 	readonly settled: FrozenIndex;
+	readonly components: FrozenComponents;
 }
 interface Components {
 	readonly store: CompactContentStore;
