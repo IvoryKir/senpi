@@ -31,12 +31,15 @@ export function foldCompactTransition(
 	current.transcript(transition, settled, epoch);
 }
 
-/** The compact side of one accepted record: canonical and component folds, its terminal, its persistence. */
+/**
+ * The compact side of one accepted record: canonical and component folds, its terminal, its persistence. The call
+ * records fold before the lane commits this sequence (RULING-13 Q9), so they are not here.
+ */
 export function foldCompactRecord(
 	{ settled, current }: CompactComponents,
 	{ record, type, carrier, canonical, sequence, turnId }: AcceptedRecord,
 ): void {
-	if (canonical) current.fold(canonical, sequence);
+	if (canonical) current.fold(canonical, sequence, turnId);
 	if (COMPONENT_RECORDS.has(type)) current.foldComponent(record, sequence);
 	const joined = type === "message_end" && settled.end(record, carrier, sequence, turnId);
 	if (type === "transcript_write_failed") settled.fail(carrier, String(Reflect.get(record, "errorMessage")));

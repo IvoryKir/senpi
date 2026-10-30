@@ -1,4 +1,5 @@
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
+import type { CallFold } from "./compact-call-fold.ts";
 import type { CompactColdOutcome } from "./compact-cold-operations.ts";
 import { type CanonicalUnit, laneTransition } from "./compact-lane-transitions.ts";
 import { CompactReadError } from "./compact-read-lease.ts";
@@ -24,13 +25,24 @@ export class CompactLaneCurrent {
 		this.state = new CompactSessionState(options);
 	}
 
-	fold(unit: CanonicalUnit, sequence: number): void {
-		this.apply(() => laneTransition(unit), sequence);
+	fold(unit: CanonicalUnit, sequence: number, turnId: string | null = null): void {
+		this.apply(() => laneTransition(unit), sequence, turnId);
 	}
 
 	/** A host-origin lifecycle, run-state or dialog record, taken at the same JSON boundary as canonical records. */
 	foldComponent(record: object, sequence: number): void {
 		this.apply(() => ({ type: "component", record: JSON.parse(JSON.stringify(record)) }), sequence);
+	}
+
+	/** An execution, hook or boundary record for the calls component (S06); undefined once the state is unavailable. */
+	foldCall(record: object, sequence: number, turnId: string | null): CallFold | undefined {
+		if (!this.state) return undefined;
+		try {
+			return this.state.acceptCall(JSON.parse(JSON.stringify(record)), sequence, turnId);
+		} catch (cause) {
+			this.fail(cause);
+			return undefined;
+		}
 	}
 
 	/**
@@ -71,11 +83,11 @@ export class CompactLaneCurrent {
 	}
 
 	/** Never throws: building the transition from a worker frame's record is part of the fold that may fail. */
-	private apply(build: () => CompactTransition | undefined, sequence: number): void {
+	private apply(build: () => CompactTransition | undefined, sequence: number, turnId: string | null = null): void {
 		if (!this.state) return;
 		try {
 			const transition = build();
-			if (transition) this.state.accept(transition, sequence);
+			if (transition) this.state.accept(transition, sequence, turnId);
 		} catch (cause) {
 			this.fail(cause);
 		}
@@ -104,6 +116,10 @@ export class CompactLaneCurrent {
 
 	readComponents(cut: FrozenCompactState | undefined) {
 		return this.owned(cut, (owner, held) => owner.readComponents(held));
+	}
+
+	readCalls(cut: FrozenCompactState | undefined) {
+		return this.owned(cut, (owner, held) => owner.readCalls(held));
 	}
 
 	private owned<T>(

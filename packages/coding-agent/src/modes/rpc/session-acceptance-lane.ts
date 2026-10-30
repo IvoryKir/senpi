@@ -5,12 +5,14 @@ import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 import { correlatedRecord } from "./client-message-events.ts";
+import { CALL_RECORDS } from "./compact-call-model.ts";
 import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import { CompactLaneCurrent } from "./compact-lane-current.ts";
 import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
 import type { FrozenCompactState } from "./compact-state-view.ts";
 import type { CompactContentStoreOptions } from "./compact-content-store.ts";
+import { admitRecord, field } from "./session-acceptance-admission.ts";
 import { foldCompactRecord, foldCompactTransition } from "./session-acceptance-compact.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
@@ -66,18 +68,8 @@ const SEQUENCED = new Set([
 	"session_abort",
 	"transcript_write_failed",
 	...COMPONENT_RECORDS,
+	...CALL_RECORDS,
 ]);
-
-function field(record: object, key: string): unknown {
-	return key in record ? Reflect.get(record, key) : undefined;
-}
-
-function turnScoped(type: string, record: object): boolean {
-	if (type === "turn_end" || type.startsWith("tool_execution_")) return true;
-	if (!type.startsWith("message_")) return false;
-	const role = field(Object(field(record, "message")), "role");
-	return role === "assistant" || role === "toolResult";
-}
 
 /**
  * The ordered acceptance lane of one routing session. Every record reaches it synchronously, before
@@ -136,12 +128,13 @@ export class SessionAcceptanceLane {
 			},
 			this.diagnose,
 		);
+		this.epoch = randomUUID();
 		this.current.bootstrap({
 			...this.storage,
 			dir: join(this.storage?.dir ?? tmpdir(), `senpi-current-${randomUUID()}`),
 			epoch: nonce,
+			sessionEpoch: this.epoch,
 		});
-		this.epoch = randomUUID();
 		this.sequence = 0;
 		this.transcript = new AcceptedTranscript();
 		for (const transition of input.transcript) this.transcript.apply(transition);
@@ -165,9 +158,12 @@ export class SessionAcceptanceLane {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
 		this.acceptCorrelation(record);
-		this.sequence += 1;
-		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
-		const turnId = this.turnId;
+		// The calls component decides first, before the lane commits anything for this record (RULING-13 Q9).
+		const place = admitRecord(this.current, record, type, { sequence: this.sequence, turnId: this.turnId });
+		if (!place) return undefined;
+		const { turnId } = place;
+		this.turnId = turnId;
+		this.sequence = place.sequence;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
@@ -227,6 +223,11 @@ export class SessionAcceptanceLane {
 	readCurrentComponents(root: FrozenAcceptedRoot) {
 		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
 		return this.current.readComponents(root.current);
+	}
+
+	readCurrentCalls(root: FrozenAcceptedRoot) {
+		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		return this.current.readCalls(root.current);
 	}
 
 	readSettled(root: FrozenAcceptedRoot) {

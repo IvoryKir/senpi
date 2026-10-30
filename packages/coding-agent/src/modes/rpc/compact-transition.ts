@@ -29,6 +29,9 @@ export type CompactTransition =
 			/** The enclosing record's message-level usage and changed metadata (`null` removes a field). */
 			readonly usage?: SeededJsonMessageUpdateEvent["usage"];
 			readonly messageMetadata?: SeededJsonMessageUpdateEvent["messageMetadata"];
+			/** The record's own client correlation and resolved tool name, read by the calls component (S06). */
+			readonly correlation?: object;
+			readonly resolvedToolName?: string;
 	  })
 	| (SeededIdentity & {
 			readonly type: "seeded_message";

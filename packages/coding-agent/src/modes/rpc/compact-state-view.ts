@@ -1,3 +1,4 @@
+import type { FrozenCalls } from "./compact-call-model.ts";
 import type { CompactComponentRoots } from "./compact-component-roots.ts";
 import type { CompactContentIndex, FrozenIndex } from "./compact-content-index.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
@@ -23,6 +24,7 @@ export interface FrozenCompactState {
 	readonly active: ValueRef | undefined;
 	readonly settled: FrozenIndex;
 	readonly components: FrozenComponents;
+	readonly calls: FrozenCalls;
 }
 interface Components {
 	readonly store: CompactContentStore;
