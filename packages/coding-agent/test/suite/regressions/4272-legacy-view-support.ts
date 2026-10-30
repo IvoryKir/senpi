@@ -13,6 +13,39 @@ export const update = (assistantMessageEvent: object, outer: object = {}) => ({
 	...outer,
 });
 
+/** A registered peer whose transport the test can hold (backpressure) and release; its written lines in order. */
+export interface HeldPeer {
+	readonly lines: string[];
+	hold(): void;
+	release(): void;
+}
+
+export function heldPeer(writer: SessionEventWriter, id: string, capabilities: readonly string[] = []): HeldPeer {
+	const lines: string[] = [];
+	let blocked = false;
+	const waiters: (() => void)[] = [];
+	writer.registerConnection(
+		id,
+		{
+			writeRaw: (chunk) => void lines.push(chunk),
+			waitForBackpressure: () =>
+				blocked ? new Promise<void>((resolve) => void waiters.push(resolve)) : Promise.resolve(),
+		},
+		{ maxQueueBytes: 600 },
+	);
+	if (capabilities.length > 0) writer.setConnectionCapabilities(id, capabilities);
+	return {
+		lines,
+		hold: () => {
+			blocked = true;
+		},
+		release: () => {
+			blocked = false;
+			for (const resolve of waiters.splice(0)) resolve();
+		},
+	};
+}
+
 /**
  * Drives one acceptance lane the way the in-process binding does (S03b-3a, one acceptance unit): the lane accepts
  * the legacy record with its canonical half, then the writer enqueues the unchanged legacy record. A message start
