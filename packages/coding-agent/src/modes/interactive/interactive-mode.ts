@@ -142,6 +142,7 @@ import {
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { formatProviderFailure } from "../../core/provider-failure.ts";
+import { failureAlreadyDescribed } from "./provider-error-description.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { usageLimitCause } from "../../core/retry-fallback/usage-limit.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -5632,7 +5633,8 @@ export class InteractiveMode {
 				}
 				this.detachAssistantTextSegments();
 				this.clearPendingTools();
-				if (event.failure !== undefined && !event.willRetry) this.showError(formatProviderFailure(event.failure));
+				if (event.failure !== undefined && !event.willRetry && !failureAlreadyDescribed(event.messages))
+					this.showError(formatProviderFailure(event.failure));
 
 				this.ui.requestRender();
 				break;
