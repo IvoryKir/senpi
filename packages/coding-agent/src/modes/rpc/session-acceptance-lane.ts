@@ -4,7 +4,6 @@ import { join } from "node:path";
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
-import { correlatedRecord } from "./client-message-events.ts";
 import { CALL_RECORDS } from "./compact-call-model.ts";
 import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import { CompactLaneCurrent } from "./compact-lane-current.ts";
@@ -12,7 +11,7 @@ import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
 import type { FrozenCompactState } from "./compact-state-view.ts";
 import type { CompactContentStoreOptions } from "./compact-content-store.ts";
-import { admitRecord, field } from "./session-acceptance-admission.ts";
+import { type AcceptedCorrelation, admitRecord, correlationChange, field } from "./session-acceptance-admission.ts";
 import { foldCompactRecord, foldCompactTransition } from "./session-acceptance-compact.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
@@ -22,13 +21,6 @@ interface AcceptedRef {
 	readonly historyVersion: number;
 	readonly messageId: string | null;
 	readonly turnId: string | null;
-}
-
-interface AcceptedCorrelation {
-	readonly sequence: number;
-	readonly clientMessageId: unknown;
-	readonly clientTurnId: unknown;
-	readonly clientMessages: unknown;
 }
 
 export interface FrozenAcceptedRoot {
@@ -157,17 +149,28 @@ export class SessionAcceptanceLane {
 	accept(record: object, carrier: RecoveryCarrier | undefined, canonical?: CanonicalUnit): AcceptedRef | undefined {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
-		this.acceptCorrelation(record);
-		// The calls component decides first, before the lane commits anything for this record (RULING-13 Q9).
-		const place = admitRecord(this.current, record, type, { sequence: this.sequence, turnId: this.turnId });
+		// The calls component decides first, before the lane commits anything for this record, its correlation change
+		// included (RULING-13 Q9); a correlation change takes the sequence just before its record.
+		const correlation = correlationChange(this.correlation, this.turnId, record);
+		const at = { sequence: this.sequence + (correlation ? 1 : 0), turnId: this.turnId };
+		const place = admitRecord(this.current, record, type, at);
 		if (!place) return undefined;
-		const { turnId } = place;
+		if (correlation) this.correlation = Object.freeze({ sequence: place.sequence - 1, ...correlation });
+		const { turnId, call } = place;
 		this.turnId = turnId;
 		this.sequence = place.sequence;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
 		const messageId = type.startsWith("message_") && this.settled.valid(carrier) ? carrier.messageId : null;
 		if (type === "message_start") this.activeMessageId = messageId;
-		foldCompactRecord(this.compact(), { record, type, carrier, canonical, sequence: this.sequence, turnId });
+		foldCompactRecord(this.compact(), {
+			record,
+			type,
+			carrier,
+			canonical,
+			sequence: this.sequence,
+			turnId,
+			call: call?.projection,
+		});
 		if (type === "message_end" && this.activeMessageId === messageId) this.activeMessageId = null;
 		return {
 			sessionEpoch: this.epoch,
@@ -259,41 +262,5 @@ export class SessionAcceptanceLane {
 		this.retiredAs ??= reason;
 		if (this.settled) this.retireSettled();
 		this.current.retire();
-	}
-
-	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */
-	private acceptCorrelation(record: object): void {
-		// Within a turn, any identity-less correlated record other than turn_start (user input, an extension steer, a
-		// mid-turn session_abort, custom-role message_* records) keeps the standing correlation and gains no client identity
-		// of its own; only a new turn boundary ends it (ruling B).
-		const identified = "clientMessageId" in record || "clientTurnId" in record;
-		if (!identified && (this.correlation === null || !correlatedRecord(record))) return;
-		if (!identified && this.turnId !== null && field(record, "type") !== "turn_start") return;
-		const next = {
-			clientMessageId: field(record, "clientMessageId"),
-			clientTurnId: field(record, "clientTurnId"),
-			clientMessages: field(record, "clientMessages"),
-		};
-		const current = this.correlation;
-		const currentMessages = current?.clientMessages;
-		const nextMessages = next.clientMessages;
-		if (
-			current !== null &&
-			current.clientMessageId === next.clientMessageId &&
-			current.clientTurnId === next.clientTurnId &&
-			(currentMessages === nextMessages ||
-				(Array.isArray(currentMessages) &&
-					Array.isArray(nextMessages) &&
-					currentMessages.length === nextMessages.length &&
-					currentMessages.every(
-						(identity: unknown, index: number) =>
-							field(Object(identity), "clientMessageId") ===
-								field(Object(nextMessages[index]), "clientMessageId") &&
-							field(Object(identity), "clientTurnId") === field(Object(nextMessages[index]), "clientTurnId"),
-					)))
-		)
-			return;
-		this.sequence += 1;
-		this.correlation = Object.freeze({ sequence: this.sequence, ...next });
 	}
 }

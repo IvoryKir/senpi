@@ -1,5 +1,6 @@
 import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
+import type { CallProjection } from "./compact-call-model.ts";
 import { COMPONENT_RECORDS } from "./compact-current-components.ts";
 import type { CompactLaneCurrent } from "./compact-lane-current.ts";
 import type { CanonicalUnit } from "./compact-lane-transitions.ts";
@@ -18,6 +19,8 @@ export interface AcceptedRecord {
 	readonly canonical: CanonicalUnit | undefined;
 	readonly sequence: number;
 	readonly turnId: string | null;
+	/** The projection of the outstanding call a toolResult terminal settles (RULING-13 Q2), stored with it. */
+	readonly call?: CallProjection | undefined;
 }
 
 /** One accepted transcript transition: its owned join, then the cold flow and persistence it carries. */
@@ -37,11 +40,11 @@ export function foldCompactTransition(
  */
 export function foldCompactRecord(
 	{ settled, current }: CompactComponents,
-	{ record, type, carrier, canonical, sequence, turnId }: AcceptedRecord,
+	{ record, type, carrier, canonical, sequence, turnId, call }: AcceptedRecord,
 ): void {
 	if (canonical) current.fold(canonical, sequence, turnId);
 	if (COMPONENT_RECORDS.has(type)) current.foldComponent(record, sequence);
-	const joined = type === "message_end" && settled.end(record, carrier, sequence, turnId);
+	const joined = type === "message_end" && settled.end(record, carrier, sequence, turnId, call);
 	if (type === "transcript_write_failed") settled.fail(carrier, String(Reflect.get(record, "errorMessage")));
 	// A failed write, or a terminal whose committed entry the lane accepted, settles its compact persistence too.
 	const status = type === "transcript_write_failed" ? "failed" : joined ? "appended" : undefined;

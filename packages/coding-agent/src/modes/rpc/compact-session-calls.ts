@@ -1,5 +1,6 @@
 import {
 	type CallCorrelation,
+	type CallProjection,
 	type CallRaw,
 	type CallScope,
 	type FrozenCalls,
@@ -8,6 +9,7 @@ import {
 	TERMINAL_PHASE,
 	terminal,
 } from "./compact-call-model.ts";
+import { NOT_EXECUTED, orphaned, settleCall, settledPatch } from "./compact-call-retirement.ts";
 import { CompactCallTable, creationOf } from "./compact-call-table.ts";
 import type { CompactContentStore } from "./compact-content-store.ts";
 import type { ValueRef } from "./compact-values.ts";
@@ -29,11 +31,20 @@ export interface ExecutionStart {
 	readonly toolCallId: string;
 	readonly toolName: string;
 	readonly args: unknown;
+	readonly parentToolCallId?: string;
 }
+
+/** The four "can still take this record" states, one per record kind; every per-id record picks the oldest such call. */
+const awaitingStart = (call: OutstandingCall) => call.startSequence === null && !terminal(call);
+const executing = (call: OutstandingCall) => call.phase === "executing";
+const stillOpen = (call: OutstandingCall) => !terminal(call);
+const awaitingCarrier = (call: OutstandingCall) => call.join === "pending";
 
 const FRESH = {
 	owningMessageId: null,
 	contentIndex: null,
+	parentKey: null,
+	join: "pending",
 	startSequence: null,
 	startedAtMs: null,
 	requestedName: null,
@@ -42,6 +53,8 @@ const FRESH = {
 	raw: null,
 	input: { announced: null, started: null, prepared: null },
 	correlation: null,
+	hook: null,
+	progress: null,
 	result: null,
 	outcome: null,
 } as const;
@@ -81,7 +94,7 @@ export class CompactSessionCalls {
 			raw,
 			...(block.correlation ? { correlation: block.correlation } : {}),
 		};
-		if (existing && existing.owningMessageId === null) {
+		if (existing && existing.owningMessageId === null && existing.parentKey === null) {
 			this.update(step, existing, { ...fields, requestedName: existing.requestedName ?? block.name });
 			return;
 		}
@@ -137,24 +150,27 @@ export class CompactSessionCalls {
 	executionStart(step: CallStep, start: ExecutionStart): void {
 		const turnId = step.scope.turnId;
 		if (turnId === null) return;
-		const existing = this.table.byTurnId(turnId, start.toolCallId);
 		const started = {
 			startSequence: step.sequence,
 			startedAtMs: Date.now(),
 			resolvedName: start.toolName,
 		};
-		if (existing && existing.startSequence === null && !terminal(existing)) {
-			this.update(step, existing, {
+		const announced = this.table.oldestById(start.toolCallId, turnId, awaitingStart);
+		if (announced) {
+			this.update(step, announced, {
 				...started,
 				phase: "executing",
-				input: { ...existing.input, started: start.args },
+				input: { ...announced.input, started: start.args },
 			});
 			return;
 		}
+		const existing = this.table.byTurnId(turnId, start.toolCallId);
 		if (existing) this.table.counters.reused++;
+		const parent = start.parentToolCallId ? this.lookup(turnId, start.parentToolCallId) : undefined;
 		const created = this.create(step, {
 			turnId,
 			toolCallId: start.toolCallId,
+			parentKey: parent?.runtimeItemKey ?? null,
 			phase: "executing",
 			input: { announced: null, started: start.args, prepared: null },
 			...started,
@@ -162,15 +178,63 @@ export class CompactSessionCalls {
 		if (existing) this.table.repoint(turnId, start.toolCallId, created.runtimeItemKey);
 	}
 
-	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
-		const call = this.table.byTurnId(step.scope.turnId, toolCallId);
+	executionUpdate(step: CallStep, toolCallId: string, args: unknown, partialResult: unknown): void {
+		const call = this.resolve(step, toolCallId, executing);
+		if (!call) return this.ignore("unknown");
+		if (call.phase !== "executing") return this.ignore("late");
+		const progressed = this.table.replaceSlot(call, "progress", partialResult);
+		this.table.counters.progressReplacements++;
+		if (call.input.prepared === null) this.update(step, progressed, { input: { ...call.input, prepared: args } });
+		this.sequence = step.sequence;
+	}
+
+	hook(step: CallStep, toolCallId: string, record: unknown): void {
+		const call = this.resolve(step, toolCallId, stillOpen);
 		if (!call) return this.ignore("unknown");
 		if (terminal(call)) return this.ignore("late");
+		this.table.replaceSlot(call, "hook", record);
+		this.sequence = step.sequence;
+	}
+
+	/** An end closes the oldest call still open under its id (senpi#4278); with none open it may replace an abandoned one. */
+	executionEnd(step: CallStep, toolCallId: string, result: unknown, isError: boolean): void {
+		const call = this.resolve(step, toolCallId, stillOpen);
+		if (!call) return this.ignore("unknown");
+		if (terminal(call) && call.outcome?.kind !== "abandoned") return this.ignore("late");
 		const ended = this.table.replaceSlot(call, "result", result);
 		this.update(step, ended, {
 			phase: TERMINAL_PHASE,
 			outcome: { kind: "result", isError, source: "execution_end" },
+			join: orphaned(this.table, call) || call.join === "carrierless" ? "carrierless" : "pending",
 		});
+	}
+
+	/**
+	 * The carrier settled (RULING-13 Q2): the oldest call under its id still awaiting a carrier, own turn first (the
+	 * same order the ends closed them in, senpi#4278), leaves with its completed descendants as one projection.
+	 */
+	settle(step: CallStep, toolCallId: string, isError: boolean): CallProjection | undefined {
+		const call = this.resolve(step, toolCallId, awaitingCarrier);
+		if (!call) return undefined;
+		const projection = settleCall(this.table, call, isError);
+		this.sequence = step.sequence;
+		return projection;
+	}
+
+	/** RULING-13 Q3: a never-started call ends as an explicit `not-executed` terminal, never a silent removal. */
+	turnEnd(step: CallStep): void {
+		const turnId = step.scope.turnId;
+		if (turnId === null) return;
+		for (const call of [...this.table.ofTurn(turnId)])
+			if (call.startSequence === null && !terminal(call)) this.update(step, call, NOT_EXECUTED);
+	}
+
+	/** RULING-13 Q4: after the run settled no carrier can arrive; started calls stay carrierless until retirement. */
+	agentSettled(step: CallStep): void {
+		for (const call of [...this.table.all()]) {
+			const patch = settledPatch(call);
+			if (patch) this.update(step, call, patch);
+		}
 	}
 
 	freeze(): FrozenCalls {
@@ -183,6 +247,16 @@ export class CompactSessionCalls {
 
 	entries(ref: ValueRef | undefined, valid: () => void) {
 		return this.table.entriesOf(ref, valid);
+	}
+
+	/** FIFO (senpi#4278): the oldest call under the id that can take the record, own turn first; none open, the newest. */
+	private resolve(step: CallStep, toolCallId: string, open: (call: OutstandingCall) => boolean) {
+		const turnId = step.scope.turnId;
+		return this.table.oldestById(toolCallId, turnId, open) ?? this.lookup(turnId, toolCallId);
+	}
+
+	private lookup(turnId: string | null, toolCallId: string): OutstandingCall | undefined {
+		return this.table.byTurnId(turnId, toolCallId) ?? this.table.newestById(toolCallId);
 	}
 
 	private ignore(kind: "unknown" | "late"): void {
