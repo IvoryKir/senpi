@@ -19,7 +19,8 @@ export class CompactSessionState extends CompactActiveMessages {
 		return this.sequence;
 	}
 
-	accept(t: CompactTransition): number {
+	/** `sequence` is the acceptance lane's own sequence for this unit (one numbering with the lane, RULING-26). */
+	accept(t: CompactTransition, sequence = this.sequence + 1): number {
 		if (t.type !== "message_remove") this.store.assertReadable();
 		if ((t.type === "message_status" || t.type === "message_remove") && !this.active.has(t.messageId))
 			throw new CompactTransitionError("cold_operation_required", "use applyCold after acceptance");
@@ -84,7 +85,8 @@ export class CompactSessionState extends CompactActiveMessages {
 				this.dropActive(t.messageId);
 				break;
 		}
-		return ++this.sequence;
+		this.sequence = sequence;
+		return sequence;
 	}
 
 	applyCold(t: CompactColdOperation) {
@@ -204,7 +206,8 @@ export class CompactSessionState extends CompactActiveMessages {
 		if (!live) this.identity.validate(t);
 		using draft = new CompactSeededDraft(this.store);
 		const next = seedMessage(draft, message, terminal, live?.blocks, t);
-		const correlation = live ? live.correlation : t.correlation && draft.fields(t.correlation);
+		// Bound once, by the first message-level record that carries it, even when an indexed start created the message.
+		const correlation = live?.correlation ?? (t.correlation && draft.fields(t.correlation));
 		this.install(t.messageId, { fields: next.fields, correlation, epoch: t.epoch }, next.blocks);
 		if (!live) this.identity.commit(t);
 		if (t.record.type === "message_end") this.settle(t.messageId, "pending");

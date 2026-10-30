@@ -5,7 +5,10 @@ import type { RecoveryCarrier } from "../../core/session-recovery-identity.ts";
 import type { TranscriptTransition } from "../../core/session-transcript-journal.ts";
 import { AcceptedTranscript, type TranscriptRoot } from "./accepted-transcript.ts";
 import { correlatedRecord } from "./client-message-events.ts";
+import { CompactLaneCurrent } from "./compact-lane-current.ts";
+import type { CanonicalUnit } from "./compact-lane-transitions.ts";
 import { CompactSettledMessages, type SettledDiagnostic, type SettledRoot } from "./compact-settled-messages.ts";
+import type { FrozenCompactState } from "./compact-state-view.ts";
 import type { CompactContentStoreOptions } from "./compact-content-store.ts";
 
 /** Where one accepted recovery record sits in its runtime incarnation (R3.C1.1). */
@@ -32,6 +35,8 @@ export interface FrozenAcceptedRoot {
 	readonly correlation: AcceptedCorrelation | null;
 	readonly transcript: TranscriptRoot;
 	readonly settled: SettledRoot;
+	/** The compact current state at this root's sequence; absent once that component became unavailable. */
+	readonly current: FrozenCompactState | undefined;
 }
 
 /** The incarnation's transcript as its manager journaled it up to bootstrap: base, unpersisted entries, leaf. */
@@ -90,6 +95,7 @@ export class SessionAcceptanceLane {
 	private settled!: CompactSettledMessages;
 	private readonly rootOwners = new WeakMap<FrozenAcceptedRoot, CompactSettledMessages>();
 	private cleanup: Promise<void> = Promise.resolve();
+	private readonly current = new CompactLaneCurrent();
 	private readonly storage: CompactContentStoreOptions | undefined;
 	private readonly diagnose: (reason: SettledDiagnostic) => void;
 
@@ -127,6 +133,11 @@ export class SessionAcceptanceLane {
 			},
 			this.diagnose,
 		);
+		this.current.bootstrap({
+			...this.storage,
+			dir: join(this.storage?.dir ?? tmpdir(), `senpi-current-${randomUUID()}`),
+			epoch: nonce,
+		});
 		this.epoch = randomUUID();
 		this.sequence = 0;
 		this.transcript = new AcceptedTranscript();
@@ -146,11 +157,13 @@ export class SessionAcceptanceLane {
 		}
 	}
 
-	accept(record: object, carrier: RecoveryCarrier | undefined): AcceptedRef | undefined {
+	/** A legacy record and, when the structured lane projected one, its canonical record: one unit, one sequence. */
+	accept(record: object, carrier: RecoveryCarrier | undefined, canonical?: CanonicalUnit): AcceptedRef | undefined {
 		const type = field(record, "type");
 		if (this.retired || this.epoch === "" || typeof type !== "string" || !SEQUENCED.has(type)) return undefined;
 		this.acceptCorrelation(record);
 		this.sequence += 1;
+		if (canonical) this.current.fold(canonical, this.sequence);
 		if (type === "turn_start" || (this.turnId === null && turnScoped(type, record))) this.turnId = randomUUID();
 		const turnId = this.turnId;
 		if (type === "turn_end" || type === "agent_end") this.turnId = null;
@@ -168,6 +181,19 @@ export class SessionAcceptanceLane {
 		};
 	}
 
+	/** A block control has no legacy record; it is a unit of its own at the next sequence. */
+	acceptControl(unit: CanonicalUnit | undefined): number | undefined {
+		if (this.retired || this.epoch === "" || !unit) return undefined;
+		this.sequence += 1;
+		this.current.fold(unit, this.sequence);
+		return this.sequence;
+	}
+
+	/** A canonical record of this epoch was lost before folding, so its compact state can no longer be complete. */
+	compactUnavailable(cause: unknown): void {
+		if (!this.retired) this.current.fail(cause);
+	}
+
 	freeze(): FrozenAcceptedRoot {
 		const root: FrozenAcceptedRoot = Object.freeze({
 			sessionEpoch: this.epoch,
@@ -178,6 +204,7 @@ export class SessionAcceptanceLane {
 			transcript: this.transcript.freeze(),
 			// A retired lane's paged settled store refuses new cuts; its root is never live or readable.
 			settled: this.retired ? RETIRED_SETTLED : this.settled.freeze(),
+			current: this.retired ? undefined : this.current.freeze(),
 		});
 		if (this.retired) return root;
 		this.rootOwners.set(root, this.settled);
@@ -186,7 +213,14 @@ export class SessionAcceptanceLane {
 	}
 
 	release(root: FrozenAcceptedRoot): void {
-		if (this.live.delete(root)) this.rootOwners.get(root)?.release(root.settled);
+		if (!this.live.delete(root)) return;
+		this.rootOwners.get(root)?.release(root.settled);
+		this.current.release(root.current);
+	}
+
+	readCurrent(root: FrozenAcceptedRoot) {
+		if (this.retired || !this.live.has(root)) throw new Error("accepted root released");
+		return this.current.read(root.current);
 	}
 
 	readSettled(root: FrozenAcceptedRoot) {
@@ -202,6 +236,7 @@ export class SessionAcceptanceLane {
 	async idle(): Promise<void> {
 		await this.cleanup;
 		await this.settled.idle();
+		await this.current.idle();
 	}
 
 	private retireSettled(): void {
@@ -214,6 +249,7 @@ export class SessionAcceptanceLane {
 	retire(reason: "close" | "worker_failed"): void {
 		this.retiredAs ??= reason;
 		if (this.settled) this.retireSettled();
+		this.current.retire();
 	}
 
 	/** A change of the outer client correlation is its own transition, sequenced just before its record (C1.1). */

@@ -1771,10 +1771,14 @@ export class AgentSession {
 		this._browserEngine = config.browserEngine;
 		this._sessionEnv = config.sessionEnv;
 		this.agent = config.agent;
-		this._structuredLane = new StructuredSessionLane(config.internalChannel, (deliver) => {
-			if (!this._unsubscribeAgent) return;
-			this._agentEventQueue = this._agentEventQueue.then(deliver, deliver);
-		});
+		this._structuredLane = new StructuredSessionLane(
+			config.internalChannel,
+			(deliver) => {
+				if (!this._unsubscribeAgent) return;
+				this._agentEventQueue = this._agentEventQueue.then(deliver, deliver);
+			},
+			(control) => this._recoveryIdentity?.own(control),
+		);
 		this.sessionManager = config.sessionManager;
 		this._unsubscribeRecovery = this.sessionManager.onRecovery((recovery) => {
 			this._standingRecovery = { type: "session_recovered", ...recovery };
@@ -2971,10 +2975,11 @@ export class AgentSession {
 					: { ...event, message };
 		}
 		carryRecovery(produced, event);
+		// The canonical projection goes first: its acceptance unit waits for this event's legacy record (senpi#4272).
+		if (this._structuredLane.active) this._structuredLane.emitEvent(event, captureSource);
 		for (const l of [...this._eventListeners]) {
 			l(event);
 		}
-		if (this._structuredLane.active) this._structuredLane.emitEvent(event, captureSource);
 	}
 
 	private async _emitSessionCompactFailed(event: Omit<SessionCompactFailedEvent, "type">): Promise<void> {
