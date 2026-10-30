@@ -1605,8 +1605,9 @@ exactly the failure they exist to catch.
 `senpi host session` is a thin client over the wire commands this document already describes: it attaches to a
 session (or starts the shared host, for `open` only) and relays one request, so an orchestrating agent or script
 can drive a session without writing its own RPC client. It adds no new wire command; it relies on the typed
-`errorCode` the host sets on `prompt` (`streaming`), `set_model` (`model_not_found`) and `get_entries` (`not_found`)
-refusals.
+`errorCode` the host sets on `prompt` (`streaming`, and `provider_credentials_missing`, `provider_credentials_expired`
+or `no_model_selected` when the session cannot start a turn), `set_model` (`model_not_found`) and `get_entries`
+(`not_found`) refusals.
 
 ```
 senpi host session open   --cwd <dir> [--model <provider/id>] [--name <text>] [--prompt <text|@file>]
@@ -3243,6 +3244,19 @@ With images:
 
 If the agent is streaming and no `streamingBehavior` is specified, the command returns an error.
 Queued prompts cannot include `thinkingLevel`; wait for the current turn to complete before changing it.
+
+**Model not ready**: A prompt that would start a turn is refused before the model is called when the session
+cannot run one. The `error` text is the same guidance the TUI shows; the `errorCode` says why:
+
+| `errorCode` | Meaning | `errorData` |
+|---|---|---|
+| `provider_credentials_missing` | The selected model's provider has no credentials | `{ provider }` |
+| `provider_credentials_expired` | The provider signs in with OAuth and its credentials could not be refreshed | `{ provider }` |
+| `no_model_selected` | No model is selected | none |
+
+```json
+{"type": "response", "command": "prompt", "success": false, "error": "No API key found for openai. ...", "errorCode": "provider_credentials_missing", "errorData": {"provider": "openai"}}
+```
 
 **Extension commands**: If the message is an extension command (e.g., `/mycommand`), it executes immediately even during streaming. Extension commands manage their own LLM interaction via `pi.sendMessage()`.
 
@@ -5246,6 +5260,8 @@ When the run ended with a provider error (the last assistant message has `stopRe
 | `unknown` | send the message again; if it repeats, choose another model |
 
 `unknown` is used when the error carries no diagnostic or its metadata matches no row; its `reason` is the generic `the provider returned an unexpected error`, and the provider's code or status, when it sent one, is only in `httpStatus` and `code`. No `reason` or `action` text carries a code or status. When `resetsAt` is set, `reason` ends with that time in the host's local time zone. A bare 429 stays `unknown` because status alone cannot tell a rate limit from exhausted quota. An `unknown` failure the provider answered with HTTP 404 is `model_unavailable` instead: a model endpoint returns 404 for a model id this account cannot use, as the ChatGPT subscription backend does for a model not yet rolled out to the plan. Retry and fallback decisions do not read `failure`.
+
+A turn that never reached the provider because no API key or sign-in is saved for it (the message carries auth resolution's `Provider is not configured: <id>` sentinel) reports `auth`, with a `reason` naming the provider and an `action` to connect it or choose another model; it carries no `httpStatus` or `code`.
 
 `request_refused` is an `auth` failure whose credential (same provider, endpoint and key) served a response within the last 10 minutes: the provider refused this one request, and the key may still be valid. If failures persist, re-authenticate the named provider: a recently working key may have been revoked. The failed assistant message carries `credentialServedRecently: true` and keeps the provider's own `errorMessage`. The in-memory record drops expired entries on each record/check and retains at most 1,024 credentials, evicting the least recently served first. Header-based, ADC and SigV4 authentication do not supply an `apiKey`, so their fingerprint reduces to provider + baseUrl; different credentials on that endpoint share the record.
 
