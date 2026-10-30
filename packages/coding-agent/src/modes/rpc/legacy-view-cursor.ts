@@ -50,3 +50,36 @@ export class FrozenFramesCursor implements LegacyViewCursor {
 		return this.frames;
 	}
 }
+
+/**
+ * A cursor whose frames are produced one at a time by an async generator over a frozen source (the compact
+ * current-state view). `empty` is decided synchronously by the owner from the frozen roots, so an attach with
+ * nothing to deliver installs no barrier; the generator starts on the first read.
+ */
+export class GeneratedFramesCursor implements LegacyViewCursor {
+	readonly empty: boolean;
+	private frames: AsyncGenerator<string> | undefined;
+	private released = false;
+	private readonly source: () => AsyncGenerator<string>;
+	private readonly onRelease: () => void;
+
+	constructor(empty: boolean, source: () => AsyncGenerator<string>, onRelease: () => void) {
+		this.empty = empty;
+		this.source = source;
+		this.onRelease = onRelease;
+	}
+
+	async next(): Promise<string | undefined> {
+		if (this.released) return undefined;
+		this.frames ??= this.source();
+		const step = await this.frames.next();
+		return step.done ? undefined : step.value;
+	}
+
+	release(): void {
+		if (this.released) return;
+		this.released = true;
+		void this.frames?.return(undefined);
+		this.onRelease();
+	}
+}

@@ -11,7 +11,7 @@ import { foldSeededBlock } from "./compact-seeded-block.ts";
 import { CompactSeededDraft } from "./compact-seeded-draft.ts";
 import { recordMessage, seedMessage, updateFields } from "./compact-seeded-messages.ts";
 import { CompactSessionCalls } from "./compact-session-calls.ts";
-import { type FrozenCompactState, readCompactState } from "./compact-state-view.ts";
+import { type FrozenCompactState, readActiveMessages, readCompactState } from "./compact-state-view.ts";
 import { type CompactTransition, CompactTransitionError } from "./compact-transition.ts";
 export type { CompactSessionStateOptions } from "./compact-state-storage.ts";
 
@@ -24,6 +24,11 @@ export class CompactSessionState extends CompactActiveMessages {
 
 	get acceptedSequence(): number {
 		return this.sequence;
+	}
+
+	/** Open broadcast questions right now, for synchronous status reads (R3.C6.4). */
+	get openBroadcastDialogs(): number {
+		return this.components.openBroadcast;
 	}
 
 	/**
@@ -158,18 +163,12 @@ export class CompactSessionState extends CompactActiveMessages {
 
 	/** Whole-view compatibility assembly; persistent nodes and text ranges are read separately. */
 	async read(frozen: FrozenCompactState) {
-		return this.under(frozen, (valid) =>
-			readCompactState(
-				frozen,
-				{
-					store: this.store,
-					settled: this.settled,
-					blockRoots: this.blockRoots,
-					messageRoots: this.messageRoots,
-				},
-				valid,
-			),
-		);
+		return this.under(frozen, (valid) => readCompactState(frozen, { ...this.roots, settled: this.settled }, valid));
+	}
+
+	/** The live messages at the cut with the current value of every block (R3.C6.4), never the settled history. */
+	readActive(frozen: FrozenCompactState) {
+		return this.under(frozen, (valid) => readActiveMessages(frozen, this.roots, valid));
 	}
 
 	/** Run state, lifecycle and open dialogs at the cut (RULING-26 Q4). */
@@ -179,13 +178,12 @@ export class CompactSessionState extends CompactActiveMessages {
 
 	/** The outstanding calls at the cut (R3.C3), raw text resolved from the slots the calls own. */
 	readCalls(frozen: FrozenCompactState) {
-		const owner = {
-			calls: this.calls,
-			store: this.store,
-			blockRoots: this.blockRoots,
-			messageRoots: this.messageRoots,
-		};
+		const owner = { calls: this.calls, ...this.roots };
 		return this.under(frozen, (valid) => readCalls(frozen, owner, valid));
+	}
+
+	private get roots() {
+		return { store: this.store, blockRoots: this.blockRoots, messageRoots: this.messageRoots };
 	}
 
 	private callScope(turnId: string | null): CallScope {

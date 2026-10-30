@@ -61,6 +61,12 @@ export class CompactCurrentComponents {
 		this.dialogRoots = new CompactComponentRoots(store, () => []);
 	}
 
+	get openBroadcast(): number {
+		let count = 0;
+		for (const { dialog } of this.open.values()) if (dialog.audience === "broadcast") count++;
+		return count;
+	}
+
 	/** `record` is JSON-normal (the acceptance unit's producer boundary). */
 	apply(record: object): void {
 		switch (field(record, "type")) {
@@ -106,13 +112,12 @@ export class CompactCurrentComponents {
 
 	freeze(): FrozenComponents {
 		for (const ref of [this.lifecycle, this.dialogs.ref]) if (ref) this.store.adjust(ref.owner, 0, 1);
-		let targeted = 0;
-		for (const { dialog } of this.open.values()) if (dialog.audience === "targeted") targeted++;
+		const broadcast = this.openBroadcast;
 		return {
 			runState: this.runState,
 			lifecycle: this.lifecycle,
 			dialogs: this.dialogs.ref,
-			dialogCounts: { broadcast: this.open.size - targeted, targeted },
+			dialogCounts: { broadcast, targeted: this.open.size - broadcast },
 		};
 	}
 

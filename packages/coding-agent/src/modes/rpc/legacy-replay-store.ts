@@ -2,7 +2,6 @@ import { serializeJsonLine } from "./jsonl.ts";
 import { type FrozenFrames, FrozenFramesCursor, type LegacyViewCursor } from "./legacy-view-cursor.ts";
 import { observeLifecycleDelivery } from "./lifecycle-delivery.ts";
 import { carriesMedia, omitNormalInlineMedia } from "./media-placeholders.ts";
-import type { ResyncCut, ResyncReason, RpcSessionResyncRequired } from "./socket-peer-recovery.ts";
 
 /**
  * A replayable snapshot line.
@@ -39,48 +38,10 @@ export interface FrozenAttachView {
 	readonly onRelease: () => void;
 }
 
-export interface FrozenResyncView {
-	readonly reason: ResyncReason;
-	readonly placeholders: boolean;
-	/** Read when the cut is read: whether the peer still holds the session then (`closed` otherwise). */
-	readonly closedNow: (sessionId: string) => boolean;
-	readonly onRelease: () => void;
-}
-
-/** One session's line of a resync cut; a session without a record resumes nothing (`message: null`). */
-type ResyncEntry = {
-	readonly sessionId: string;
-	readonly record: SnapshotRecord | undefined;
-	readonly closed: boolean;
-};
-
-function resyncFrame(entry: ResyncEntry, view: FrozenResyncView): string {
-	// The producer may mutate its partial object after emission. The serialized
-	// record, not that object, fixes the recovery cut before later deltas enqueue.
-	const frozen: unknown = entry.record === undefined ? undefined : JSON.parse(entry.record.line);
-	const resync: RpcSessionResyncRequired = {
-		type: "resync_required",
-		sessionId: entry.sessionId,
-		reason: view.reason,
-		message: typeof frozen === "object" && frozen !== null && "message" in frozen ? frozen.message : null,
-		...(entry.closed ? { closed: true as const } : {}),
-	};
-	return serializeJsonLine(view.placeholders ? omitNormalInlineMedia(resync) : resync);
-}
-
-class ResyncCursor extends FrozenFramesCursor implements ResyncCut {
-	readonly sessions: readonly string[];
-
-	constructor(sessions: readonly string[], source: () => FrozenFrames, onRelease: () => void) {
-		super(source, onRelease);
-		this.sessions = sessions;
-	}
-}
-
 /**
- * The retained per-session replay source a late peer's baseline is frozen from (S07a): today's lifecycle line,
- * the active message's non-targeted lines and the open broadcast questions. Freezing takes refs and a length,
- * never a copy of the lines; S07b replaces this source with the compact current-state view and deletes it.
+ * Today's retained replay source, kept only for a session that owns no acceptance lane (RULING-25 Q5: an
+ * externally constructed session keeps today's retention until its legacy adapter is ruled); a lane-owned session
+ * is never written here, its late peers read the frozen compact current-state view (`compact-legacy-view.ts`).
  */
 export class LegacyReplayStore {
 	private readonly sessionSnapshots = new Map<string, SnapshotRecord[]>();
@@ -88,7 +49,7 @@ export class LegacyReplayStore {
 	private readonly pendingQuestions = new Map<string, Map<string, Record<string, unknown>>>();
 	private cursors = 0;
 
-	/** Frozen views not yet released: zero once every barrier ended. */
+	/** Legacy views of either source not yet released: zero once every barrier ended (R3.C6.4 accounting). */
 	get openCursors(): number {
 		return this.cursors;
 	}
@@ -162,68 +123,25 @@ export class LegacyReplayStore {
 				return questions[at - length];
 			},
 		};
-		return new FrozenFramesCursor(() => frames, this.closing(view.onRelease));
+		return new FrozenFramesCursor(() => frames, this.track(view.onRelease));
 	}
 
 	/**
-	 * A shed's cut frozen at the shed (the compact-updates path): per session the latest retained record that carries
-	 * a message, read with `closed` as of the read; a session the peer no longer holds resumes nothing.
+	 * The message slot of a resync frame, read when the cut is read: the latest retained record carrying a message.
+	 * The producer may mutate its partial object after emission; the serialized record, not that object, fixes it.
 	 */
-	freezeResync(sessions: readonly string[], view: FrozenResyncView): ResyncCut {
-		const latest = sessions.map((sessionId) => ({ sessionId, record: this.latestMessage(sessionId) }));
-		return this.openResync(
-			sessions,
-			() =>
-				latest.map(({ sessionId, record }) => {
-					const closed = view.closedNow(sessionId);
-					return { sessionId, closed, record: closed ? undefined : record };
-				}),
-			view,
-		);
+	latestMessage(sessionId: string): unknown {
+		const record = this.sessionSnapshots.get(sessionId)?.findLast((record) => record.hasMessage);
+		const frozen: unknown = record === undefined ? undefined : JSON.parse(record.line);
+		return typeof frozen === "object" && frozen !== null && "message" in frozen ? frozen.message : null;
 	}
 
-	/**
-	 * Today's drain-time cut (the compact-updates flag off), read when the gap is delivered: the sessions held at
-	 * the shed and those held then, each with its latest retained record at that moment.
-	 */
-	deferResync(sessions: readonly string[], heldNow: () => readonly string[], view: FrozenResyncView): ResyncCut {
-		return this.openResync(
-			sessions,
-			() =>
-				[...new Set([...sessions, ...heldNow()])].map((sessionId) => ({
-					sessionId,
-					closed: view.closedNow(sessionId),
-					record: this.latestMessage(sessionId),
-				})),
-			view,
-		);
-	}
-
-	private latestMessage(sessionId: string): SnapshotRecord | undefined {
-		return this.sessionSnapshots.get(sessionId)?.findLast((record) => record.hasMessage);
-	}
-
-	private openResync(
-		sessions: readonly string[],
-		entries: () => readonly ResyncEntry[],
-		view: FrozenResyncView,
-	): ResyncCut {
-		return new ResyncCursor(
-			sessions,
-			() => {
-				const frozen = entries();
-				return { count: frozen.length, frame: (index) => resyncFrame(frozen[index], view) };
-			},
-			this.closing(view.onRelease),
-		);
-	}
-
-	/** Counts the view open until its release runs once. */
-	private closing(onRelease: () => void): () => void {
+	/** Counts a legacy view of either source open until its release runs once. */
+	track = (onRelease: () => void): (() => void) => {
 		this.cursors += 1;
 		return () => {
 			this.cursors -= 1;
 			onRelease();
 		};
-	}
+	};
 }

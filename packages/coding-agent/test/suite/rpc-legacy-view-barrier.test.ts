@@ -4,9 +4,11 @@ import { serializeJsonLine } from "../../src/modes/rpc/jsonl.ts";
 import { omitNormalInlineMedia } from "../../src/modes/rpc/media-placeholders.ts";
 import { SessionAcceptanceLane } from "../../src/modes/rpc/session-acceptance-lane.ts";
 import { SessionEventWriter } from "../../src/modes/rpc/session-event-writer.ts";
+import { LaneProducer } from "./regressions/4272-legacy-view-support.ts";
 
 // Part of #4272 (S07a, R3.C6.4 T6-L4 / RULING-25 Q1 Q2 Q4): a peer's attach baseline is one barrier in its own
-// FIFO, frozen at the attach and written before every record accepted behind it.
+// FIFO, frozen at the attach and written before every record accepted behind it. A lane-owned session's view is
+// read from its frozen compact state (S07b); a session without a lane keeps today's retained view (Q5).
 
 type Peer = {
 	readonly lines: string[];
@@ -60,11 +62,22 @@ const shape = (lines: readonly string[]) =>
 		return `${record.sessionId ?? "-"}:${record.assistantMessageEvent?.delta ?? record.type}`;
 	});
 
-function laneFor(writer: SessionEventWriter, sessionId: string): SessionAcceptanceLane {
+const message = { role: "assistant", content: [] };
+
+/** A lane-owned session with an open assistant text block streamed through its lane, as the binding would. */
+function laneFor(writer: SessionEventWriter, sessionId: string, ...deltas: readonly string[]) {
 	const lane = new SessionAcceptanceLane();
 	lane.bootstrap({ transcript: [] });
 	writer.registerAcceptance(sessionId, lane);
-	return lane;
+	const producer = new LaneProducer(writer, lane, sessionId);
+	producer.assistant({ type: "message_start", message }, { type: "message_start", message });
+	producer.blockStart("text", 0);
+	let offset = 0;
+	for (const text of deltas) {
+		producer.blockDelta("text", 0, text, offset);
+		offset += text.length;
+	}
+	return { lane, producer, offset };
 }
 
 it("T6-L4 FIFO: the baseline frozen at attach is written before every record accepted behind it, then the suffix", async () => {
@@ -99,16 +112,14 @@ it("T6-L4 FIFO: the baseline frozen at attach is written before every record acc
 
 it("T6-L4 detach: a detach before the baseline is written cancels it, and the stale attempt writes nothing further", async () => {
 	const writer = new SessionEventWriter(() => {});
-	const lane = laneFor(writer, "s");
 	const peer = heldPeer(writer, "peer");
 	writer.attachConnectionToSession("peer", "other");
 	writer.enqueue("other", { type: "agent_start" });
-	writer.enqueue("s", { type: "message_start", message: { role: "assistant", content: [] } });
-	writer.enqueue("s", delta("one"));
+	const { lane, producer, offset } = laneFor(writer, "s", "one");
 	writer.attachConnectionToSession("peer", "s");
 	expect(lane.liveRoots, "the attach froze the session's root").toBe(1);
 	writer.detachConnectionFromSession("peer", "s");
-	writer.enqueue("s", delta("two"));
+	producer.blockDelta("text", 0, "two", offset);
 	peer.release();
 	await writer.flush();
 	expect(shape(peer.lines)).toEqual(["other:agent_start"]);
@@ -119,11 +130,10 @@ it("T6-L4 detach: a detach before the baseline is written cancels it, and the st
 
 it("T6-L4 replacement: a new lane epoch before the baseline is written cancels it; the next view comes from the new epoch", async () => {
 	const writer = new SessionEventWriter(() => {});
-	const lane = laneFor(writer, "s");
 	const peer = heldPeer(writer, "peer");
 	writer.attachConnectionToSession("peer", "other");
 	writer.enqueue("other", { type: "agent_start" });
-	writer.enqueue("s", { type: "message_start", message: { role: "assistant", content: [] } });
+	const { lane } = laneFor(writer, "s");
 	writer.attachConnectionToSession("peer", "s");
 	expect(lane.liveRoots).toBe(1);
 	// When: the session is replaced (a new lane epoch) while the attach baseline is still queued.
@@ -139,11 +149,8 @@ it("T6-L4 replacement: a new lane epoch before the baseline is written cancels i
 
 it("T6-L4 peer drop mid-baseline: the attempt ends in finally, root and cursor counts reach zero", async () => {
 	const writer = new SessionEventWriter(() => {});
-	const lane = laneFor(writer, "s");
 	const peer = heldPeer(writer, "peer");
-	writer.enqueue("s", { type: "message_start", message: { role: "assistant", content: [] } });
-	writer.enqueue("s", delta("one"));
-	writer.enqueue("s", delta("two"));
+	const { lane } = laneFor(writer, "s", "one", "two");
 	const firstFrame = peer.nextWrite();
 	writer.attachConnectionToSession("peer", "s");
 	await firstFrame;
