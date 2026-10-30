@@ -103,7 +103,25 @@ function renderedRows(message: AssistantMessage): string {
 
 const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
 
+const ROW_TEXT = "account usage limit has been reached";
+
 describe("a classified provider failure shows once per turn (senpi#4954)", () => {
+	it.each([
+		["text only", [text("only")]],
+		["tool call only", [toolCall("t1")]],
+		["text, tool call, text", [text("first"), toolCall("t1"), text("second")]],
+		["tool call, text", [toolCall("t1"), text("after")]],
+		["text, tool call", [text("before"), toolCall("t1")]],
+		["multiple tool calls", [toolCall("t1"), toolCall("t2")]],
+		["text between multiple tool calls", [text("a"), toolCall("t1"), text("b"), toolCall("t2"), text("c")]],
+	] as const)("%s: one error in total across rows and the turn-end line", async (_shape, blocks) => {
+		initTheme("dark");
+		const message = failedTurn([...blocks]);
+		const rows = occurrences(renderedRows(message), ROW_TEXT);
+		const turnEnd = (await turnEndLines(agentEnd(message))).length;
+		expect(rows + turnEnd).toBe(1);
+	});
+
 	it("renders the error on one row of a text, tool call, text turn", () => {
 		initTheme("dark");
 		const rows = renderedRows(
